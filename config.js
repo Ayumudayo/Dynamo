@@ -1,5 +1,8 @@
+require("dotenv").config();
+
 module.exports = {
-  OWNER_IDS: ["110340681628672000"], // Bot owner ID's
+  //OWNER_IDS: ["110340681628672000"], // Bot owner ID's
+  OWNER_IDS: [process.env.OWNER_ID], // Bot owner ID's
   SUPPORT_SERVER: "", // Your bot support server
   PREFIX_COMMANDS: {
     ENABLED: true, // Enable/Disable prefix commands
@@ -9,7 +12,7 @@ module.exports = {
     SLASH: true, // Should the interactions be enabled
     CONTEXT: true, // Should contexts be enabled
     GLOBAL: false, // Should the interactions be registered globally
-    TEST_GUILD_ID: "389000439561191424", // Guild ID where the interactions should be registered. [** Test you commands here first **]
+    TEST_GUILD_ID: process.env.GUILD_ID, // Guild ID where the interactions should be registered. [** Test you commands here first **]
   },
   EMBED_COLORS: {
     BOT_EMBED: "#068ADD",
