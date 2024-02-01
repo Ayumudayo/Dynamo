@@ -52,6 +52,7 @@ module.exports = {
             const state = response.data.fields.find(field => field.name === "Market State").value.split(' ')[0];
             if (state === "Closed" || state === "Post") {
                 // If the market is closed, do not set up the interval for updates
+                console.debug("CLOSED");
                 return;
             }
         }
@@ -67,9 +68,10 @@ module.exports = {
             updateCount++; // Increment the update count
             // Fetch new data
             response = await getResultEmbed(updateCount, totalUpdates);
+            
             if (response) {
                 // Edit the original reply with the new data
-                await interaction.editReply(response).catch(console.error);
+                await interaction.editReply({ embeds: [response] }).catch(console.error);
             }
             // If we've reached the total number of updates, clear the interval
             if (updateCount >= totalUpdates) {
