@@ -174,7 +174,7 @@ module.exports = {
     UPWARD_EMBED: "#43B581",
     DOWNWARD_EMBED: "#F04747",
     REFRESH_INTERVAL: 5000, // ms
-    MAX_REFRESH_TIME: 120000, // ms
+    MAX_REFRESH_TIME: 60000, // ms
   },
 
   SUGGESTIONS: {
