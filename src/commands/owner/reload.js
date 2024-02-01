@@ -2,6 +2,8 @@ const { ApplicationCommandOptionType } = require("discord.js");
 const fs = require('fs').promises;
 const path = require('path');
 
+const Logger = require("@helpers/Logger");
+
 /**
  * Command module for reloading bot commands.
  * @module reload
@@ -84,13 +86,16 @@ async function reloadAllCommands(interaction) {
         }
 
         if (failedCommands.length === 0) {
+            Logger.success("All commands were reloaded successfully!");
             await interaction.followUp(`All commands were reloaded successfully!`);
         } else {
             // If there were any failed commands, report them back to the user
+            Logger.warn(`All commands reloaded, except for the following: \n\`${failedCommands.join(', ')}\`\nPlease check the logs for more details.`);
             await interaction.followUp(`All commands reloaded, except for the following: \n\`${failedCommands.join(', ')}\`\nPlease check the logs for more details.`);
         }
     } catch (error) {
         console.error(error);
+        Logger.error(`There was an error while reloading commands:\n\`${error.message}\``);
         await interaction.followUp(`There was an error while reloading commands:\n\`${error.message}\``);
     }
 }
@@ -104,6 +109,7 @@ async function reloadAllCommands(interaction) {
 async function reloadCommand(interaction, cmdName) {
     const cmd = interaction.client.slashCommands.get(cmdName);
     if (!cmd) {
+        Logger.error(`There is no command with name \`${cmdName}\`!`);
         await interaction.followUp(`There is no command with name \`${cmdName}\`!`);
         return;
     }
@@ -112,14 +118,17 @@ async function reloadCommand(interaction, cmdName) {
     try {
         const commandPath = await findCommandFile(directoryPath, cmd.name);
         if (!commandPath) {
+            Logger.error(`No file found for command \`${cmd.name}\`.`);
             await interaction.followUp(`No file found for command \`${cmd.name}\`.`);
             return;
         }
 
         await reloadFile(interaction, commandPath);
+        Logger.success(`Command \`${cmd.name}\` was reloaded!`);
         await interaction.followUp(`Command \`${cmd.name}\` was reloaded!`);
     } catch (error) {
         console.error(error);
+        Logger.error(`There was an error while reloading a command \`${cmd.name}\`:\n\`${error.message}\``);
         await interaction.followUp(`There was an error while reloading a command \`${cmd.name}\`:\n\`${error.message}\``);
     }
 }
@@ -157,6 +166,7 @@ async function reloadFile(interaction, filePath) {
         interaction.client.slashCommands.set(newCommand.name, newCommand);
     } catch (error) {
         console.error(error);
+        Logger.error(`There was an error while reloading command from file \`${path.basename(filePath)}\`:\n\`${error.message}\``);
         await interaction.followUp(`There was an error while reloading command from file \`${path.basename(filePath)}\`:\n\`${error.message}\``);
     }
 }
