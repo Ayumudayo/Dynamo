@@ -7,10 +7,8 @@ const etfs = [
     'SOXL',
     'SOXS',
     'TQQQ',
-    'SQQQ',
     'UPRO',
     'SPY',
-    'TLT',
 ];
 
 /**
@@ -158,6 +156,7 @@ function getState(results) {
     switch (state) {
         case 'PREPRE': // Fall through
         case 'POST':
+        case 'POSTPOST':
         case 'CLOSED':
             return "Post Market";
         case 'PRE':
