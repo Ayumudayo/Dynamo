@@ -41,14 +41,12 @@ module.exports = {
     botPermissions: ["EmbedLinks"],
     slashCommand: {
         enabled: true,
-        options: [
+        options: [            
             {
-                name: "hour",
-                description: "The hour (0-23)",
+                name: "month",
+                description: "The month (1-12)",
                 required: true,
                 type: ApplicationCommandOptionType.Integer,
-                minValue: 0,
-                maxValue: 23,
             },
             {
                 name: "day",
@@ -57,16 +55,12 @@ module.exports = {
                 type: ApplicationCommandOptionType.Integer,
             },
             {
-                name: "month",
-                description: "The month (1-12)",
+                name: "hour",
+                description: "The hour (0-23)",
                 required: true,
                 type: ApplicationCommandOptionType.Integer,
-            },
-            {
-                name: "year",
-                description: "The year",
-                required: false,
-                type: ApplicationCommandOptionType.Integer,
+                minValue: 0,
+                maxValue: 23,
             },
             {
                 name: "minute",
@@ -83,6 +77,12 @@ module.exports = {
                 type: ApplicationCommandOptionType.Integer,
                 minValue: 0,
                 maxValue: 59,
+            },
+            {
+                name: "year",
+                description: "The year",
+                required: false,
+                type: ApplicationCommandOptionType.Integer,
             },
             {
                 name: "timezone",
