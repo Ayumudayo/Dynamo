@@ -1,7 +1,6 @@
 require("dotenv").config();
 
 module.exports = {
-  //OWNER_IDS: ["110340681628672000"], // Bot owner ID's
   OWNER_IDS: [process.env.OWNER_ID], // Bot owner ID's
   SUPPORT_SERVER: "", // Your bot support server
   PREFIX_COMMANDS: {
