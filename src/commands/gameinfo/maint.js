@@ -4,7 +4,7 @@ const { EmbedBuilder } = require("discord.js");
 const Parser = require('rss-parser');
 const fs = require('fs/promises');
 const path = require('path');
-const moment = require("moment");
+const moment = require('moment-timezone');
 const { translate } = require("@helpers/HttpUtils");
 
 const parser = new Parser();
@@ -134,8 +134,8 @@ function extractMaintenanceInfo(item) {
     const endTimeMatch = item.content.match(endTimeRegex);
     if (!startTimeMatch || !endTimeMatch) return null;
 
-    const startTime = moment(`${startTimeMatch[1]} ${startTimeMatch[2]}`, "YYYY年MM月DD日(ddd) HH:mm", "ja").unix();
-    const endTime = endTimeMatch[1] ? moment(`${endTimeMatch[1]} ${endTimeMatch[2]}`, "YYYY年MM月DD日(ddd) HH:mm", "ja").unix() : moment(`${startTimeMatch[1]} ${endTimeMatch[2]}`, "YYYY年MM月DD日(ddd) HH:mm", "ja").unix();
+    const startTime = moment.tz(`${startTimeMatch[1]} ${startTimeMatch[2]}`, "YYYY年MM月DD日(ddd) HH:mm", "ja", 'Asia/Tokyo').unix();
+    const endTime = endTimeMatch[1] ? moment.tz(`${endTimeMatch[1]} ${endTimeMatch[2]}`, "YYYY年MM月DD日(ddd) HH:mm", "ja", 'Asia/Tokyo').unix() : moment.tz(`${startTimeMatch[1]} ${endTimeMatch[2]}`, "YYYY年MM月DD日(ddd) HH:mm", "ja", 'Asia/Tokyo').unix();
 
     return { start_stamp: startTime, end_stamp: endTime };
 }
