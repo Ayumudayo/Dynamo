@@ -53,7 +53,7 @@ module.exports = {
                 name: "amount",
                 description: "The amount of currency (default: 1.0)",
                 required: false,
-                type: ApplicationCommandOptionType.Integer,
+                type: ApplicationCommandOptionType.Number,
                 minValue: 0,
             },
         ],
@@ -63,7 +63,7 @@ module.exports = {
     async interactionRun(interaction) {
         try {
             const from = interaction.options.getString("from") || "USD";
-            const amount = interaction.options.getInteger("amount") || 1;
+            const amount = interaction.options.getNumber("amount") || 1;
 
             const res = await getRate(from, amount);
             if (!res) {
