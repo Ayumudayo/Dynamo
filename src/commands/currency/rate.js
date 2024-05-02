@@ -79,7 +79,7 @@ async function getRate(from, amount) {
         .setTimestamp(Date.now());
 
     // Get the list of target currencies from the CURRENCIES object keys
-    const targetCur = Object.keys(CURRENCIES);
+    const targetCur = Object.keys(currencyEmojis);
 
     // Create a promise for each currency conversion
     const promises = targetCur.map(async (cur) => {
