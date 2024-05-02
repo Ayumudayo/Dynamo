@@ -8,22 +8,10 @@ const { CURRENCIES } = require("@src/data.json");
 const currencyEmojis = {
     "USD": "🇺🇸",
     "KRW": "🇰🇷",
-    "EUR": "🇪🇺",
-    "GBP": "🇬🇧",
     "JPY": "🇯🇵",
-    "CAD": "🇨🇦",
-    "CHF": "🇨🇭",
-    "HKD": "🇭🇰",
-    "TWD": "🇹🇼",
-    "AUD": "🇦🇺",
-    "NZD": "🇳🇿",
-    "INR": "🇮🇳",
-    "BRL": "🇧🇷",
-    "PLN": "🇵🇱",
-    "RUB": "🇷🇺",
+    "EUR": "🇪🇺",
     "TRY": "🇹🇷",
-    "CNY": "🇨🇳",
-    "ARS": "🇦🇷"
+    "UAH": "🇺🇦"
 };
 
 /**

@@ -6,7 +6,7 @@ const {
 const CurrencyConverter = require('currency-converter-lt');
 const { CURRENCIES } = require("@src/data.json");
 
-const choices = ["USD", "KRW", "EUR", "GBP", "JPY", "CAD", "CHF", "HKD", "TWD", "AUD", "NZD", "INR", "BRL", "PLN", "RUB", "TRY", "CNY"];
+const choices = ["USD", "KRW", "EUR", "GBP", "JPY", "CAD", "CHF", "HKD", "TWD", "AUD", "NZD", "INR", "BRL", "PLN", "RUB", "TRY", "CNY", "UAH"];
 
 /**
  * @type {import("@structures/Command")}
@@ -41,7 +41,7 @@ module.exports = {
                 name: "amount",
                 description: "The amount of currency. / Default : 1.0",
                 required: false,
-                type: ApplicationCommandOptionType.Integer,
+                type: ApplicationCommandOptionType.Number,
                 minValue: 0,
             },
         ],
