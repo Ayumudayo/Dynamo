@@ -159,7 +159,8 @@
     "RUB": "Russian Ruble",
     "TRY": "Turkish Lira",
     "CNY": "Chinese Yuan",
-    "ARS": "Argentine Peso"
+    "ARS": "Argentine Peso",    
+    "UAH": "Ukrainian Hryvnia"
   },
   "MAINTINFO": {
     "start_stamp": 1707793200,
