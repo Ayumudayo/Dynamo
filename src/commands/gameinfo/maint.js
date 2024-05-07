@@ -59,27 +59,42 @@ async function getMaintenanceEmbed() {
  */
 async function getMaintData() {
     const feedUrl = 'https://jp.finalfantasyxiv.com/lodestone/news/news.xml';
+    
     try {
-        const savedData = await loadData();
-        const feed = await parser.parseURL(feedUrl);
-        const targetItem = feed.items.find(item => item.title?.startsWith('全ワールド'));
-
-        if (!targetItem) return null;
-        const maintenanceInfo = extractMaintenanceInfo(targetItem);
-
-        if (maintenanceInfo && maintenanceInfo.end_stamp > Date.now() / 1000) {
-            const translatedTitle = await getTranslation(targetItem.title);
-            const newData = { MAINTINFO: { ...maintenanceInfo, title_kr: translatedTitle, url: targetItem.link } };
-            await saveData(newData);
-            return newData;
-        }
-
-        return savedData.MAINTINFO && savedData.MAINTINFO.end_stamp > Date.now() / 1000 ? savedData : null;
+      const savedData = await loadData();
+      
+      // Check saved data
+      if (savedData.MAINTINFO && savedData.MAINTINFO.end_stamp > Date.now() / 1000) {
+        return savedData;
+      }
+      
+      // Fetch RSS Feed when there is no saved data or expired
+      const feed = await parser.parseURL(feedUrl);
+      const targetItem = feed.items.find(item => item.title?.startsWith('全ワールド'));
+      
+      if (!targetItem) return null;
+      
+      const maintenanceInfo = extractMaintenanceInfo(targetItem);
+      
+      if (maintenanceInfo && maintenanceInfo.end_stamp > Date.now() / 1000) {
+        const translatedTitle = await getTranslation(targetItem.title);
+        const newData = {
+          MAINTINFO: {
+            ...maintenanceInfo,
+            title_kr: translatedTitle,
+            url: targetItem.link
+          }
+        };
+        await saveData(newData);
+        return newData;
+      }
+      
+      return null;
     } catch (error) {
-        console.error('Error fetching maintenance data:', error);
-        return null;
+      console.error('Error fetching maintenance data:', error);
+      return null;
     }
-}
+  }
 
 /**
  * Translates the given text to Korean using a translation service.
