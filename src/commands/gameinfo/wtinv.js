@@ -11,7 +11,6 @@ const fs = require("fs/promises");
 const path = require("path");
 
 const dataFilePath = path.join(__dirname, "../../data.json");
-const INVITE_LINK = await loadData().WTINFO.link;
 
 /**
  * @type {import("@structures/Command")}
@@ -36,7 +35,7 @@ module.exports = {
 
     async interactionRun(interaction) {
         try {
-            const data = await loadData();
+            const INVITE_LINK = await loadData().WTINFO.link;
 
             const embed = new EmbedBuilder()
                 .setTitle("Join Warthunder Now") // 타이틀 변경
