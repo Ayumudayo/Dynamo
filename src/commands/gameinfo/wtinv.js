@@ -35,19 +35,22 @@ module.exports = {
 
     async interactionRun(interaction) {
         try {
-            const INVITE_LINK = await loadData().WTINFO.link;
+            const data = await loadData();
+            const INVITE_LINK = data.WTINFO.link;
+            const THUMBNAIL_LINK = data.WTINFO.thumbnailLink;
 
             const embed = new EmbedBuilder()
-                .setTitle("Join Warthunder Now") // 타이틀 변경
+                .setTitle("Join Warthunder Now!")
                 .setColor(EMBED_COLORS.SUCCESS)
                 // .setDescription("워썬더에 합류하세요!")
-                .setTimestamp();
+                .setTimestamp()
+                .setThumbnail(THUMBNAIL_LINK);
 
             // [버튼] JOIN
             const buttonRow = new ActionRowBuilder().addComponents(
                 new ButtonBuilder()
-                    .setLabel("JOIN")
-                    .setStyle(ButtonStyle.Success) // 클릭 시 링크로 연결
+                    .setLabel("JOIN NOW")
+                    .setStyle(ButtonStyle.Link) // 클릭 시 링크로 연결
                     .setURL(INVITE_LINK)
             );
 
