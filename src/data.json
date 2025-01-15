@@ -202,5 +202,8 @@
     "Pacific/Honolulu": "GMT-10",
     "Asia/Kathmandu": "GMT+5:45",
     "Asia/Kabul": "GMT+4:30"
+  },
+  "WTINFO": {
+    "link": "http://warthunder.com/en/registration?r=userinvite_18945695"
   }
 }
