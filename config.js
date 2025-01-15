@@ -63,61 +63,11 @@ module.exports = {
     DEFAULT_SOURCE: "YT", // YT = Youtube, YTM = Youtube Music, SC = SoundCloud
     // Add any number of lavalink nodes here
     // Refer to https://github.com/freyacodes/Lavalink to host your own lavalink server
-    LAVALINK_NODES: [      
-      {
-        host: "127.0.0.1",
-        port: 23333,
-        password: "kabirjaipal",
-        id: "render",
-        secure: false,
-      },
-      {
-        host: "3.34.197.204",
-        port: 2333,
-        password: "kabirjaipal",
-        id: "amazon",
-        secure: false,
-      },
-      {
-        host: "lava.alfari.id",
-        port: 443,
-        password: "youshallnotpass",
-        id: "alfari.id",
-        secure: true,
-      },
-      {
-        host: "lavalink.lexnet.cc",
-        port: 2333,
-        password: "lexn3tl@val!nk",
-        id: "lex",
-        secure: false,
-      },
-      {
-        host: "eu-lavalink.lexnet.cc",
-        port: 2333,
-        password: "lexn3tl@val!nk",
-        id: "lex-eu",
-        secure: false,
-      },
-      {
-        host: "bali.weissx.com",
-        port: 14007,
-        password: "youshallnotpass",
-        id: "weiss",
-        secure: false,
-      },
-      {
-        host: "lavalink.teramont.net",
-        port: 443,
-        password: "eHKuFcz67k4lBS64",
-        id: "teramont",
-        secure: true,
-      },
-    ],
+    LAVALINK_NODES: [],
   },
 
   GAMEINFO: {
-    ENABLED: true
+    ENABLED: true,
   },
 
   GIVEAWAYS: {
