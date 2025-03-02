@@ -208,5 +208,9 @@
     "Pacific/Honolulu": "GMT-10",
     "Asia/Kathmandu": "GMT+5:45",
     "Asia/Kabul": "GMT+4:30"
+  },
+  "WTINFO": {
+    "link": "http://warthunder.com/en/registration?r=userinvite_18945695",
+    "thumbnailLink": "https://media.discordapp.net/attachments/1138398345065414657/1329005700730585118/png-clipart-war-thunder-playstation-4-aircraft-airplane-macchi-c-202-thunder-game-video-game-removebg-preview.png?ex=6788c482&is=67877302&hm=31b9ed755040306ea8d1c9db258ffaa590df7e3bfa6139d875c62915d46c1b73&=&format=webp&quality=lossless"
   }
 }
