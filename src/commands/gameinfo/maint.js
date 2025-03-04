@@ -51,29 +51,50 @@ async function getMaintData() {
   const now = Date.now() / 1000;
 
   try {
+    // 피드 파싱
+    const feed = await parser.parseURL(feedUrl);
+
+    // 변경 공지 항목 확인
+    const updateNotification = feed.items.find((item) => item.title?.includes("終了時間変更のお知らせ"));
+    if (updateNotification) {
+      const maintenanceInfo = extractMaintenanceInfo(updateNotification);
+      if (maintenanceInfo && maintenanceInfo.end_stamp > now) {
+        const translatedTitle = await getTranslation(updateNotification.title);
+        const newData = {
+          MAINTINFO: {
+            ...maintenanceInfo,
+            title_kr: translatedTitle,
+            url: updateNotification.link,
+          },
+        };
+        await saveData(newData);
+        return newData;
+      }
+    }
+
+    // 변경 공지가 없으면 캐시된 데이터가 유효한지 확인
     const savedData = await loadData();
     if (savedData.MAINTINFO?.end_stamp > now) {
       return savedData;
     }
 
-    const feed = await parser.parseURL(feedUrl);
-    const targetItem = feed.items.find((item) => item.title?.startsWith("全ワールド"));
-    if (!targetItem) return null;
+    // 캐시가 없거나 만료된 경우, 기본 유지보수 공지 사용
+    const defaultItem = feed.items.find((item) => item.title?.startsWith("全ワールド"));
+    if (!defaultItem) return null;
 
-    const maintenanceInfo = extractMaintenanceInfo(targetItem);
+    const maintenanceInfo = extractMaintenanceInfo(defaultItem);
     if (maintenanceInfo && maintenanceInfo.end_stamp > now) {
-      const translatedTitle = await getTranslation(targetItem.title);
+      const translatedTitle = await getTranslation(defaultItem.title);
       const newData = {
         MAINTINFO: {
           ...maintenanceInfo,
           title_kr: translatedTitle,
-          url: targetItem.link,
+          url: defaultItem.link,
         },
       };
       await saveData(newData);
       return newData;
     }
-
     return null;
   } catch (error) {
     console.error("Error fetching maintenance data:", error);
