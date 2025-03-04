@@ -73,7 +73,7 @@ async function getPLLData() {
     const feed = await parser.parseURL(feedUrl);
     if (!feed || !feed.items?.length) return null;
 
-    // "第XX回 FFXIV PLL" 형태의 문자열열 찾기
+    // "第XX回 FFXIV PLL" 형태의 문자열 찾기
     const targetItem = feed.items.find((item) => {
       return /第\d+回\s?FFXIV\s?PLL/.test(item.title || "");
     });
