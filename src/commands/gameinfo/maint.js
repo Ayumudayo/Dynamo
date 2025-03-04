@@ -48,7 +48,7 @@ async function getMaintenanceEmbed() {
 
 async function getMaintData() {
   const feedUrl = "https://jp.finalfantasyxiv.com/lodestone/news/news.xml";
-  const now = Date.now() / 1000; // 수정된 부분
+  const now = Date.now() / 1000;
 
   try {
     const savedData = await loadData();
