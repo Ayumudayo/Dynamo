@@ -161,5 +161,6 @@ function createErrorEmbed() {
     .setDescription("There is no maintenance information available.")
     .setURL("https://jp.finalfantasyxiv.com/lodestone")
     .setColor(EMBED_COLORS.ERROR)
-    .setThumbnail(CommandCategory.GAMEINFO?.image);
+    .setThumbnail(CommandCategory.GAMEINFO?.image)
+    .setFooter({ text: "From Lodestone News" });
 }
