@@ -1,14 +1,14 @@
 const { CommandCategory } = require("@src/structures");
 const { EMBED_COLORS } = require("@root/config.js");
 const { EmbedBuilder } = require("discord.js");
-const Parser = require("rss-parser");
 const fs = require("fs/promises");
 const path = require("path");
 const moment = require("moment-timezone");
 const { translate } = require("@helpers/HttpUtils");
+const axios = require("axios");
 
-const parser = new Parser();
 const dataFilePath = path.join(__dirname, "../../data.json");
+const API_URL = "https://lodestonenews.com/news/maintenance/current?locale=jp";
 
 module.exports = {
   name: "maint",
@@ -21,7 +21,7 @@ module.exports = {
   async interactionRun(interaction) {
     try {
       const embed = await getMaintenanceEmbed();
-      await interaction.followUp({ embeds: [embed ?? createErrorEmbed()] }); // 수정된 부분
+      await interaction.followUp({ embeds: [embed ?? createErrorEmbed()] });
     } catch (err) {
       console.error(err);
       await interaction.followUp("An error occurred while processing your request.");
@@ -43,28 +43,33 @@ async function getMaintenanceEmbed() {
     )
     .setColor(EMBED_COLORS.SUCCESS)
     .setTimestamp()
-    .setThumbnail(CommandCategory.GAMEINFO?.image);
+    .setThumbnail(CommandCategory.GAMEINFO?.image)
+    .setFooter({ text: "From Lodestone News" });
 }
 
 async function getMaintData() {
-  const feedUrl = "https://jp.finalfantasyxiv.com/lodestone/news/news.xml";
   const now = Date.now() / 1000;
 
   try {
-    // 피드 파싱
-    const feed = await parser.parseURL(feedUrl);
+    // API에서 유지보수 정보 가져오기
+    const response = await axios.get(API_URL);
+    const { game } = response.data;
+
+    if (!game || game.length === 0) {
+      return await getCachedData(now);
+    }
 
     // 변경 공지 항목 확인
-    const updateNotification = feed.items.find((item) => item.title?.includes("終了時間変更のお知らせ"));
+    const updateNotification = game.find((item) => item.title?.includes("終了時間変更"));
     if (updateNotification) {
-      const maintenanceInfo = extractMaintenanceInfo(updateNotification);
+      const maintenanceInfo = convertToTimestamps(updateNotification);
       if (maintenanceInfo && maintenanceInfo.end_stamp > now) {
         const translatedTitle = await getTranslation(updateNotification.title);
         const newData = {
           MAINTINFO: {
             ...maintenanceInfo,
             title_kr: translatedTitle,
-            url: updateNotification.link,
+            url: updateNotification.url,
           },
         };
         await saveData(newData);
@@ -72,24 +77,24 @@ async function getMaintData() {
       }
     }
 
-    // 변경 공지가 없으면 캐시된 데이터가 유효한지 확인
+    // 캐시된 데이터가 유효한지 확인
     const savedData = await loadData();
     if (savedData.MAINTINFO?.end_stamp > now) {
       return savedData;
     }
 
     // 캐시가 없거나 만료된 경우, 기본 유지보수 공지 사용
-    const defaultItem = feed.items.find((item) => item.title?.startsWith("全ワールド"));
+    const defaultItem = game.find((item) => item.title?.startsWith("全ワールド"));
     if (!defaultItem) return null;
 
-    const maintenanceInfo = extractMaintenanceInfo(defaultItem);
+    const maintenanceInfo = convertToTimestamps(defaultItem);
     if (maintenanceInfo && maintenanceInfo.end_stamp > now) {
       const translatedTitle = await getTranslation(defaultItem.title);
       const newData = {
         MAINTINFO: {
           ...maintenanceInfo,
           title_kr: translatedTitle,
-          url: defaultItem.link,
+          url: defaultItem.url,
         },
       };
       await saveData(newData);
@@ -98,6 +103,31 @@ async function getMaintData() {
     return null;
   } catch (error) {
     console.error("Error fetching maintenance data:", error);
+    return await getCachedData(now);
+  }
+}
+
+async function getCachedData(now) {
+  // API 호출 실패시 캐시된 데이터 사용
+  const savedData = await loadData();
+  if (savedData.MAINTINFO?.end_stamp > now) {
+    return savedData;
+  }
+  return null;
+}
+
+function convertToTimestamps(item) {
+  try {
+    // ISO 문자열을 Unix timestamp로 변환
+    const startTimestamp = moment(item.start).unix();
+    const endTimestamp = moment(item.end).unix();
+    
+    return {
+      start_stamp: startTimestamp,
+      end_stamp: endTimestamp
+    };
+  } catch (error) {
+    console.error("Error converting timestamps:", error);
     return null;
   }
 }
@@ -123,25 +153,6 @@ async function loadData() {
   } catch (error) {
     return {};
   }
-}
-
-function extractMaintenanceInfo(item) {
-  const startTimeRegex = /日　時：(\d{4}年\d{1,2}月\d{1,2}日\(.\)) (\d{1,2}:\d{2})より/;
-  const endTimeRegex = /(\d{4}年\d{1,2}月\d{1,2}日\(.\))? ?(\d{1,2}:\d{2})頃まで/;
-  const startTimeMatch = item.content.match(startTimeRegex);
-  const endTimeMatch = item.content.match(endTimeRegex);
-  if (!startTimeMatch || !endTimeMatch) return null;
-
-  // 중복되는 moment.tz 호출을 헬퍼 함수로 분리
-  const parseDate = (dateStr, timeStr) =>
-    moment.tz(`${dateStr} ${timeStr}`, "YYYY年MM月DD日(ddd) HH:mm", "ja", "Asia/Tokyo").unix();
-
-  const startTime = parseDate(startTimeMatch[1], startTimeMatch[2]);
-  const endTime = endTimeMatch[1]
-    ? parseDate(endTimeMatch[1], endTimeMatch[2])
-    : parseDate(startTimeMatch[1], endTimeMatch[2]);
-
-  return { start_stamp: startTime, end_stamp: endTime };
 }
 
 function createErrorEmbed() {
