@@ -163,10 +163,11 @@
     "UAH": "Ukrainian Hryvnia"
   },
   "MAINTINFO": {
-    "start_stamp": 1715043600,
-    "end_stamp": 1715076000,
-    "title_kr": "모든 월드 유지 보수 작업 알림 (5/7)",
-    "url": "https://jp.finalfantasyxiv.com/lodestone/news/detail/7f3226230d05221bd4c0a01e89e49928f334b616"
+    "id": "f48390e6815a3a9079281c9ccd9fb4883786eb3a",
+    "start_stamp": 1750104000,
+    "end_stamp": 1750154400,
+    "title_kr": "전 월드 유지보수 작업 (6/17)",
+    "url": "https://na.finalfantasyxiv.com/lodestone/news/detail/f48390e6815a3a9079281c9ccd9fb4883786eb3a"
   },
   "PLLINFO": {
     "fixedTitle": "제 87회 프로듀서 레터 라이브 6월 20일 방송 결정!",
