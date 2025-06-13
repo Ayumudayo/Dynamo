@@ -4,11 +4,10 @@ const { EmbedBuilder } = require("discord.js");
 const fs = require("fs/promises");
 const path = require("path");
 const moment = require("moment-timezone");
-const { translate } = require("@helpers/HttpUtils");
 const axios = require("axios");
 
 const dataFilePath = path.join(__dirname, "../../data.json");
-const API_URL = "https://lodestonenews.com/news/maintenance/current?locale=jp";
+const API_URL = "https://lodestonenews.com/news/maintenance/current";
 
 module.exports = {
   name: "maint",
@@ -24,7 +23,7 @@ module.exports = {
       await interaction.followUp({ embeds: [embed ?? createErrorEmbed()] });
     } catch (err) {
       console.error(err);
-      await interaction.followUp("An error occurred while processing your request.");
+      await interaction.followUp("점검 정보를 불러오는 중 오류가 발생했습니다.");
     }
   },
 };
@@ -32,14 +31,15 @@ module.exports = {
 async function getMaintenanceEmbed() {
   const maintData = await getMaintData();
   if (!maintData) return null;
+
   const { start_stamp, end_stamp, title_kr, url } = maintData.MAINTINFO;
   return new EmbedBuilder()
     .setTitle(title_kr)
     .setURL(url)
     .addFields(
-      { name: "Begin", value: `<t:${start_stamp}:F>`, inline: false },
-      { name: "End", value: `<t:${end_stamp}:F>`, inline: false },
-      { name: "Until End", value: `<t:${end_stamp}:R>`, inline: false }
+      { name: "시작 시각",      value: `<t:${start_stamp}:F>`, inline: false },
+      { name: "종료 시각",      value: `<t:${end_stamp}:F>`, inline: false },
+      { name: "종료까지 남은 시간", value: `<t:${end_stamp}:R>`, inline: false }
     )
     .setColor(EMBED_COLORS.SUCCESS)
     .setTimestamp()
@@ -48,119 +48,109 @@ async function getMaintenanceEmbed() {
 }
 
 async function getMaintData() {
-  const now = Date.now() / 1000;
+  const now = moment().unix();
 
+  let gameItems;
   try {
-    // API에서 유지보수 정보 가져오기
-    const response = await axios.get(API_URL);
-    const { game } = response.data;
-
-    if (!game || game.length === 0) {
-      return await getCachedData(now);
-    }
-
-    // 변경 공지 항목 확인
-    const updateNotification = game.find((item) => item.title?.includes("終了時間変更"));
-    if (updateNotification) {
-      const maintenanceInfo = convertToTimestamps(updateNotification);
-      if (maintenanceInfo && maintenanceInfo.end_stamp > now) {
-        const translatedTitle = await getTranslation(updateNotification.title);
-        const newData = {
-          MAINTINFO: {
-            ...maintenanceInfo,
-            title_kr: translatedTitle,
-            url: updateNotification.url,
-          },
-        };
-        await saveData(newData);
-        return newData;
-      }
-    }
-
-    // 캐시된 데이터가 유효한지 확인
-    const savedData = await loadData();
-    if (savedData.MAINTINFO?.end_stamp > now) {
-      return savedData;
-    }
-
-    // 캐시가 없거나 만료된 경우, 기본 유지보수 공지 사용
-    const defaultItem = game.find((item) => item.title?.startsWith("全ワールド"));
-    if (!defaultItem) return null;
-
-    const maintenanceInfo = convertToTimestamps(defaultItem);
-    if (maintenanceInfo && maintenanceInfo.end_stamp > now) {
-      const translatedTitle = await getTranslation(defaultItem.title);
-      const newData = {
-        MAINTINFO: {
-          ...maintenanceInfo,
-          title_kr: translatedTitle,
-          url: defaultItem.url,
-        },
-      };
-      await saveData(newData);
-      return newData;
-    }
-    return null;
-  } catch (error) {
-    console.error("Error fetching maintenance data:", error);
-    return await getCachedData(now);
+    const { data } = await axios.get(API_URL);
+    gameItems = data.game;
+  } catch (e) {
+    console.error("API fetch error:", e);
+    return loadIfValid(now);
   }
+
+  if (!Array.isArray(gameItems) || gameItems.length === 0) {
+    return loadIfValid(now);
+  }
+
+  // 캐시된 데이터가 아직 유효한지 확인 (ID 동일 & 종료 시간 지나지 않음)
+  const saved = await loadData();
+  const savedInfo = saved.MAINTINFO;
+  if (savedInfo
+    && savedInfo.id === gameItems[0].id
+    && savedInfo.end_stamp > now
+  ) {
+    return saved;
+  }
+
+  const item = gameItems[0];
+  const startMs = moment(item.start).valueOf();
+  const endMs   = moment(item.end).valueOf();
+  const startStamp = Math.floor(startMs / 1000);
+  const endStamp   = Math.floor(endMs   / 1000);
+
+  const titleKr = formatKoreanTitle(item.start, item.end);
+
+  const newData = {
+    MAINTINFO: {
+      id:         item.id,
+      start_stamp: startStamp,
+      end_stamp:   endStamp,
+      title_kr:    titleKr,
+      url:         item.url
+    }
+  };
+  await saveData(newData);
+  return newData;
 }
 
-async function getCachedData(now) {
-  // API 호출 실패시 캐시된 데이터 사용
-  const savedData = await loadData();
-  if (savedData.MAINTINFO?.end_stamp > now) {
-    return savedData;
-  }
+async function loadIfValid(now) {
+  const saved = await loadData();
+  if (saved.MAINTINFO?.end_stamp > now) return saved;
   return null;
-}
-
-function convertToTimestamps(item) {
-  try {
-    // ISO 문자열을 Unix timestamp로 변환
-    const startTimestamp = moment(item.start).unix();
-    const endTimestamp = moment(item.end).unix();
-    
-    return {
-      start_stamp: startTimestamp,
-      end_stamp: endTimestamp
-    };
-  } catch (error) {
-    console.error("Error converting timestamps:", error);
-    return null;
-  }
-}
-
-async function getTranslation(input) {
-  const data = await translate(input, "ko");
-  return data ? data.output : "Failed to translate the title";
-}
-
-async function saveData(newData) {
-  try {
-    const existingData = await loadData();
-    await fs.writeFile(dataFilePath, JSON.stringify({ ...existingData, ...newData }, null, 2));
-  } catch (error) {
-    console.error("Error saving data:", error);
-  }
 }
 
 async function loadData() {
   try {
-    const data = await fs.readFile(dataFilePath, "utf-8");
-    return JSON.parse(data);
-  } catch (error) {
+    const text = await fs.readFile(dataFilePath, "utf-8");
+    return JSON.parse(text);
+  } catch {
     return {};
   }
 }
 
+async function saveData(obj) {
+  try {
+    const existing = await loadData();
+    const merged = { ...existing, ...obj };
+    await fs.writeFile(dataFilePath, JSON.stringify(merged, null, 2));
+  } catch (e) {
+    console.error("Error saving data:", e);
+  }
+}
+
+function formatKoreanTitle(startISO, endISO) {
+  const s = moment(startISO).tz("Asia/Tokyo");
+  const e = moment(endISO).tz("Asia/Tokyo");
+
+  const sM = s.month() + 1;
+  const sD = s.date();
+  const eM = e.month() + 1;
+  const eD = e.date();
+
+  let range;
+  if (sM === eM) {
+    if (sD === eD) {
+      // 같은 날: M/D
+      range = `${sM}/${sD}`;
+    } else {
+      // 같은 달, 다른 날: M/D-D
+      range = `${sM}/${sD}-${eD}`;
+    }
+  } else {
+    // 다른 달: M/D - M/D
+    range = `${sM}/${sD} - ${eM}/${eD}`;
+  }
+
+  return `전 월드 유지보수 작업 (${range})`;
+}
+
 function createErrorEmbed() {
   return new EmbedBuilder()
-    .setTitle("No Maintenance Info")
-    .setDescription("There is no maintenance information available.")
+    .setTitle("점검 정보를 불러올 수 없습니다")
+    .setDescription("현재 점검 공지가 없거나 API 업데이트가 되지 않았습니다.")
     .setURL("https://jp.finalfantasyxiv.com/lodestone")
     .setColor(EMBED_COLORS.ERROR)
-    .setThumbnail(CommandCategory.GAMEINFO?.image)
+    .setThumbnail(CommandCategory.GAMEINFO.image)
     .setFooter({ text: "From Lodestone News" });
 }
