@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html>
+
+    <%- include('../includes/head') %>
+    
+    <body class="hold-transition skin-blue sidebar-mini">
+
+        <div class="wrapper">
+
+            <!-- The header is the topbar -->
+            <%- include('../includes/header') %>
+
+            <!-- The sidebar includes the menu -->
+            <%- include('../includes/sidebar') %>
+
+            <!-- Content Wrapper. Contains page content -->
+            <div class="content-wrapper">
+
+                <!-- Content Header (Page header) -->
+                <section class="content-header">
+                    <h3> Currency Settings </h3>
+                    <ol class="breadcrumb">
+                        <li><a href="/"><i class="fa fa-home"></i>Selector</a></li>
+                        <li><a href="<%=`/manage/${guild.id}/`%>"><%=guild.name%></a></li>
+                        <li class="active">Currency</li>
+                    </ol>
+                </section>
+
+                <section class="content">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <!-- CURRENCY CONFIGURATION -->
+                            <div class="box box-warning">
+                                <div class="box-header with-border">
+                                    <h3 class="box-title">Exchange Rate Tickers</h3>
+                                </div>
+                                <form role="form" action="/manage/<%= guild.id %>/currency/" method="POST">
+                                    <div class="box-body">
+                                        <div class="form-group">
+                                            <label>Target Tickers (Max 5)</label>
+                                            <select class="form-control" name="tickers" multiple>
+                                                <% const currencies = bot.currencies; %>
+                                                <% for (const code in currencies) { %>
+                                                    <% if (guild.exchange_tickers && guild.exchange_tickers.includes(code)) { %>
+                                                        <option value="<%= code %>" selected="selected"><%= currencies[code] %> (<%= code %>)</option>
+                                                    <% } else { %>
+                                                        <option value="<%= code %>"><%= currencies[code] %> (<%= code %>)</option>
+                                                    <% } %>
+                                                <% } %>
+                                            </select>
+                                            <p class="help-block">Select up to 5 currencies to display in the 'rate' command.</p>
+                                        </div>
+                                    </div>
+                                    <div class="box-footer">
+                                        <button type="submit" name="currencyUpdate" class="btn btn-primary">Update</button>
+                                    </div>
+                                </form>
+                            </div>
+                            <!-- END: CURRENCY CONFIGURATION -->
+                        </div>
+                    </div>
+                </section>
+                
+            </div>
+            <!-- /.content-wrapper -->
+            
+            <%- include('../includes/footer') %>
+        </div>
+        <!-- ./wrapper -->
+    </body>
+</html>

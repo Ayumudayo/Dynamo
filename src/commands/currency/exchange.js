@@ -72,7 +72,7 @@ module.exports = {
     try {
       const from = interaction.options.getString("from") || "USD";
       const to = interaction.options.getString("to") || "KRW";
-      const amount = interaction.options.getInteger("amount") || 1;
+      const amount = interaction.options.getNumber("amount") || 1;
 
       const res = await getRate(from, to, amount);
       if (!res) {

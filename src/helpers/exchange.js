@@ -1,4 +1,4 @@
-const request = require("request");
+const axios = require("axios");
 
 const API_KEY = process.env.EXCHANGE_API_KEY;
 
@@ -9,27 +9,27 @@ const API_KEY = process.env.EXCHANGE_API_KEY;
  * @param {number} [amount=1] - 변환할 금액. 생략하면 1 단위 환율(conversion_rate)만 반환.
  * @returns {Promise<number>} - 변환 결과 또는 환율 (숫자)
  */
-function convert(from, to, amount = 1) {
-  // AMOUNT가 1이면 conversion_rate, 1보다 클 경우 conversion_result가 반환됨
+async function convert(from, to, amount = 1) {
   const url = `https://v6.exchangerate-api.com/v6/${API_KEY}/pair/${from}/${to}/${amount}`;
-  return new Promise((resolve, reject) => {
-    request(url, (error, response, body) => {
-      if (error) {
-        return reject(error);
-      }
-      try {
-        const json = JSON.parse(body);
-        if (json.result === "success") {
-          const value = json.conversion_result !== undefined ? json.conversion_result : json.conversion_rate;
-          resolve(value);
-        } else {
-          reject(new Error(json["error-type"] || "Unknown error from ExchangeRate-API"));
-        }
-      } catch (e) {
-        reject(e);
-      }
-    });
-  });
+  try {
+    const response = await axios.get(url);
+    const json = response.data;
+
+    if (json.result === "success") {
+      return json.conversion_result !== undefined ? json.conversion_result : json.conversion_rate;
+    } else {
+      throw new Error(json["error-type"] || "Unknown error from ExchangeRate-API");
+    }
+  } catch (error) {
+    if (error.response) {
+      const apiError = error.response.data?.["error-type"] || "Unknown API Error";
+      throw new Error(`ExchangeRate-API Error: ${apiError}`);
+    } else if (error.request) {
+      throw new Error("No response from ExchangeRate-API server.");
+    } else {
+      throw new Error(`Error setting up request: ${error.message}`);
+    }
+  }
 }
 
 /**

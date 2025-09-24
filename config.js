@@ -31,6 +31,10 @@ module.exports = {
 
   // PLUGINS
 
+  ANIME: {
+    ENABLED: false,
+  },
+
   AUTOMOD: {
     ENABLED: true,
     LOG_EMBED: "#36393F",
@@ -56,14 +60,8 @@ module.exports = {
     MAX_BEG_AMOUNT: 2500, // maximum coins to be received when beg command is used
   },
 
-  MUSIC: {
-    ENABLED: true,
-    IDLE_TIME: 60, // Time in seconds before the bot disconnects from an idle voice channel
-    MAX_SEARCH_RESULTS: 5,
-    DEFAULT_SOURCE: "YT", // YT = Youtube, YTM = Youtube Music, SC = SoundCloud
-    // Add any number of lavalink nodes here
-    // Refer to https://github.com/freyacodes/Lavalink to host your own lavalink server
-    LAVALINK_NODES: [],
+  FUN: {
+    ENABLED: false,
   },
 
   GAMEINFO: {
@@ -79,7 +77,7 @@ module.exports = {
 
   IMAGE: {
     ENABLED: false,
-    BASE_API: "https://strangeapi.fun/api",
+    BASE_API: "https://strangeapi.hostz.me/api",
   },
 
   INVITE: {
@@ -104,11 +102,25 @@ module.exports = {
     },
   },
 
+  MUSIC: {
+    ENABLED: true,
+    IDLE_TIME: 60, // Time in seconds before the bot disconnects from an idle voice channel
+    MAX_SEARCH_RESULTS: 5,
+    DEFAULT_SOURCE: "YT", // YT = Youtube, YTM = Youtube Music, SC = SoundCloud
+    // Add any number of lavalink nodes here
+    // Refer to https://github.com/freyacodes/Lavalink to host your own lavalink server
+    LAVALINK_NODES: [],
+  },
+
   PRESENCE: {
     ENABLED: false, // Whether or not the bot should update its status
     STATUS: "online", // The bot's status [online, idle, dnd, invisible]
     TYPE: "WATCHING", // Status type for the bot [PLAYING | LISTENING | WATCHING | COMPETING]
-    MESSAGE: "{members} members in {servers} servers", // Your bot status message
+    MESSAGE: ["{members} members in {servers} servers"], // Your bot status message
+  },
+
+  SOCIAL: {
+    ENABLED: false,
   },
 
   STATS: {
