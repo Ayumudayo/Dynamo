@@ -1,80 +1,86 @@
-﻿const {CommandCategory} = require("@src/structures");
-const {EMBED_COLORS} = require("@root/config.js");
+const { EMBED_COLORS } = require("@root/config.js");
 const {
-    EmbedBuilder,
-    ApplicationCommandOptionType,
-    ActionRowBuilder,
-    ButtonBuilder,
-    ButtonStyle,
+  EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } = require("discord.js");
 const fs = require("fs/promises");
 const path = require("path");
 
+// 데이터 파일 경로
 const dataFilePath = path.join(__dirname, "../../data.json");
 
 /**
  * @type {import("@structures/Command")}
  */
 module.exports = {
-    name: "wtinv",
-    description: "Shows the War Thunder Invite Link.",
-    category: "GAMEINFO",
-    botPermissions: ["EmbedLinks"],
-    command: {
-        enabled: false,
-        usage: "[command]",
-    },
-    slashCommand: {
-        enabled: true,
-        options: [],
-    },
+  name: "wtinv",
+  description: "Shows the game invite links (War Thunder / World of Tanks).",
+  category: "GAMEINFO",
+  botPermissions: ["EmbedLinks"],
+  command: { enabled: false, usage: "[command]" },
+  slashCommand: { enabled: true, options: [] },
 
-    async messageRun(message, args) {
-        // ...
-    },
+  async messageRun(message) {
+    // 텍스트 명령은 미사용 (슬래시만 지원)
+    return message.safeReply("이 명령은 슬래시 명령으로 사용하세요: /wtinv");
+  },
 
-    async interactionRun(interaction) {
-        try {
-            const data = await loadData();
-            const INVITE_LINK = data.WTINFO.link;
-            const THUMBNAIL_LINK = data.WTINFO.thumbnailLink;
+  async interactionRun(interaction) {
+    try {
+      const data = await loadData();
+      const wtLink = data?.WTINFO?.link; // War Thunder 초대 링크
+      const wotLink = data?.WOTINFO?.link; // World of Tanks 초대 링크
+      const thumb = data?.WTINFO?.thumbnailLink; // 기본 썸네일 유지
 
-            const embed = new EmbedBuilder()
-                .setTitle("Join Warthunder Now!")
-                .setColor(EMBED_COLORS.SUCCESS)
-                // .setDescription("워썬더에 합류하세요!")
-                .setTimestamp()
-                .setThumbnail(THUMBNAIL_LINK);
+      const embed = new EmbedBuilder()
+        .setTitle("Join War Thunder / World of Tanks Now!")
+        .setColor(EMBED_COLORS.SUCCESS)
+        // .setDescription("아래 버튼을 통해 합류하세요!")
+        .setTimestamp()
+        .setThumbnail(thumb ?? null);
 
-            // [버튼] JOIN
-            const buttonRow = new ActionRowBuilder().addComponents(
-                new ButtonBuilder()
-                    .setLabel("JOIN NOW")
-                    .setStyle(ButtonStyle.Link) // 클릭 시 링크로 연결
-                    .setURL(INVITE_LINK)
-            );
+      const buttons = [];
+      if (wtLink) {
+        buttons.push(
+          new ButtonBuilder()
+            .setLabel("War Thunder")
+            .setStyle(ButtonStyle.Link)
+            .setURL(wtLink)
+        );
+      }
+      if (wotLink) {
+        buttons.push(
+          new ButtonBuilder()
+            .setLabel("World of Tanks")
+            .setStyle(ButtonStyle.Link)
+            .setURL(wotLink)
+        );
+      }
 
-            await interaction.followUp({
-                embeds: [embed],
-                components: [buttonRow],
-            });
-        } catch (err) {
-            console.debug(err);
-            await interaction.followUp("오류가 발생했습니다.");
-        }
-    },
+      // 버튼이 하나도 없으면 안내만 출력
+      if (buttons.length === 0) {
+        await interaction.followUp({ embeds: [embed.setDescription("현재 설정된 초대 링크가 없습니다.")] });
+        return;
+      }
+
+      const row = new ActionRowBuilder().addComponents(...buttons);
+      await interaction.followUp({ embeds: [embed], components: [row] });
+    } catch (err) {
+      console.debug(err);
+      await interaction.followUp("처리 중 오류가 발생했습니다.");
+    }
+  },
 };
 
-/**
- * Loads and returns data from a JSON file.
- * @async
- * @returns {Promise<Object>} The loaded data.
- */
+// JSON 데이터 로드
 async function loadData() {
-    try {
-        const data = await fs.readFile(dataFilePath, "utf-8");
-        return JSON.parse(data);
-    } catch (error) {
-        return {};
-    }
+  try {
+    const text = await fs.readFile(dataFilePath, "utf-8");
+    return JSON.parse(text);
+  } catch {
+    return {};
+  }
 }
+

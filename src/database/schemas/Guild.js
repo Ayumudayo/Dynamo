@@ -16,6 +16,10 @@ const Schema = new mongoose.Schema({
     bots: { type: Number, default: 0 },
   },
   prefix: { type: String, default: PREFIX_COMMANDS.DEFAULT_PREFIX },
+  stock_tickers: {
+    type: Array,
+    default: ["SOXL", "TQQQ", "VOO"],
+  },
   stats: {
     enabled: Boolean,
     xp: {
@@ -149,5 +153,11 @@ module.exports = {
     }
     cache.add(guild.id, guildData);
     return guildData;
+  },
+
+  clearCache: (guildId) => {
+    if (cache.has(guildId)) {
+      cache.delete(guildId);
+    }
   },
 };
