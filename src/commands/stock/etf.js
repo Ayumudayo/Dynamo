@@ -2,7 +2,8 @@ const { getSettings } = require("@schemas/Guild");
 const { CommandCategory } = require("@src/structures");
 const { STOCK, EMBED_COLORS } = require("@root/config.js");
 const { EmbedBuilder } = require("discord.js");
-const yahooFinance = require('yahoo-finance2').default;
+const YahooFinance = require('yahoo-finance2').default;
+const yahooFinance = new YahooFinance();
 
 /**
  * Define the ETF command module.
@@ -42,11 +43,11 @@ module.exports = {
             // Check if the market is closed before setting up updates
             const stateField = response.data.fields.find(field => field.name === "Market State");
             if (stateField) {
-              const state = stateField.value.split(' ')[0];
-              if (state === "Closed" || state === "Post" || state === "Unknown") {
-                  // If the market is closed or unknown, do not set up the interval for updates
-                  return;
-              }
+                const state = stateField.value.split(' ')[0];
+                if (state === "Closed" || state === "Post" || state === "Unknown") {
+                    // If the market is closed or unknown, do not set up the interval for updates
+                    return;
+                }
             }
         }
         catch (err) {
@@ -61,7 +62,7 @@ module.exports = {
             updateCount++; // Increment the update count
             // Fetch new data
             response = await getResultEmbed(tickers, updateCount, totalUpdates);
-            
+
             if (response) {
                 // Edit the original reply with the new data
                 await interaction.editReply({ embeds: [response] }).catch(console.error);
@@ -143,7 +144,7 @@ async function getResultEmbed(tickers, updateCount = 0, totalUpdates = STOCK.MAX
                     { name: ' ', value: ' ', inline: false },
                 );
             } else {
-                 embed.addFields(
+                embed.addFields(
                     { name: `${tickers[index]}`, value: `No price data available`, inline: false }
                 );
             }
