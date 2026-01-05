@@ -1,7 +1,8 @@
 const { CommandCategory } = require("@src/structures");
 const { STOCK } = require("@root/config.js");
 const { EmbedBuilder, ApplicationCommandOptionType } = require("discord.js");
-const yahooFinance = require('yahoo-finance2').default;
+const YahooFinance = require('yahoo-finance2').default;
+const yahooFinance = new YahooFinance();
 
 /**
  * Define the stock command module.
@@ -32,7 +33,7 @@ module.exports = {
   async messageRun(message, args) {
     // Retrieve the stock symbol from the command arguments or default to 'NVDA'
     const symbol = args[0] || 'NVDA';
-    
+
     // Fetch stock data and send the result as an embed
     const response = await getResultEmbed(symbol);
     if (response) {
@@ -65,11 +66,11 @@ module.exports = {
     // Set up periodic updates for the stock data
     let updateCount = 0;
     const totalUpdates = STOCK.MAX_REFRESH_TIME / STOCK.REFRESH_INTERVAL;
-    
+
     // Update the response every REFRESH_INTERVAL milliseconds
     const interval = setInterval(async () => {
       updateCount++; // Increment the update count
-      
+
       // Fetch new data
       response = await getResultEmbed(symbol, updateCount, totalUpdates);
       if (response) {
@@ -116,12 +117,12 @@ async function getResultEmbed(symbol, updateCount = 0, totalUpdates) {
         { name: ' ', value: ' ', inline: false },
       );
 
-      let upDownEmoji = results.regularMarketChange > 0 ? '<:yangbonghoro:1162456430360662018>' : results.regularMarketChange < 0 ? '<:sale:1162457546532073623>' : '';
-      embed.addFields(
-        { name: "Price", value: `${results.currencySymbol}${results.regularMarketPrice.toFixed(2)}`, inline: true },
-        { name: "Change", value: `${results.regularMarketChange.toFixed(2)} (${(results.regularMarketChangePercent * 100).toFixed(2)}%) ${upDownEmoji}`, inline: true },
-        { name: ' ', value: ' ', inline: false },
-      )      
+    let upDownEmoji = results.regularMarketChange > 0 ? '<:yangbonghoro:1162456430360662018>' : results.regularMarketChange < 0 ? '<:sale:1162457546532073623>' : '';
+    embed.addFields(
+      { name: "Price", value: `${results.currencySymbol}${results.regularMarketPrice.toFixed(2)}`, inline: true },
+      { name: "Change", value: `${results.regularMarketChange.toFixed(2)} (${(results.regularMarketChangePercent * 100).toFixed(2)}%) ${upDownEmoji}`, inline: true },
+      { name: ' ', value: ' ', inline: false },
+    )
       .setColor(getEmbedColor(results))
       .setFooter({ text: `Data from Yahoo Finance. #Update ${updateCount}/${totalUpdates || '∞'}.` })
       .setTimestamp(Date.now());
