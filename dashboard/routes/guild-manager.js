@@ -1,4 +1,4 @@
-const { getSettings } = require("@schemas/Guild");
+const { getSettings, clearCache } = require("@schemas/Guild");
 
 const express = require("express"),
   utils = require("../utils"),
@@ -338,7 +338,60 @@ router.post("/:serverID/greeting", CheckAuth, async (req, res) => {
   }
 
   await settings.save();
+  clearCache(guild.id);
   res.redirect(303, `/manage/${guild.id}/greeting`);
+});
+
+router.get("/:serverID/stocks", CheckAuth, async (req, res) => {
+  const guild = req.client.guilds.cache.get(req.params.serverID);
+  if (
+    !guild ||
+    !req.userInfos.displayedGuilds ||
+    !req.userInfos.displayedGuilds.find((g) => g.id === req.params.serverID)
+  ) {
+    return res.render("404", {
+      user: req.userInfos,
+      currentURL: `${req.client.config.DASHBOARD.baseURL}/${req.originalUrl}`,
+    });
+  }
+
+  const guildInfos = await utils.fetchGuild(guild.id, req.client, req.user.guilds);
+
+  res.render("manager/stocks", {
+    guild: guildInfos,
+    user: req.userInfos,
+    bot: req.client,
+    currentURL: `${req.client.config.DASHBOARD.baseURL}/${req.originalUrl}`,
+  });
+});
+
+router.post("/:serverID/stocks", CheckAuth, async (req, res) => {
+  const guild = req.client.guilds.cache.get(req.params.serverID);
+  if (
+    !guild ||
+    !req.userInfos.displayedGuilds ||
+    !req.userInfos.displayedGuilds.find((g) => g.id === req.params.serverID)
+  ) {
+    return res.render("404", {
+      user: req.userInfos,
+      currentURL: `${req.client.config.DASHBOARD.baseURL}/${req.originalUrl}`,
+    });
+  }
+
+  const settings = await getSettings(guild);
+  const data = req.body;
+
+  if (Object.prototype.hasOwnProperty.call(data, "stocksUpdate")) {
+    if (data.tickers) {
+      const tickers = data.tickers.split(",").map(t => t.trim()).filter(t => t !== "").slice(0, 5);
+      settings.stock_tickers = tickers;
+    } else {
+      settings.stock_tickers = [];
+    }
+  }
+
+  await settings.save();
+  res.redirect(303, `/manage/${guild.id}/stocks`);
 });
 
 module.exports = router;

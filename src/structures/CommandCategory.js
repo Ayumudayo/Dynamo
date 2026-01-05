@@ -6,6 +6,11 @@ module.exports = {
     image: "https://icons.iconarchive.com/icons/dakirby309/simply-styled/256/Settings-icon.png",
     emoji: "⚙️",
   },
+  ANIME: {
+    name: "Anime",
+    image: "https://wallpaperaccess.com/full/5680679.jpg",
+    emoji: "🎨",
+  },
   AUTOMOD: {
     name: "Automod",
     enabled: config.AUTOMOD.ENABLED,
@@ -18,6 +23,17 @@ module.exports = {
     image: "https://cdn.discordapp.com/attachments/1138398345065414657/1138816034049105940/gil.png?ex=65c37c14&is=65b10714&hm=725d32835f239f48cf0a3485491431c7d02a1750b53c9086210d765b89e798f8&",
     emoji: "💸",
   },
+  ECONOMY: {
+    name: "Economy",
+    enabled: config.ECONOMY.ENABLED,
+    image: "https://icons.iconarchive.com/icons/custom-icon-design/pretty-office-11/128/coins-icon.png",
+    emoji: "🪙",
+  },
+  FUN: {
+    name: "Fun",
+    image: "https://icons.iconarchive.com/icons/flameia/aqua-smiles/128/make-fun-icon.png",
+    emoji: "😂",
+  },
   GAMEINFO: {
     name: "Gameinfo",
     enabled: config.GAMEINFO.ENABLED,
@@ -29,6 +45,12 @@ module.exports = {
     enabled: config.GIVEAWAYS.ENABLED,
     image: "https://cdn-icons-png.flaticon.com/512/4470/4470928.png",
     emoji: "🎉",
+  },
+  IMAGE: {
+    name: "Image",
+    enabled: config.IMAGE.ENABLED,
+    image: "https://icons.iconarchive.com/icons/dapino/summer-holiday/128/photo-icon.png",
+    emoji: "🖼️",
   },
   INVITE: {
     name: "Invite",
@@ -57,6 +79,17 @@ module.exports = {
     name: "Owner",
     image: "https://www.pinclipart.com/picdir/middle/531-5318253_web-designing-icon-png-clipart.png",
     emoji: "🤴",
+  },
+  SOCIAL: {
+    name: "Social",
+    image: "https://icons.iconarchive.com/icons/dryicons/aesthetica-2/128/community-users-icon.png",
+    emoji: "🫂",
+  },
+  STATS: {
+    name: "Statistics",
+    enabled: config.STATS.ENABLED,
+    image: "https://icons.iconarchive.com/icons/graphicloads/flat-finance/256/dollar-stats-icon.png",
+    emoji: "📈",
   },
   STOCK: {
     name: "Stock",
