@@ -116,6 +116,7 @@ If `DISCORD_REGISTER_GLOBALLY=false`, commands are registered only in `DISCORD_D
 ## Startup Scripts
 
 Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and start the dashboard and bot with log files and pid files under `logs/`.
+They prebuild `dynamo-bootstrap`, `dynamo-dashboard`, and `dynamo-bot` once with a single `cargo build` invocation, then run the shared binaries from `target/debug/`.
 
 PowerShell:
 
@@ -131,6 +132,7 @@ POSIX shell:
 
 Useful flags:
 
+- `--skip-build` / `-SkipBuild`
 - `--skip-bootstrap` / `-SkipBootstrap`
 - `--enable-giveaway` / `-EnableGiveaway`
 - `-Headless` for the PowerShell launcher

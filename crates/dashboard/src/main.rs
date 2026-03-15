@@ -26,9 +26,28 @@ async fn main() -> anyhow::Result<()> {
     let config = DashboardConfig::from_env()?;
     let registry = dynamo_app::module_registry();
     let persistence = dynamo_app::persistence_from_env().await?;
+    let module_catalog = registry.catalog().clone();
+    let command_catalog = registry.command_catalog().clone();
+    let loaded_modules = module_catalog
+        .entries
+        .iter()
+        .map(|entry| entry.module.id)
+        .collect::<Vec<_>>()
+        .join(", ");
+    if let Some(database_name) = persistence.database_name.as_deref() {
+        info!(database = %database_name, "Dashboard persistence initialized");
+    }
+    info!(
+        host = %config.host,
+        port = config.port,
+        module_count = module_catalog.entries.len(),
+        command_count = command_catalog.entries.len(),
+        modules = %loaded_modules,
+        "Dashboard companion configured"
+    );
     let state = Arc::new(DashboardState {
-        module_catalog: registry.catalog().clone(),
-        command_catalog: registry.command_catalog().clone(),
+        module_catalog,
+        command_catalog,
         persistence,
     });
 
@@ -66,7 +85,7 @@ async fn main() -> anyhow::Result<()> {
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 
-    info!(address = %address, "Dashboard companion listening");
+    info!(address = %address, url = %format!("http://{address}/"), "Dashboard companion listening");
     axum::serve(listener, app).await?;
     Ok(())
 }

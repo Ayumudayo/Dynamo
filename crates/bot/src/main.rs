@@ -22,6 +22,12 @@ async fn main() -> Result<(), Error> {
     let intents = aggregate_intents(manifests.iter().copied());
     let setup_catalog = registry.catalog().clone();
     let setup_command_catalog = registry.command_catalog().clone();
+    let loaded_modules = setup_catalog
+        .entries
+        .iter()
+        .map(|entry| entry.module.id)
+        .collect::<Vec<_>>()
+        .join(", ");
     let discord_config = config.discord.clone();
     let command_sync_config = config.commands.clone();
     let optional_modules = config.optional_modules.clone();
@@ -31,6 +37,20 @@ async fn main() -> Result<(), Error> {
     if let Some(database_name) = persistence.database_name.as_deref() {
         info!(database = %database_name, "MongoDB persistence initialized");
     }
+    info!(
+        command_scope = if config.discord.register_globally {
+            "global"
+        } else {
+            "guild"
+        },
+        dev_guild_id = ?config.discord.dev_guild_id,
+        sync_interval_seconds = config.commands.sync_interval_seconds,
+        module_count = setup_catalog.entries.len(),
+        command_count = setup_command_catalog.entries.len(),
+        modules = %loaded_modules,
+        giveaway_enabled = config.optional_modules.giveaway_enabled,
+        "Bot runtime configured"
+    );
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {

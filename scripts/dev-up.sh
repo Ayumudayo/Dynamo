@@ -6,6 +6,7 @@ ENV_PATH="$ROOT_DIR/.env"
 LOGS_DIR="$ROOT_DIR/logs"
 
 SKIP_BOOTSTRAP=false
+SKIP_BUILD=false
 ENABLE_GIVEAWAY=false
 DRY_RUN=false
 
@@ -13,6 +14,10 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     --skip-bootstrap)
       SKIP_BOOTSTRAP=true
+      shift
+      ;;
+    --skip-build)
+      SKIP_BUILD=true
       shift
       ;;
     --enable-giveaway)
@@ -95,17 +100,19 @@ if [[ "$DRY_RUN" != "true" ]] && ! command -v cargo >/dev/null 2>&1; then
   exit 1
 fi
 
-run_with_overrides() {
+binary_path() {
   local crate="$1"
-  shift
+  printf '%s/target/debug/%s\n' "$ROOT_DIR" "$crate"
+}
 
-  (
-    cd "$ROOT_DIR"
-    if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
-      export DYNAMO_ENABLE_GIVEAWAY=true
-    fi
-    cargo run -p "$crate" "$@"
-  )
+assert_binary_exists() {
+  local crate="$1"
+  local binary
+  binary="$(binary_path "$crate")"
+  if [[ ! -x "$binary" && ! -f "$binary" ]]; then
+    echo "Missing built binary at $binary. Run without --skip-build first." >&2
+    exit 1
+  fi
 }
 
 stop_managed_process() {
@@ -139,11 +146,17 @@ start_process() {
   local stdout_path="$LOGS_DIR/${name}.stdout.log"
   local stderr_path="$LOGS_DIR/${name}.stderr.log"
   local pid_path="$LOGS_DIR/${name}.pid"
+  local binary
+
+  binary="$(binary_path "$crate")"
+  if [[ "$DRY_RUN" != "true" ]]; then
+    assert_binary_exists "$crate"
+  fi
 
   stop_managed_process "$name"
 
   if [[ "$DRY_RUN" == "true" ]]; then
-    echo "[dry-run] (cd '$ROOT_DIR' && cargo run -p '$crate') >'$stdout_path' 2>'$stderr_path' &"
+    echo "[dry-run] (cd '$ROOT_DIR' && '$binary') >'$stdout_path' 2>'$stderr_path' &"
     return
   fi
 
@@ -152,7 +165,7 @@ start_process() {
     if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
       export DYNAMO_ENABLE_GIVEAWAY=true
     fi
-    nohup cargo run -p "$crate" >"$stdout_path" 2>"$stderr_path" &
+    nohup "$binary" >"$stdout_path" 2>"$stderr_path" &
     echo $! >"$pid_path"
     echo "$name started (pid=$(cat "$pid_path"))"
     echo "  stdout: $stdout_path"
@@ -175,6 +188,28 @@ start_process() {
       fi
     fi
   fi
+}
+
+run_binary_foreground() {
+  local crate="$1"
+  local binary
+  binary="$(binary_path "$crate")"
+  if [[ "$DRY_RUN" != "true" ]]; then
+    assert_binary_exists "$crate"
+  fi
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo "[dry-run] (cd '$ROOT_DIR' && '$binary')"
+    return
+  fi
+
+  (
+    cd "$ROOT_DIR"
+    if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
+      export DYNAMO_ENABLE_GIVEAWAY=true
+    fi
+    "$binary"
+  )
 }
 
 echo "Repo root: $ROOT_DIR"
@@ -202,13 +237,24 @@ if [[ "$EFFECTIVE_GIVEAWAY" == "true" ]]; then
   echo "Giveaway module override: enabled"
 fi
 
-if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
+if [[ "$SKIP_BUILD" != "true" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then
-    echo "[dry-run] (cd '$ROOT_DIR' && cargo run -p dynamo-bootstrap)"
+    echo "[dry-run] (cd '$ROOT_DIR' && cargo build -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot)"
   else
-    echo "Running Mongo bootstrap..."
-    run_with_overrides "dynamo-bootstrap"
+    echo "Prebuilding shared Rust artifacts..."
+    (
+      cd "$ROOT_DIR"
+      if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
+        export DYNAMO_ENABLE_GIVEAWAY=true
+      fi
+      cargo build -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot
+    )
   fi
+fi
+
+if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
+  echo "Running Mongo bootstrap..."
+  run_binary_foreground "dynamo-bootstrap"
 fi
 
 echo "Starting dashboard..."

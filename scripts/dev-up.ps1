@@ -1,5 +1,6 @@
 param(
   [switch]$SkipBootstrap,
+  [switch]$SkipBuild,
   [switch]$EnableGiveaway,
   [switch]$Headless,
   [switch]$DryRun
@@ -121,6 +122,37 @@ function Join-CommandParts {
   return ($Parts -join "; ")
 }
 
+function Get-BinaryPath {
+  param([string]$Crate)
+  return (Join-Path $RepoRoot "target\debug\$Crate.exe")
+}
+
+function Assert-BinaryExists {
+  param([string]$Crate)
+
+  $BinaryPath = Get-BinaryPath -Crate $Crate
+  if (-not (Test-Path $BinaryPath)) {
+    throw "Missing built binary at $BinaryPath. Run without -SkipBuild first."
+  }
+}
+
+function Invoke-Build {
+  $Commands = @()
+  foreach ($Item in $EnvOverrides.GetEnumerator()) {
+    $Commands += "`$env:$($Item.Key)='$($Item.Value)'"
+  }
+  $Commands += "Set-Location '$RepoRoot'"
+  $Commands += "cargo build -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot"
+  $Command = Join-CommandParts -Parts $Commands
+
+  if ($DryRun) {
+    Write-Host "[dry-run] $($Shell.Source) -NoLogo -NoProfile -Command $Command"
+    return
+  }
+
+  & $Shell.Source -NoLogo -NoProfile -Command $Command
+}
+
 function Start-RustProcess {
   param(
     [string]$Name,
@@ -131,6 +163,10 @@ function Start-RustProcess {
 
   $ConsoleLogPath = Join-Path $LogsDir "$Name.console.log"
   $PidPath = Join-Path $LogsDir "$Name.pid"
+  $BinaryPath = Get-BinaryPath -Crate $Crate
+  if (-not $DryRun) {
+    Assert-BinaryExists -Crate $Crate
+  }
 
   $Commands = @()
   foreach ($Item in $EnvOverrides.GetEnumerator()) {
@@ -138,9 +174,9 @@ function Start-RustProcess {
   }
   $Commands += "Set-Location '$RepoRoot'"
   if ($Headless) {
-    $Commands += "cargo run -p $Crate"
+    $Commands += "& '$BinaryPath'"
   } else {
-    $Commands += "cargo run -p $Crate 2>&1 | Tee-Object -FilePath '$ConsoleLogPath'"
+    $Commands += "& '$BinaryPath' 2>&1 | Tee-Object -FilePath '$ConsoleLogPath'"
   }
   $Command = Join-CommandParts -Parts $Commands
 
@@ -204,12 +240,17 @@ function Start-RustProcess {
 }
 
 function Invoke-Bootstrap {
+  $BinaryPath = Get-BinaryPath -Crate "dynamo-bootstrap"
+  if (-not $DryRun) {
+    Assert-BinaryExists -Crate "dynamo-bootstrap"
+  }
+
   $Commands = @()
   foreach ($Item in $EnvOverrides.GetEnumerator()) {
     $Commands += "`$env:$($Item.Key)='$($Item.Value)'"
   }
   $Commands += "Set-Location '$RepoRoot'"
-  $Commands += "cargo run -p dynamo-bootstrap"
+  $Commands += "& '$BinaryPath'"
   $Command = Join-CommandParts -Parts $Commands
 
   if ($DryRun) {
@@ -240,6 +281,11 @@ $CommandScope = if ($RegisterGlobally) {
 Write-Host "Command scope: $CommandScope"
 if ($EffectiveGiveaway) {
   Write-Host "Giveaway module override: enabled"
+}
+
+if (-not $SkipBuild) {
+  Write-Host "Prebuilding shared Rust artifacts..."
+  Invoke-Build
 }
 
 if (-not $SkipBootstrap) {
