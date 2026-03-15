@@ -222,6 +222,8 @@ async fn music_join(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
+    ctx.defer().await?;
+
     let config = load_settings(ctx).await?.to_backend_config();
     let Some(service) = ctx.data().services.music.as_ref() else {
         ctx.say("Music runtime service is not configured in this build.")
@@ -264,6 +266,8 @@ async fn music_leave(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
+    ctx.defer().await?;
+
     let config = load_settings(ctx).await?.to_backend_config();
     let Some(service) = ctx.data().services.music.as_ref() else {
         ctx.say("Music runtime service is not configured in this build.")
@@ -298,6 +302,8 @@ async fn music_play(
         .await?;
         return Ok(());
     }
+
+    ctx.defer().await?;
 
     let config = load_settings(ctx).await?.to_backend_config();
     let Some(service) = ctx.data().services.music.as_ref() else {
@@ -444,6 +450,8 @@ async fn run_queue_action(ctx: Context<'_>, action: QueueAction) -> Result<(), E
         .await?;
         return Ok(());
     }
+
+    ctx.defer().await?;
 
     let config = load_settings(ctx).await?.to_backend_config();
     let Some(service) = ctx.data().services.music.as_ref() else {

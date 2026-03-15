@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
+    time::Duration,
 };
 
 use async_trait::async_trait;
@@ -168,9 +169,21 @@ impl MusicService for SongbirdMusicService {
         config: &MusicBackendConfig,
     ) -> Result<MusicQueueSnapshot, Error> {
         let manager = self.manager(ctx, config).await?;
-        manager
-            .join(GuildId::new(guild_id), ChannelId::new(voice_channel_id))
-            .await?;
+        tokio::time::timeout(
+            Duration::from_secs(15),
+            manager.join(GuildId::new(guild_id), ChannelId::new(voice_channel_id)),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Timed out while joining the voice channel. Check that the bot can view, connect, and speak in the target channel."
+            )
+        })?
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "Failed to join the voice channel. Check that the bot can view, connect, and speak in the target channel: {error}"
+            )
+        })?;
 
         guild_contexts().lock().await.insert(
             guild_id,
@@ -206,9 +219,21 @@ impl MusicService for SongbirdMusicService {
         config: &MusicBackendConfig,
     ) -> Result<MusicEnqueueResult, Error> {
         let manager = self.manager(ctx, config).await?;
-        let call = manager
-            .join(GuildId::new(guild_id), ChannelId::new(voice_channel_id))
-            .await?;
+        let call = tokio::time::timeout(
+            Duration::from_secs(15),
+            manager.join(GuildId::new(guild_id), ChannelId::new(voice_channel_id)),
+        )
+        .await
+        .map_err(|_| {
+            anyhow::anyhow!(
+                "Timed out while joining the voice channel. Check that the bot can view, connect, and speak in the target channel."
+            )
+        })?
+        .map_err(|error| {
+            anyhow::anyhow!(
+                "Failed to join the voice channel. Check that the bot can view, connect, and speak in the target channel: {error}"
+            )
+        })?;
 
         guild_contexts().lock().await.insert(
             guild_id,
@@ -219,9 +244,13 @@ impl MusicService for SongbirdMusicService {
         );
 
         let mut lazy = self.build_lazy_input(query);
-        let aux_metadata = lazy
-            .aux_metadata()
+        let aux_metadata = tokio::time::timeout(Duration::from_secs(20), lazy.aux_metadata())
             .await
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "Timed out while resolving media metadata. Check that yt-dlp is installed and the requested source is reachable."
+                )
+            })?
             .map_err(|error| anyhow::anyhow!("Failed to resolve media metadata: {error}"))?;
 
         let track = MusicTrack {

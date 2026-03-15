@@ -110,6 +110,33 @@ fn event_handler<'a>(
 fn framework_on_error(error: FrameworkError<'_, AppState, Error>) -> poise::BoxFuture<'_, ()> {
     Box::pin(async move {
         match error {
+            FrameworkError::Command { ctx, error, .. } => {
+                error!(
+                    command = ctx.command().qualified_name,
+                    ?error,
+                    "command execution failed"
+                );
+
+                let user_message = format!("Command failed: {error}");
+                if let Err(send_error) = ctx
+                    .send(
+                        CreateReply::default()
+                            .content(user_message)
+                            .ephemeral(true),
+                    )
+                    .await
+                {
+                    if send_error.to_string().contains("Unknown interaction") {
+                        warn!(
+                            command = ctx.command().qualified_name,
+                            ?send_error,
+                            "failed to deliver command error because the interaction expired"
+                        );
+                    } else {
+                        error!(?send_error, "failed to send command failure");
+                    }
+                }
+            }
             FrameworkError::CommandCheckFailed {
                 ctx,
                 error: Some(error),
