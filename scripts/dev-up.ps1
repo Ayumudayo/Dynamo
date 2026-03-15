@@ -65,6 +65,7 @@ function Start-RustProcess {
     -WorkingDirectory $RepoRoot `
     -RedirectStandardOutput $StdoutPath `
     -RedirectStandardError $StderrPath `
+    -WindowStyle Hidden `
     -PassThru
 
   Set-Content -Path $PidPath -Value $Process.Id
@@ -72,6 +73,24 @@ function Start-RustProcess {
   Write-Host "  stdout: $StdoutPath"
   Write-Host "  stderr: $StderrPath"
   Write-Host "  pid:    $PidPath"
+
+  Start-Sleep -Seconds 2
+  $Running = Get-Process -Id $Process.Id -ErrorAction SilentlyContinue
+  if (-not $Running) {
+    Write-Warning "$Name exited immediately."
+    if (Test-Path $StdoutPath) {
+      Write-Host "---- $Name stdout ----"
+      Get-Content $StdoutPath -Tail 40
+    }
+    if (Test-Path $StderrPath) {
+      Write-Host "---- $Name stderr ----"
+      Get-Content $StderrPath -Tail 40
+      $ErrorText = (Get-Content $StderrPath -Raw)
+      if ($ErrorText -match "Disallowed gateway intents") {
+        Write-Warning "Discord bot intents are not enabled in the developer portal. Enable the required privileged intents, especially Server Members Intent."
+      }
+    }
+  }
 }
 
 function Invoke-Bootstrap {

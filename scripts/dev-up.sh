@@ -90,6 +90,22 @@ start_process() {
     echo "  stderr: $stderr_path"
     echo "  pid:    $pid_path"
   )
+
+  sleep 2
+  if ! kill -0 "$(cat "$pid_path")" >/dev/null 2>&1; then
+    echo "WARNING: $name exited immediately." >&2
+    if [[ -f "$stdout_path" ]]; then
+      echo "---- $name stdout ----"
+      tail -n 40 "$stdout_path"
+    fi
+    if [[ -f "$stderr_path" ]]; then
+      echo "---- $name stderr ----"
+      tail -n 40 "$stderr_path"
+      if grep -q "Disallowed gateway intents" "$stderr_path"; then
+        echo "WARNING: Discord bot intents are not enabled in the developer portal. Enable the required privileged intents, especially Server Members Intent." >&2
+      fi
+    fi
+  fi
 }
 
 echo "Repo root: $ROOT_DIR"

@@ -35,7 +35,7 @@ async fn main() -> anyhow::Result<()> {
     let app = Router::new()
         .route("/", get(index))
         .route("/deployment", get(deployment_page))
-        .route("/guild/:guild_id", get(guild_page))
+        .route("/guild/{guild_id}", get(guild_page))
         .route("/healthz", get(healthz))
         .route("/api/modules", get(list_modules))
         .route(
@@ -45,20 +45,20 @@ async fn main() -> anyhow::Result<()> {
         .route("/api/module-states/live", get(list_live_module_states))
         .route("/api/deployment-settings", get(get_deployment_settings))
         .route(
-            "/api/deployment-settings/:module_id",
+            "/api/deployment-settings/{module_id}",
             patch(patch_deployment_module_settings),
         )
         .route(
-            "/api/deployment-command-settings/:command_id",
+            "/api/deployment-command-settings/{command_id}",
             patch(patch_deployment_command_settings),
         )
-        .route("/api/guild-settings/:guild_id", get(get_guild_settings))
+        .route("/api/guild-settings/{guild_id}", get(get_guild_settings))
         .route(
-            "/api/guild-settings/:guild_id/:module_id",
+            "/api/guild-settings/{guild_id}/{module_id}",
             patch(patch_guild_module_settings),
         )
         .route(
-            "/api/guild-command-settings/:guild_id/:command_id",
+            "/api/guild-command-settings/{guild_id}/{command_id}",
             patch(patch_guild_command_settings),
         )
         .with_state(state);
