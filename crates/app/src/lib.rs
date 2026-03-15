@@ -7,7 +7,10 @@ use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use tracing::info;
 
 pub fn module_registry() -> ModuleRegistry {
-    ModuleRegistry::new(vec![Box::new(dynamo_module_info::InfoModule)])
+    ModuleRegistry::new(vec![
+        Box::new(dynamo_module_info::InfoModule),
+        Box::new(dynamo_module_gameinfo::GameInfoModule),
+    ])
 }
 
 pub async fn optional_mongo_from_env() -> anyhow::Result<Option<Arc<MongoPersistence>>> {
