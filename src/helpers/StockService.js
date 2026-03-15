@@ -94,6 +94,12 @@ function safeNumber(value) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
+function normalizePercent(value, { inputIsPercent = false } = {}) {
+  const number = safeNumber(value);
+  if (number === null) return null;
+  return inputIsPercent ? number / 100 : number;
+}
+
 function buildFooter(updateCount, totalUpdates) {
   return `Data from Yahoo Finance. Update ${updateCount}/${totalUpdates}.`;
 }
@@ -169,13 +175,13 @@ function normalizeSummaryPrice(price) {
     phase: normalizeMarketState(price.marketState),
     regularMarketPrice: safeNumber(price.regularMarketPrice),
     regularMarketChange: safeNumber(price.regularMarketChange),
-    regularMarketChangePercent: safeNumber(price.regularMarketChangePercent),
+    regularMarketChangePercent: normalizePercent(price.regularMarketChangePercent),
     preMarketPrice: safeNumber(price.preMarketPrice),
     preMarketChange: safeNumber(price.preMarketChange),
-    preMarketChangePercent: safeNumber(price.preMarketChangePercent),
+    preMarketChangePercent: normalizePercent(price.preMarketChangePercent),
     postMarketPrice: safeNumber(price.postMarketPrice),
     postMarketChange: safeNumber(price.postMarketChange),
-    postMarketChangePercent: safeNumber(price.postMarketChangePercent),
+    postMarketChangePercent: normalizePercent(price.postMarketChangePercent),
     regularMarketDayHigh: safeNumber(price.regularMarketDayHigh),
     regularMarketDayLow: safeNumber(price.regularMarketDayLow),
     regularMarketVolume: safeNumber(price.regularMarketVolume),
@@ -193,13 +199,19 @@ function normalizeQuote(quote) {
     phase: normalizeMarketState(quote.marketState),
     regularMarketPrice: safeNumber(quote.regularMarketPrice),
     regularMarketChange: safeNumber(quote.regularMarketChange),
-    regularMarketChangePercent: safeNumber(quote.regularMarketChangePercent),
+    regularMarketChangePercent: normalizePercent(quote.regularMarketChangePercent, {
+      inputIsPercent: true,
+    }),
     preMarketPrice: safeNumber(quote.preMarketPrice),
     preMarketChange: safeNumber(quote.preMarketChange),
-    preMarketChangePercent: safeNumber(quote.preMarketChangePercent),
+    preMarketChangePercent: normalizePercent(quote.preMarketChangePercent, {
+      inputIsPercent: true,
+    }),
     postMarketPrice: safeNumber(quote.postMarketPrice),
     postMarketChange: safeNumber(quote.postMarketChange),
-    postMarketChangePercent: safeNumber(quote.postMarketChangePercent),
+    postMarketChangePercent: normalizePercent(quote.postMarketChangePercent, {
+      inputIsPercent: true,
+    }),
     regularMarketDayHigh: safeNumber(quote.regularMarketDayHigh),
     regularMarketDayLow: safeNumber(quote.regularMarketDayLow),
     regularMarketVolume: safeNumber(quote.regularMarketVolume),
