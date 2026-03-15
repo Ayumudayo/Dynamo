@@ -11,7 +11,7 @@ async fn main() -> Result<(), Error> {
     init_tracing();
 
     let config = AppConfig::from_env()?;
-    let registry = dynamo_app::module_registry();
+    let registry = dynamo_app::module_registry_with_optional(&config.optional_modules);
     let persistence = dynamo_app::persistence_from_env().await?;
     let services = dynamo_app::services_from_persistence(&persistence)?;
     let manifests = registry.manifests();

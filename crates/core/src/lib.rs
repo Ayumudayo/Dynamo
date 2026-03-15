@@ -11,7 +11,7 @@ mod settings;
 mod suggestions;
 mod warnings;
 
-pub use config::{AppConfig, CommandSyncConfig, DiscordConfig};
+pub use config::{AppConfig, CommandSyncConfig, DiscordConfig, OptionalModulesConfig};
 pub use enablement::{
     ResolvedCommandState, ResolvedModuleState, resolve_command_state, resolve_command_states,
     resolve_module_state, resolve_module_states,

@@ -33,6 +33,11 @@ These are part of the migration plan but are not registered by default in the pu
 - `giveaway`
 - `music`
 
+Enable them explicitly with environment flags:
+
+- `DYNAMO_ENABLE_GIVEAWAY=true`
+- `DYNAMO_ENABLE_MUSIC=true`
+
 ## Runtime Model
 
 - Slash-first command model. Prefix parity is not a goal for the public template.

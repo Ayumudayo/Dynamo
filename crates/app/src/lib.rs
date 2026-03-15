@@ -3,15 +3,21 @@ use std::sync::Arc;
 use dynamo_core::{
     AppState, CommandCatalog, DeploymentSettings, DeploymentSettingsRepository, DiscordCommand,
     Error, GuildSettings, GuildSettingsRepository, InviteRepository, MemberStatsRepository,
-    ModuleCatalog, ModuleRegistry, Persistence, ProviderStateRepository, ServiceRegistry,
-    StockQuoteService, SuggestionsRepository, WarningLogRepository, resolve_command_state,
+    ModuleCatalog, ModuleRegistry, OptionalModulesConfig, Persistence, ProviderStateRepository,
+    ServiceRegistry, StockQuoteService, SuggestionsRepository, WarningLogRepository,
+    resolve_command_state,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
 use tracing::info;
 
 pub fn module_registry() -> ModuleRegistry {
-    ModuleRegistry::new(vec![
+    let optional_modules = OptionalModulesConfig::from_env().unwrap_or_default();
+    module_registry_with_optional(&optional_modules)
+}
+
+pub fn module_registry_with_optional(optional_modules: &OptionalModulesConfig) -> ModuleRegistry {
+    let mut modules: Vec<Box<dyn dynamo_core::Module>> = vec![
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
         Box::new(dynamo_module_greeting::GreetingModule),
@@ -21,7 +27,16 @@ pub fn module_registry() -> ModuleRegistry {
         Box::new(dynamo_module_stats::StatsModule),
         Box::new(dynamo_module_ticket::TicketModule),
         Box::new(dynamo_module_stock::StockModule),
-    ])
+    ];
+
+    if optional_modules.giveaway_enabled {
+        modules.push(Box::new(dynamo_module_giveaway::GiveawayModule));
+    }
+    if optional_modules.music_enabled {
+        modules.push(Box::new(dynamo_module_music::MusicModule));
+    }
+
+    ModuleRegistry::new(modules)
 }
 
 pub async fn optional_mongo_from_env() -> anyhow::Result<Option<Arc<MongoPersistence>>> {

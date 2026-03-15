@@ -6,6 +6,7 @@ use crate::Error;
 pub struct AppConfig {
     pub discord: DiscordConfig,
     pub commands: CommandSyncConfig,
+    pub optional_modules: OptionalModulesConfig,
 }
 
 impl AppConfig {
@@ -38,6 +39,7 @@ impl AppConfig {
             commands: CommandSyncConfig {
                 sync_interval_seconds: parse_u64_env("DISCORD_COMMAND_SYNC_INTERVAL_SECONDS", 15)?,
             },
+            optional_modules: OptionalModulesConfig::from_env()?,
         })
     }
 }
@@ -52,6 +54,21 @@ pub struct DiscordConfig {
 #[derive(Debug, Clone)]
 pub struct CommandSyncConfig {
     pub sync_interval_seconds: u64,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OptionalModulesConfig {
+    pub giveaway_enabled: bool,
+    pub music_enabled: bool,
+}
+
+impl OptionalModulesConfig {
+    pub fn from_env() -> Result<Self, Error> {
+        Ok(Self {
+            giveaway_enabled: parse_bool_env("DYNAMO_ENABLE_GIVEAWAY", false)?,
+            music_enabled: parse_bool_env("DYNAMO_ENABLE_MUSIC", false)?,
+        })
+    }
 }
 
 fn parse_bool_env(key: &str, default: bool) -> Result<bool, Error> {

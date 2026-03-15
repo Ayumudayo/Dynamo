@@ -11,6 +11,7 @@ pub enum ModuleCategory {
     Moderation,
     Ticket,
     Suggestion,
+    Giveaway,
     GameInfo,
     Stocks,
     Music,
