@@ -2692,17 +2692,6 @@ async function toggleGuildCommand(guildId, commandId, enabled) {
   }
 }
 
-async function patchGuildModuleJson(event, guildId, moduleId) {
-  return false;
-}
-
-async function patchDeploymentCommandJson(event, commandId) {
-  return false;
-}
-
-async function patchGuildCommandJson(event, guildId, commandId) {
-  return false;
-}
 "#
 }
 
