@@ -197,44 +197,71 @@ async fn sync_registered_commands(
     data: &AppState,
 ) -> Result<(), Error> {
     let deployment = data.persistence.deployment_settings_or_default().await?;
-    let global_commands = dynamo_app::create_application_commands_for_scope(&deployment, None);
-    let global_fingerprint = format!("{global_commands:#?}");
+    let all_cached_guilds = ctx.cache.guilds().into_iter().collect::<Vec<_>>();
 
-    {
-        let mut fingerprints = command_sync_fingerprints().lock().await;
-        if discord_config.register_globally
-            && fingerprints.global.as_ref() != Some(&global_fingerprint)
+    if discord_config.register_globally {
+        let global_commands = dynamo_app::create_application_commands_for_scope(&deployment, None);
+        let global_fingerprint = format!("{global_commands:#?}");
+
         {
-            serenity::Command::set_global_commands(&ctx.http, global_commands).await?;
-            fingerprints.global = Some(global_fingerprint);
-            info!("Synchronized global application commands");
-        }
-    }
-
-    for guild_id in guild_ids_for_sync(ctx, discord_config) {
-        let guild_settings = data
-            .persistence
-            .guild_settings_or_default(guild_id.get())
-            .await?;
-        let guild_commands =
-            dynamo_app::create_application_commands_for_scope(&deployment, Some(&guild_settings));
-        let guild_fingerprint = format!("{guild_commands:#?}");
-
-        let should_sync = {
-            let fingerprints = command_sync_fingerprints().lock().await;
-            fingerprints.guilds.get(&guild_id.get()) != Some(&guild_fingerprint)
-        };
-
-        if should_sync {
-            guild_id.set_commands(&ctx.http, guild_commands).await?;
             let mut fingerprints = command_sync_fingerprints().lock().await;
-            fingerprints
-                .guilds
-                .insert(guild_id.get(), guild_fingerprint);
-            info!(
-                guild_id = guild_id.get(),
-                "Synchronized guild application commands"
-            );
+            if fingerprints.global.as_ref() != Some(&global_fingerprint) {
+                serenity::Command::set_global_commands(&ctx.http, global_commands).await?;
+                fingerprints.global = Some(global_fingerprint);
+                info!("Synchronized global application commands");
+            }
+        }
+
+        for guild_id in all_cached_guilds {
+            let should_clear = {
+                let fingerprints = command_sync_fingerprints().lock().await;
+                fingerprints.guilds.get(&guild_id.get()) != Some(&"<cleared>".to_string())
+            };
+
+            if should_clear {
+                guild_id.set_commands(&ctx.http, vec![]).await?;
+                let mut fingerprints = command_sync_fingerprints().lock().await;
+                fingerprints
+                    .guilds
+                    .insert(guild_id.get(), "<cleared>".to_string());
+                info!(guild_id = guild_id.get(), "Cleared guild-specific commands");
+            }
+        }
+    } else {
+        {
+            let mut fingerprints = command_sync_fingerprints().lock().await;
+            if fingerprints.global.as_deref() != Some("<cleared>") {
+                serenity::Command::set_global_commands(&ctx.http, vec![]).await?;
+                fingerprints.global = Some("<cleared>".to_string());
+                info!("Cleared global application commands");
+            }
+        }
+
+        for guild_id in guild_ids_for_sync(ctx, discord_config) {
+            let guild_settings = data
+                .persistence
+                .guild_settings_or_default(guild_id.get())
+                .await?;
+            let guild_commands =
+                dynamo_app::create_application_commands_for_scope(&deployment, Some(&guild_settings));
+            let guild_fingerprint = format!("{guild_commands:#?}");
+
+            let should_sync = {
+                let fingerprints = command_sync_fingerprints().lock().await;
+                fingerprints.guilds.get(&guild_id.get()) != Some(&guild_fingerprint)
+            };
+
+            if should_sync {
+                guild_id.set_commands(&ctx.http, guild_commands).await?;
+                let mut fingerprints = command_sync_fingerprints().lock().await;
+                fingerprints
+                    .guilds
+                    .insert(guild_id.get(), guild_fingerprint);
+                info!(
+                    guild_id = guild_id.get(),
+                    "Synchronized guild application commands"
+                );
+            }
         }
     }
 

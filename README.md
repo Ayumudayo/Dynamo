@@ -132,6 +132,7 @@ Useful flags:
 - `--skip-bootstrap` / `-SkipBootstrap`
 - `--enable-giveaway` / `-EnableGiveaway`
 - `--enable-music` / `-EnableMusic`
+- `-Headless` for the PowerShell launcher
 - `--dry-run` / `-DryRun`
 
 ## Validation Commands
