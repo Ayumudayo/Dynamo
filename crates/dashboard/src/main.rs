@@ -1,33 +1,52 @@
-use std::{env, net::SocketAddr, sync::Arc};
+use std::{
+    collections::{HashMap, HashSet},
+    env,
+    net::SocketAddr,
+    sync::Arc,
+};
 
 use axum::{
     Json, Router,
     extract::Path,
     extract::State,
     http::StatusCode,
-    response::{Html, IntoResponse},
+    response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch},
 };
+use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dynamo_core::{
     CommandCatalog, CommandCatalogEntry, DeploymentModuleSettings, DeploymentSettings,
     GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence, ResolvedCommandState,
     ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, resolve_command_states,
     resolve_module_states,
 };
-use serde::Deserialize;
+use futures_util::{StreamExt, stream};
+use rand::{Rng, distributions::Alphanumeric};
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use tracing::info;
+use tokio::sync::RwLock;
+use tracing::{info, warn};
+use url::Url;
 
 const MUSIC_RUNTIME_NOTICE: &str = "Regular voice channels currently require Discord DAVE/E2EE support. This stable build does not support DAVE yet, so music commands only work for stage-channel smoke tests.";
+const SESSION_COOKIE_NAME: &str = "dynamo_dashboard_session";
+const SESSION_TTL_HOURS: i64 = 24 * 14;
+const OAUTH_STATE_TTL_MINUTES: i64 = 15;
+const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
+const DEFAULT_INVITE_PERMISSIONS: u64 = 2_146_958_847;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
     init_tracing();
 
+    let http = reqwest::Client::builder()
+        .user_agent("Dynamo Dashboard/0.1.0")
+        .build()?;
     let config = DashboardConfig::from_env()?;
     let registry = dynamo_app::module_registry();
     let persistence = dynamo_app::persistence_from_env().await?;
+    let app_info = fetch_application_info(&http, &config).await?;
     let module_catalog = registry.catalog().clone();
     let command_catalog = registry.command_catalog().clone();
     let loaded_modules = module_catalog
@@ -40,21 +59,33 @@ async fn main() -> anyhow::Result<()> {
         info!(database = %database_name, "Dashboard persistence initialized");
     }
     info!(
+        application_id = %app_info.id,
+        application_name = %app_info.name,
         host = %config.host,
         port = config.port,
+        public_base_url = %config.public_base_url,
         module_count = module_catalog.entries.len(),
         command_count = command_catalog.entries.len(),
         modules = %loaded_modules,
         "Dashboard companion configured"
     );
     let state = Arc::new(DashboardState {
+        config,
+        http,
+        app_info,
         module_catalog,
         command_catalog,
         persistence,
+        sessions: Arc::new(RwLock::new(HashMap::new())),
+        oauth_states: Arc::new(RwLock::new(HashMap::new())),
     });
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/login", get(login))
+        .route("/auth/discord/callback", get(discord_callback))
+        .route("/logout", get(logout))
+        .route("/selector", get(selector))
         .route("/deployment", get(deployment_page))
         .route("/guild/{guild_id}", get(guild_page))
         .route("/healthz", get(healthz))
@@ -82,9 +113,9 @@ async fn main() -> anyhow::Result<()> {
             "/api/guild-command-settings/{guild_id}/{command_id}",
             patch(patch_guild_command_settings),
         )
-        .with_state(state);
+        .with_state(state.clone());
 
-    let address = SocketAddr::new(config.host, config.port);
+    let address = SocketAddr::new(state.config.host, state.config.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 
     info!(address = %address, url = %format!("http://{address}/"), "Dashboard companion listening");
@@ -96,6 +127,11 @@ async fn main() -> anyhow::Result<()> {
 struct DashboardConfig {
     host: std::net::IpAddr,
     port: u16,
+    public_base_url: String,
+    bot_token: String,
+    client_secret: String,
+    invite_permissions: u64,
+    admin_user_ids: Vec<u64>,
 }
 
 impl DashboardConfig {
@@ -112,47 +148,262 @@ impl DashboardConfig {
             .parse()
             .map_err(|error| anyhow::anyhow!("DASHBOARD_PORT must be a valid u16: {error}"))?;
 
-        Ok(Self { host, port })
+        let public_base_url = env::var("DASHBOARD_BASE_URL")
+            .unwrap_or_else(|_| format!("http://{host}:{port}"))
+            .trim_end_matches('/')
+            .to_string();
+
+        let bot_token = env::var("DISCORD_TOKEN")
+            .or_else(|_| env::var("BOT_TOKEN"))
+            .map_err(|_| anyhow::anyhow!("DISCORD_TOKEN or BOT_TOKEN must be set"))?;
+
+        let client_secret = env::var("DISCORD_CLIENT_SECRET")
+            .or_else(|_| env::var("BOT_SECRET"))
+            .map_err(|_| {
+                anyhow::anyhow!(
+                    "DISCORD_CLIENT_SECRET or BOT_SECRET must be set for dashboard OAuth"
+                )
+            })?;
+
+        let invite_permissions = env::var("DISCORD_BOT_INVITE_PERMISSIONS")
+            .ok()
+            .map(|value| value.parse::<u64>())
+            .transpose()
+            .map_err(|error| {
+                anyhow::anyhow!("DISCORD_BOT_INVITE_PERMISSIONS must be a valid u64: {error}")
+            })?
+            .unwrap_or(DEFAULT_INVITE_PERMISSIONS);
+
+        let admin_user_ids = parse_u64_list_env("DASHBOARD_ADMIN_USER_IDS")?;
+
+        Ok(Self {
+            host,
+            port,
+            public_base_url,
+            bot_token,
+            client_secret,
+            invite_permissions,
+            admin_user_ids,
+        })
     }
 }
 
 #[derive(Clone)]
 struct DashboardState {
+    config: DashboardConfig,
+    http: reqwest::Client,
+    app_info: DiscordApplicationInfo,
     module_catalog: ModuleCatalog,
     command_catalog: CommandCatalog,
     persistence: Persistence,
+    sessions: Arc<RwLock<HashMap<String, DashboardSession>>>,
+    oauth_states: Arc<RwLock<HashMap<String, PendingOauthState>>>,
 }
 
-async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
-    let default_states =
-        resolve_module_states(&state.module_catalog, &DeploymentSettings::default(), None);
-    let runtime_notices = render_runtime_notices(&state.module_catalog);
-    let items = state
-        .module_catalog
-        .entries
-        .iter()
-        .zip(default_states.iter())
-        .map(|(entry, resolved)| {
-            format!(
-                "<li><strong>{}</strong> ({}) {}<br/>{}</li>",
-                escape_html(entry.module.display_name),
-                escape_html(entry.module.id),
-                render_effective_badge(resolved),
-                escape_html(entry.module.description),
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    Html(format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Dynamo Dashboard</title></head><body><h1>Dynamo Dashboard Companion</h1><p>Loaded modules: {}</p>{runtime_notices}<p><a href=\"/deployment\">Manage deployment settings</a></p><form action=\"/guild/\" method=\"get\" onsubmit=\"event.preventDefault(); window.location='/guild/' + document.getElementById('guild-id').value;\"><label for=\"guild-id\">Guild ID:</label><input id=\"guild-id\" name=\"guild-id\" /><button type=\"submit\">Open guild settings</button></form><ul>{}</ul></body></html>",
-        state.module_catalog.entries.len(),
-        items,
-        runtime_notices = runtime_notices
-    ))
+#[derive(Debug, Clone)]
+struct DiscordApplicationInfo {
+    id: String,
+    name: String,
+    icon: Option<String>,
+    owner_user_id: Option<u64>,
 }
 
-async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<String> {
+#[derive(Debug, Clone)]
+struct DashboardSession {
+    user: DashboardUser,
+    guilds: Vec<DashboardGuild>,
+    expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct PendingOauthState {
+    redirect_to: String,
+    created_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DashboardUser {
+    id: u64,
+    username: String,
+    global_name: Option<String>,
+    avatar: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DashboardGuild {
+    id: u64,
+    name: String,
+    icon: Option<String>,
+    #[serde(default, alias = "permissions_new")]
+    permissions: String,
+}
+
+#[derive(Debug, Clone)]
+struct GuildCard {
+    id: u64,
+    name: String,
+    icon_url: Option<String>,
+    manageable: bool,
+    bot_present: bool,
+    manage_url: String,
+    invite_url: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct LoginQuery {
+    redirect: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordCallbackQuery {
+    code: Option<String>,
+    state: Option<String>,
+    error: Option<String>,
+}
+
+async fn index(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
+    if load_session(&state, &jar).await.is_some() {
+        return Redirect::to("/selector").into_response();
+    }
+
+    Html(render_landing_page(&state)).into_response()
+}
+
+async fn login(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+    axum::extract::Query(query): axum::extract::Query<LoginQuery>,
+) -> Response {
+    if load_session(&state, &jar).await.is_some() {
+        let target = sanitize_redirect_target(query.redirect.as_deref());
+        return Redirect::to(&target).into_response();
+    }
+
+    let state_token = random_token(48);
+    let redirect_to = sanitize_redirect_target(query.redirect.as_deref());
+    {
+        let mut pending = state.oauth_states.write().await;
+        pending.retain(|_, value| !is_oauth_state_expired(value));
+        pending.insert(
+            state_token.clone(),
+            PendingOauthState {
+                redirect_to,
+                created_at: chrono::Utc::now(),
+            },
+        );
+    }
+
+    Redirect::to(&build_discord_authorize_url(&state, &state_token)).into_response()
+}
+
+async fn discord_callback(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+    axum::extract::Query(query): axum::extract::Query<DiscordCallbackQuery>,
+) -> Response {
+    if let Some(error) = query.error {
+        return Html(render_error_page(
+            &state,
+            None,
+            "Discord Login Failed",
+            &format!("Discord returned an OAuth error: {}.", escape_html(&error)),
+        ))
+        .into_response();
+    }
+
+    let Some(code) = query.code.as_deref() else {
+        return Html(render_error_page(
+            &state,
+            None,
+            "Discord Login Failed",
+            "Discord did not return an authorization code.",
+        ))
+        .into_response();
+    };
+
+    let Some(oauth_state) = query.state.as_deref() else {
+        return Html(render_error_page(
+            &state,
+            None,
+            "Discord Login Failed",
+            "Missing OAuth state. Please try signing in again.",
+        ))
+        .into_response();
+    };
+
+    let pending = {
+        let mut states = state.oauth_states.write().await;
+        states.retain(|_, value| !is_oauth_state_expired(value));
+        states.remove(oauth_state)
+    };
+
+    let Some(pending) = pending else {
+        return Html(render_error_page(
+            &state,
+            None,
+            "Discord Login Failed",
+            "The login session expired or was already used. Please try again.",
+        ))
+        .into_response();
+    };
+
+    match exchange_oauth_code(&state, code).await {
+        Ok(session) => {
+            let session_id = random_token(64);
+            {
+                let mut sessions = state.sessions.write().await;
+                sessions.retain(|_, value| !is_session_expired(value));
+                sessions.insert(session_id.clone(), session);
+            }
+
+            let jar = jar.add(session_cookie(&session_id));
+            (jar, Redirect::to(&pending.redirect_to)).into_response()
+        }
+        Err(error) => {
+            warn!(?error, "failed to complete Discord OAuth callback");
+            Html(render_error_page(
+                &state,
+                None,
+                "Discord Login Failed",
+                "Could not exchange the Discord OAuth code or load your guild list.",
+            ))
+            .into_response()
+        }
+    }
+}
+
+async fn logout(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
+    if let Some(cookie) = jar.get(SESSION_COOKIE_NAME) {
+        state.sessions.write().await.remove(cookie.value());
+    }
+
+    let jar = jar.remove(Cookie::from(SESSION_COOKIE_NAME));
+    (jar, Redirect::to("/")).into_response()
+}
+
+async fn selector(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
+    let Some(session) = load_session(&state, &jar).await else {
+        return Redirect::to("/login?redirect=%2Fselector").into_response();
+    };
+
+    let guild_cards = load_guild_cards(&state, &session).await;
+    Html(render_selector_page(&state, &session, &guild_cards)).into_response()
+}
+
+async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
+    let Some(session) = load_session(&state, &jar).await else {
+        return Redirect::to("/login?redirect=%2Fdeployment").into_response();
+    };
+    if !user_is_dashboard_admin(&state, &session.user) {
+        return Html(render_error_page(
+            &state,
+            Some(&session),
+            "Dashboard Access Restricted",
+            "Deployment-wide settings are reserved for the bot owner or configured dashboard administrators.",
+        ))
+        .into_response();
+    }
+
     let settings = state
         .persistence
         .deployment_settings_or_default()
@@ -203,17 +454,43 @@ async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<Strin
         .collect::<Vec<_>>()
         .join("\n");
 
-    Html(format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Deployment Settings</title></head><body><h1>Deployment Settings</h1><p><a href=\"/\">Back</a></p>{sections}<script>{script}</script></body></html>",
-        sections = sections,
-        script = dashboard_script()
+    Html(render_document(
+        &state,
+        Some(&session),
+        "Deployment Settings",
+        "Global module installation, enablement, and command controls.",
+        Some("/deployment"),
+        &format!("{sections}<script>{}</script>", dashboard_script()),
     ))
+    .into_response()
 }
 
 async fn guild_page(
+    jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path(guild_id): Path<u64>,
-) -> Html<String> {
+) -> Response {
+    let Some(session) = load_session(&state, &jar).await else {
+        return Redirect::to(&format!("/login?redirect=%2Fguild%2F{guild_id}")).into_response();
+    };
+    let guild_cards = load_guild_cards(&state, &session).await;
+    let Some(card) = guild_cards
+        .iter()
+        .find(|card| card.id == guild_id && card.manageable)
+        .cloned()
+    else {
+        return Html(render_error_page(
+            &state,
+            Some(&session),
+            "Guild Access Restricted",
+            "You do not have dashboard access to that server.",
+        ))
+        .into_response();
+    };
+    if !card.bot_present {
+        return Html(render_install_required_page(&state, &session, &card)).into_response();
+    }
+
     let deployment = state
         .persistence
         .deployment_settings_or_default()
@@ -278,12 +555,665 @@ async fn guild_page(
         .collect::<Vec<_>>()
         .join("\n");
 
-    Html(format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Guild Settings</title></head><body><h1>Guild Settings for {guild_id}</h1><p><a href=\"/\">Back</a> | <a href=\"/deployment\">Deployment settings</a></p>{sections}<script>{script}</script></body></html>",
-        guild_id = guild_id,
-        sections = sections,
-        script = dashboard_script()
+    Html(render_document(
+        &state,
+        Some(&session),
+        &format!("Guild Settings: {}", card.name),
+        "Guild-scoped module and command controls for this server.",
+        Some(&format!("/guild/{guild_id}")),
+        &format!("{sections}<script>{}</script>", dashboard_script()),
     ))
+    .into_response()
+}
+
+async fn fetch_application_info(
+    http: &reqwest::Client,
+    config: &DashboardConfig,
+) -> anyhow::Result<DiscordApplicationInfo> {
+    let response = http
+        .get(format!("{DISCORD_API_BASE}/oauth2/applications/@me"))
+        .header("Authorization", format!("Bot {}", config.bot_token))
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let payload: DiscordApplicationResponse = response.json().await?;
+    let owner_user_id = payload
+        .owner
+        .as_ref()
+        .and_then(|owner| owner.id.parse::<u64>().ok())
+        .or_else(|| {
+            payload
+                .team
+                .as_ref()
+                .and_then(|team| team.owner_user_id.parse::<u64>().ok())
+        });
+
+    Ok(DiscordApplicationInfo {
+        id: payload.id,
+        name: payload.name,
+        icon: payload.icon,
+        owner_user_id,
+    })
+}
+
+async fn load_session(state: &DashboardState, jar: &CookieJar) -> Option<DashboardSession> {
+    let session_id = jar.get(SESSION_COOKIE_NAME)?.value().to_string();
+    let mut sessions = state.sessions.write().await;
+    sessions.retain(|_, value| !is_session_expired(value));
+    sessions.get(&session_id).cloned()
+}
+
+fn is_session_expired(session: &DashboardSession) -> bool {
+    session.expires_at <= chrono::Utc::now()
+}
+
+fn is_oauth_state_expired(pending: &PendingOauthState) -> bool {
+    pending.created_at + chrono::Duration::minutes(OAUTH_STATE_TTL_MINUTES) <= chrono::Utc::now()
+}
+
+fn sanitize_redirect_target(target: Option<&str>) -> String {
+    let candidate = target.unwrap_or("/selector").trim();
+    if candidate.starts_with('/') && !candidate.starts_with("//") {
+        candidate.to_string()
+    } else {
+        "/selector".to_string()
+    }
+}
+
+fn random_token(length: usize) -> String {
+    rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(length)
+        .map(char::from)
+        .collect()
+}
+
+fn session_cookie(session_id: &str) -> Cookie<'static> {
+    let mut cookie = Cookie::new(SESSION_COOKIE_NAME, session_id.to_string());
+    cookie.set_http_only(true);
+    cookie.set_same_site(SameSite::Lax);
+    cookie.set_path("/");
+    cookie
+}
+
+fn build_discord_authorize_url(state: &DashboardState, oauth_state: &str) -> String {
+    let mut url = Url::parse("https://discord.com/oauth2/authorize").expect("valid url");
+    url.query_pairs_mut()
+        .append_pair("client_id", &state.app_info.id)
+        .append_pair("response_type", "code")
+        .append_pair("scope", "identify guilds")
+        .append_pair(
+            "redirect_uri",
+            &format!("{}/auth/discord/callback", state.config.public_base_url),
+        )
+        .append_pair("state", oauth_state);
+    url.to_string()
+}
+
+async fn exchange_oauth_code(
+    state: &DashboardState,
+    code: &str,
+) -> Result<DashboardSession, anyhow::Error> {
+    let redirect_uri = format!("{}/auth/discord/callback", state.config.public_base_url);
+    let token_response = state
+        .http
+        .post(format!("{DISCORD_API_BASE}/oauth2/token"))
+        .header(
+            reqwest::header::CONTENT_TYPE,
+            "application/x-www-form-urlencoded",
+        )
+        .form(&[
+            ("client_id", state.app_info.id.as_str()),
+            ("client_secret", state.config.client_secret.as_str()),
+            ("grant_type", "authorization_code"),
+            ("code", code),
+            ("redirect_uri", redirect_uri.as_str()),
+        ])
+        .send()
+        .await?
+        .error_for_status()?;
+
+    let token_payload: DiscordTokenResponse = token_response.json().await?;
+    let bearer = format!("Bearer {}", token_payload.access_token);
+
+    let user_response = state
+        .http
+        .get(format!("{DISCORD_API_BASE}/users/@me"))
+        .header(reqwest::header::AUTHORIZATION, &bearer)
+        .send()
+        .await?
+        .error_for_status()?;
+    let user: DiscordOAuthUser = user_response.json().await?;
+
+    let guilds_response = state
+        .http
+        .get(format!("{DISCORD_API_BASE}/users/@me/guilds"))
+        .header(reqwest::header::AUTHORIZATION, &bearer)
+        .send()
+        .await?
+        .error_for_status()?;
+    let guilds: Vec<DashboardGuild> = guilds_response.json().await?;
+
+    Ok(DashboardSession {
+        user: DashboardUser {
+            id: user.id.parse::<u64>()?,
+            username: user.username,
+            global_name: user.global_name,
+            avatar: user.avatar,
+        },
+        guilds,
+        expires_at: chrono::Utc::now() + chrono::Duration::hours(SESSION_TTL_HOURS),
+    })
+}
+
+async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) -> Vec<GuildCard> {
+    let manageable = session
+        .guilds
+        .iter()
+        .filter(|guild| user_can_manage_guild(guild))
+        .cloned()
+        .collect::<Vec<_>>();
+
+    stream::iter(manageable.into_iter().map(|guild| async move {
+        let bot_present = bot_is_in_guild(state, guild.id).await;
+        GuildCard {
+            id: guild.id,
+            name: guild.name.clone(),
+            icon_url: guild_icon_url(&guild),
+            manageable: true,
+            bot_present,
+            manage_url: format!("/guild/{}", guild.id),
+            invite_url: build_bot_invite_url(state, guild.id),
+        }
+    }))
+    .buffer_unordered(8)
+    .collect::<Vec<_>>()
+    .await
+}
+
+fn user_can_manage_guild(guild: &DashboardGuild) -> bool {
+    let Ok(bits) = guild.permissions.parse::<u64>() else {
+        return false;
+    };
+    let administrator = 1 << 3;
+    let manage_guild = 1 << 5;
+    bits & administrator == administrator || bits & manage_guild == manage_guild
+}
+
+async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> bool {
+    match state
+        .http
+        .get(format!("{DISCORD_API_BASE}/guilds/{guild_id}"))
+        .header("Authorization", format!("Bot {}", state.config.bot_token))
+        .send()
+        .await
+    {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
+}
+
+fn build_bot_invite_url(state: &DashboardState, guild_id: u64) -> String {
+    let mut url = Url::parse("https://discord.com/oauth2/authorize").expect("valid invite url");
+    url.query_pairs_mut()
+        .append_pair("client_id", &state.app_info.id)
+        .append_pair("scope", "bot applications.commands")
+        .append_pair("permissions", &state.config.invite_permissions.to_string())
+        .append_pair("guild_id", &guild_id.to_string())
+        .append_pair("disable_guild_select", "true");
+    url.to_string()
+}
+
+fn guild_icon_url(guild: &DashboardGuild) -> Option<String> {
+    guild.icon.as_ref().map(|icon| {
+        format!(
+            "https://cdn.discordapp.com/icons/{}/{}.png?size=128",
+            guild.id, icon
+        )
+    })
+}
+
+fn user_avatar_url(user: &DashboardUser) -> Option<String> {
+    user.avatar.as_ref().map(|avatar| {
+        format!(
+            "https://cdn.discordapp.com/avatars/{}/{}.png?size=128",
+            user.id, avatar
+        )
+    })
+}
+
+fn user_is_dashboard_admin(state: &DashboardState, user: &DashboardUser) -> bool {
+    let mut admin_ids: HashSet<u64> = state.config.admin_user_ids.iter().copied().collect();
+    if let Some(owner_id) = state.app_info.owner_user_id {
+        admin_ids.insert(owner_id);
+    }
+
+    admin_ids.contains(&user.id)
+}
+
+fn render_landing_page(state: &DashboardState) -> String {
+    let content = format!(
+        "<section class=\"hero\"><div><p class=\"eyebrow\">Discord OAuth Dashboard</p><h1>Manage Dynamo like a real multi-server control panel.</h1><p class=\"lede\">Sign in with Discord, pick the servers you can manage, and adjust module and command behavior without touching the terminal.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"/login\">Sign in with Discord</a><a class=\"button button-secondary\" href=\"/healthz\">Health Check</a></div></div><div class=\"hero-card\"><dl><div><dt>Modules</dt><dd>{module_count}</dd></div><div><dt>Leaf Commands</dt><dd>{command_count}</dd></div><div><dt>Runtime Notes</dt><dd>{notice_count}</dd></div></dl></div></section><section class=\"grid two\"><article class=\"panel\"><h2>Server Selector</h2><p>Dyno-like server cards split between servers you can manage now and servers that still need the bot installed.</p></article><article class=\"panel\"><h2>Shared Runtime Guard</h2><p>Dashboard state, runtime checks, and command sync all resolve from the same module and command enablement rules.</p></article></section>{runtime_notices}",
+        module_count = state.module_catalog.entries.len(),
+        command_count = state.command_catalog.entries.len(),
+        notice_count = count_runtime_notices(&state.module_catalog),
+        runtime_notices = render_runtime_notices(&state.module_catalog),
+    );
+
+    render_document(
+        state,
+        None,
+        &format!("{} Dashboard", state.app_info.name),
+        "OAuth-protected control plane for Dynamo.",
+        None,
+        &content,
+    )
+}
+
+fn render_selector_page(
+    state: &DashboardState,
+    session: &DashboardSession,
+    guild_cards: &[GuildCard],
+) -> String {
+    let manageable_now = guild_cards.iter().filter(|card| card.bot_present).count();
+    let needs_install = guild_cards.len().saturating_sub(manageable_now);
+    let guild_cards_markup = if guild_cards.is_empty() {
+        "<article class=\"panel\"><h2>No manageable servers</h2><p>Your Discord account does not currently have Manage Server or Administrator in any shared guilds.</p></article>".to_string()
+    } else {
+        guild_cards
+            .iter()
+            .map(render_guild_card)
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    let content = format!(
+        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Server Selector</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your Discord account has Manage Server or Administrator are listed.</p></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"grid three\">{guild_cards_markup}</section>",
+        manageable_now = manageable_now,
+        needs_install = needs_install,
+        total = guild_cards.len(),
+        guild_cards_markup = guild_cards_markup,
+    );
+
+    render_document(
+        state,
+        Some(session),
+        "Server Selector",
+        "Pick a guild and move into module-level controls.",
+        Some("/selector"),
+        &content,
+    )
+}
+
+fn render_guild_card(card: &GuildCard) -> String {
+    let badge = if card.bot_present {
+        "<span class=\"pill pill-success\">Connected</span>"
+    } else {
+        "<span class=\"pill pill-warn\">Install Required</span>"
+    };
+    let action = if card.bot_present {
+        format!(
+            "<a class=\"button button-primary card-action\" href=\"{}\">Manage Server</a>",
+            card.manage_url
+        )
+    } else {
+        format!(
+            "<a class=\"button button-secondary card-action\" href=\"{}\">Invite Bot</a>",
+            card.invite_url
+        )
+    };
+    let media = card
+        .icon_url
+        .as_ref()
+        .map(|url| {
+            format!(
+                "<img class=\"guild-avatar\" src=\"{}\" alt=\"{} icon\" />",
+                escape_html(url),
+                escape_html(&card.name)
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "<div class=\"guild-avatar guild-avatar-fallback\">{}</div>",
+                escape_html(&initials(&card.name))
+            )
+        });
+
+    format!(
+        "<article class=\"panel guild-card\"><div class=\"guild-card-head\">{media}<div><h2>{name}</h2>{badge}</div></div><p>{description}</p>{action}</article>",
+        media = media,
+        name = escape_html(&card.name),
+        badge = badge,
+        description = if card.bot_present {
+            "Open guild-scoped module and command settings."
+        } else {
+            "The bot is not in this server yet. Install it first, then return here."
+        },
+        action = action,
+    )
+}
+
+fn render_install_required_page(
+    state: &DashboardState,
+    session: &DashboardSession,
+    guild: &GuildCard,
+) -> String {
+    let content = format!(
+        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Guild Setup</p><h1>{name} is not connected yet.</h1><p class=\"lede\">Install the bot into this server first. When the bot joins, this page will expose guild-level controls automatically.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"{invite_url}\">Invite Bot</a><a class=\"button button-secondary\" href=\"/selector\">Back to Selector</a></div></div></section>",
+        name = escape_html(&guild.name),
+        invite_url = guild.invite_url,
+    );
+
+    render_document(
+        state,
+        Some(session),
+        &format!("Install Bot: {}", guild.name),
+        "This guild is eligible for management, but the bot has not been installed yet.",
+        Some("/selector"),
+        &content,
+    )
+}
+
+fn render_error_page(
+    state: &DashboardState,
+    session: Option<&DashboardSession>,
+    title: &str,
+    message: &str,
+) -> String {
+    let content = format!(
+        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Dashboard</p><h1>{}</h1><p class=\"lede\">{}</p><div class=\"actions\"><a class=\"button button-primary\" href=\"/selector\">Server Selector</a><a class=\"button button-secondary\" href=\"/\">Home</a></div></div></section>",
+        escape_html(title),
+        message,
+    );
+
+    render_document(state, session, title, message, None, &content)
+}
+
+fn render_document(
+    state: &DashboardState,
+    session: Option<&DashboardSession>,
+    title: &str,
+    subtitle: &str,
+    active_path: Option<&str>,
+    content: &str,
+) -> String {
+    let nav = render_nav(state, session, active_path);
+    let session_summary = session.map(render_session_summary).unwrap_or_else(|| {
+        "<a class=\"button button-primary\" href=\"/login\">Sign in with Discord</a>".to_string()
+    });
+    let app_icon = state.app_info.icon.as_ref().map(|icon| {
+        format!(
+            "https://cdn.discordapp.com/app-icons/{}/{}.png?size=128",
+            state.app_info.id, icon
+        )
+    });
+
+    format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{title}</title><style>{styles}</style></head><body><div class=\"backdrop\"></div><main class=\"shell\"><header class=\"topbar\"><div class=\"brand\">{brand_media}<div><p class=\"eyebrow\">Dynamo Dashboard</p><h1>{app_name}</h1></div></div><nav class=\"nav\">{nav}</nav><div class=\"session-box\">{session_summary}</div></header><section class=\"page-head\"><div><p class=\"eyebrow\">Control Plane</p><h2>{page_title}</h2><p class=\"lede\">{subtitle}</p></div><div class=\"stat-strip\"><div class=\"stat\"><span>Modules</span><strong>{module_count}</strong></div><div class=\"stat\"><span>Commands</span><strong>{command_count}</strong></div></div></section>{content}</main></body></html>",
+        title = escape_html(title),
+        styles = dashboard_styles(),
+        brand_media =
+            app_icon
+                .map(|url| format!(
+                    "<img class=\"app-avatar\" src=\"{}\" alt=\"app icon\" />",
+                    escape_html(&url)
+                ))
+                .unwrap_or_else(
+                    || "<div class=\"app-avatar app-avatar-fallback\">DY</div>".to_string()
+                ),
+        app_name = escape_html(&state.app_info.name),
+        nav = nav,
+        session_summary = session_summary,
+        page_title = escape_html(title),
+        subtitle = escape_html(subtitle),
+        module_count = state.module_catalog.entries.len(),
+        command_count = state.command_catalog.entries.len(),
+        content = content,
+    )
+}
+
+fn render_nav(
+    state: &DashboardState,
+    session: Option<&DashboardSession>,
+    active_path: Option<&str>,
+) -> String {
+    let mut items = vec![nav_link("Home", "/", active_path == Some("/"))];
+    if session.is_some() {
+        items.push(nav_link(
+            "Servers",
+            "/selector",
+            active_path == Some("/selector"),
+        ));
+        if session
+            .map(|session| user_is_dashboard_admin(state, &session.user))
+            .unwrap_or(false)
+        {
+            items.push(nav_link(
+                "Deployment",
+                "/deployment",
+                active_path == Some("/deployment"),
+            ));
+        }
+        items.push(nav_link("Logout", "/logout", false));
+    } else {
+        items.push(nav_link("Sign in", "/login", false));
+    }
+
+    items.join("")
+}
+
+fn nav_link(label: &str, href: &str, active: bool) -> String {
+    format!(
+        "<a class=\"nav-link{}\" href=\"{}\">{}</a>",
+        if active { " active" } else { "" },
+        href,
+        escape_html(label)
+    )
+}
+
+fn render_session_summary(session: &DashboardSession) -> String {
+    let avatar = user_avatar_url(&session.user)
+        .map(|url| {
+            format!(
+                "<img class=\"user-avatar\" src=\"{}\" alt=\"user avatar\" />",
+                escape_html(&url)
+            )
+        })
+        .unwrap_or_else(|| {
+            format!(
+                "<div class=\"user-avatar user-avatar-fallback\">{}</div>",
+                escape_html(&initials(
+                    session
+                        .user
+                        .global_name
+                        .as_deref()
+                        .unwrap_or(&session.user.username)
+                ))
+            )
+        });
+    let display_name = session
+        .user
+        .global_name
+        .as_deref()
+        .unwrap_or(&session.user.username);
+
+    format!(
+        "<div class=\"session-summary\">{avatar}<div><strong>{display_name}</strong><span>{username}</span></div></div>",
+        avatar = avatar,
+        display_name = escape_html(display_name),
+        username = escape_html(&session.user.username),
+    )
+}
+
+fn dashboard_styles() -> &'static str {
+    r#"
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+:root {
+  --bg: #020617;
+  --panel: rgba(15, 23, 42, 0.9);
+  --panel-strong: rgba(15, 23, 42, 0.96);
+  --panel-border: rgba(148, 163, 184, 0.18);
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --accent: #22c55e;
+  --accent-strong: #16a34a;
+  --danger: #f97316;
+  --shadow: 0 24px 80px rgba(2, 6, 23, 0.45);
+}
+* { box-sizing: border-box; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: 'Fira Sans', sans-serif; }
+body { position: relative; }
+.backdrop {
+  position: fixed; inset: 0;
+  background:
+    radial-gradient(circle at top left, rgba(34, 197, 94, 0.18), transparent 28%),
+    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 24%),
+    linear-gradient(180deg, rgba(2, 6, 23, 0.98), rgba(2, 6, 23, 1));
+  pointer-events: none;
+}
+.shell { position: relative; max-width: 1440px; margin: 0 auto; padding: 24px; }
+.topbar, .page-head, .panel, section, article, details { border: 1px solid var(--panel-border); background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
+.topbar {
+  position: sticky; top: 16px; z-index: 20;
+  display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center;
+  padding: 16px 20px; border-radius: 24px; margin-bottom: 24px;
+}
+.brand, .session-summary, .guild-card-head { display: flex; align-items: center; gap: 14px; }
+.app-avatar, .user-avatar, .guild-avatar, .app-avatar-fallback, .user-avatar-fallback, .guild-avatar-fallback {
+  width: 52px; height: 52px; border-radius: 16px; object-fit: cover; flex: none;
+  display: grid; place-items: center; font-family: 'Fira Code', monospace; font-weight: 700;
+  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(59, 130, 246, 0.16));
+  border: 1px solid rgba(255,255,255,0.08);
+}
+.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-family: 'Fira Code', monospace; }
+h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
+.nav { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.nav-link {
+  color: var(--muted); text-decoration: none; padding: 10px 14px; border-radius: 999px;
+  transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
+  border: 1px solid transparent; cursor: pointer;
+}
+.nav-link:hover, .nav-link.active { color: var(--text); background: rgba(30, 41, 59, 0.9); border-color: rgba(148,163,184,0.18); }
+.page-head { display: flex; justify-content: space-between; gap: 20px; align-items: end; padding: 24px; border-radius: 28px; margin-bottom: 24px; }
+.lede { margin: 8px 0 0; color: var(--muted); max-width: 70ch; line-height: 1.6; }
+.stat-strip, .hero-card dl { display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 12px; }
+.stat, .hero-card dl > div {
+  padding: 16px; border-radius: 20px; background: rgba(30, 41, 59, 0.72); border: 1px solid rgba(148, 163, 184, 0.12);
+}
+.stat span, dt { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+.stat strong, dd { margin: 8px 0 0; font-size: 24px; font-weight: 700; }
+.hero { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; padding: 28px; border-radius: 32px; margin-bottom: 24px; }
+.hero.compact { grid-template-columns: 1.4fr 0.8fr; }
+.actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
+.button {
+  display: inline-flex; align-items: center; justify-content: center; text-decoration: none; cursor: pointer;
+  padding: 12px 18px; border-radius: 16px; border: 1px solid transparent; font-weight: 600;
+  transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease, color 180ms ease;
+}
+.button:hover { transform: translateY(-1px); }
+.button-primary { background: var(--accent); color: #04130a; }
+.button-primary:hover { background: var(--accent-strong); }
+.button-secondary { background: rgba(30, 41, 59, 0.92); color: var(--text); border-color: rgba(148,163,184,0.18); }
+.grid { display: grid; gap: 20px; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 24px; }
+.grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.panel, section, article, details { padding: 20px; border-radius: 28px; margin-bottom: 20px; }
+.guild-card p, .panel p { color: var(--muted); line-height: 1.6; }
+.pill {
+  display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px;
+  font-size: 12px; font-family: 'Fira Code', monospace; border: 1px solid rgba(255,255,255,0.08);
+}
+.pill-success { color: #bbf7d0; background: rgba(34, 197, 94, 0.12); }
+.pill-warn { color: #fdba74; background: rgba(249, 115, 22, 0.12); }
+.card-action { margin-top: 10px; }
+form, .advanced-json-form { margin-top: 14px; }
+label, small, legend { color: var(--text); }
+small { color: var(--muted); }
+input, textarea, select, button {
+  width: 100%; margin-top: 8px; margin-bottom: 12px; border-radius: 14px; border: 1px solid rgba(148,163,184,0.18);
+  background: rgba(15, 23, 42, 0.88); color: var(--text); padding: 12px 14px; font: inherit;
+}
+input[type='checkbox'] { width: auto; margin-right: 8px; }
+button { width: auto; cursor: pointer; background: rgba(34,197,94,0.12); color: #bbf7d0; }
+button:hover { background: rgba(34,197,94,0.2); }
+fieldset { border: 1px solid rgba(148,163,184,0.16); border-radius: 20px; padding: 16px; margin-top: 16px; }
+details summary { cursor: pointer; color: var(--text); font-weight: 600; }
+article { margin-top: 16px; }
+a { color: #86efac; }
+.runtime-notice { border-color: rgba(249,115,22,0.22); background: rgba(124, 45, 18, 0.22); }
+@media (max-width: 1100px) {
+  .topbar, .page-head, .hero, .hero.compact, .grid.two, .grid.three { grid-template-columns: 1fr; }
+  .nav { justify-content: start; }
+}
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+"#
+}
+
+fn initials(name: &str) -> String {
+    name.split_whitespace()
+        .filter_map(|part| part.chars().next())
+        .take(2)
+        .collect::<String>()
+        .to_uppercase()
+}
+
+fn count_runtime_notices(catalog: &ModuleCatalog) -> usize {
+    catalog
+        .entries
+        .iter()
+        .filter(|entry| runtime_notice_text(entry.module.id).is_some())
+        .count()
+}
+
+fn parse_u64_list_env(key: &str) -> Result<Vec<u64>, anyhow::Error> {
+    let Some(raw) = env::var(key).ok() else {
+        return Ok(Vec::new());
+    };
+
+    raw.split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(|value| {
+            value
+                .parse::<u64>()
+                .map_err(|error| anyhow::anyhow!("{key} must contain valid u64 values: {error}"))
+        })
+        .collect()
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordApplicationResponse {
+    id: String,
+    name: String,
+    icon: Option<String>,
+    owner: Option<DiscordOwner>,
+    team: Option<DiscordTeam>,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordOwner {
+    id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordTeam {
+    owner_user_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordTokenResponse {
+    access_token: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct DiscordOAuthUser {
+    id: String,
+    username: String,
+    global_name: Option<String>,
+    avatar: Option<String>,
 }
 
 fn render_runtime_notices(catalog: &ModuleCatalog) -> String {
@@ -602,14 +1532,6 @@ fn render_guild_command_json_form(
     )
 }
 
-fn render_effective_badge(state: &ResolvedModuleState) -> String {
-    if state.effective_enabled {
-        "<span style=\"color:#0a7f40\">enabled</span>".to_string()
-    } else {
-        "<span style=\"color:#a40000\">disabled</span>".to_string()
-    }
-}
-
 fn render_deployment_status(state: &ResolvedModuleState) -> String {
     format!(
         "installed: {} | deployment: {} | effective: {}",
@@ -701,19 +1623,38 @@ async fn healthz() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
-async fn list_modules(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
-    Json(state.module_catalog.clone())
+async fn list_modules(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+) -> impl IntoResponse {
+    if let Err(response) = require_api_session(&state, &jar).await {
+        return response;
+    }
+    Json(state.module_catalog.clone()).into_response()
 }
 
-async fn list_default_module_states(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
+async fn list_default_module_states(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+) -> impl IntoResponse {
+    if let Err(response) = require_api_session(&state, &jar).await {
+        return response;
+    }
     Json(resolve_module_states(
         &state.module_catalog,
         &DeploymentSettings::default(),
         None,
     ))
+    .into_response()
 }
 
-async fn list_live_module_states(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
+async fn list_live_module_states(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+) -> impl IntoResponse {
+    if let Err(response) = require_api_session(&state, &jar).await {
+        return response;
+    }
     let deployment_settings = match state.persistence.deployment_settings_or_default().await {
         Ok(settings) => settings,
         Err(error) => {
@@ -744,6 +1685,60 @@ fn init_tracing() {
         .try_init();
 }
 
+async fn require_api_session(
+    state: &DashboardState,
+    jar: &CookieJar,
+) -> Result<DashboardSession, Response> {
+    load_session(state, jar).await.ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(error_payload("dashboard login required".to_string())),
+        )
+            .into_response()
+    })
+}
+
+async fn require_api_admin(
+    state: &DashboardState,
+    jar: &CookieJar,
+) -> Result<DashboardSession, Response> {
+    let session = require_api_session(state, jar).await?;
+    if user_is_dashboard_admin(state, &session.user) {
+        Ok(session)
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(error_payload(
+                "deployment settings require dashboard admin access".to_string(),
+            )),
+        )
+            .into_response())
+    }
+}
+
+async fn require_api_guild_access(
+    state: &DashboardState,
+    jar: &CookieJar,
+    guild_id: u64,
+) -> Result<DashboardSession, Response> {
+    let session = require_api_session(state, jar).await?;
+    let guild_cards = load_guild_cards(state, &session).await;
+    if guild_cards
+        .iter()
+        .any(|card| card.id == guild_id && card.manageable && card.bot_present)
+    {
+        Ok(session)
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(error_payload(
+                "you do not have access to that guild in the dashboard".to_string(),
+            )),
+        )
+            .into_response())
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct DeploymentModuleSettingsPatch {
     installed: Option<bool>,
@@ -769,7 +1764,13 @@ struct GuildCommandSettingsPatch {
     configuration: Option<serde_json::Value>,
 }
 
-async fn get_deployment_settings(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
+async fn get_deployment_settings(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+) -> impl IntoResponse {
+    if let Err(response) = require_api_admin(&state, &jar).await {
+        return response;
+    }
     match state.persistence.deployment_settings_or_default().await {
         Ok(settings) => Json(settings).into_response(),
         Err(error) => (
@@ -783,10 +1784,14 @@ async fn get_deployment_settings(State(state): State<Arc<DashboardState>>) -> im
 }
 
 async fn patch_deployment_module_settings(
+    jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path(module_id): Path<String>,
     Json(patch): Json<DeploymentModuleSettingsPatch>,
 ) -> impl IntoResponse {
+    if let Err(response) = require_api_admin(&state, &jar).await {
+        return response;
+    }
     if !module_exists(&state.module_catalog, &module_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -844,10 +1849,14 @@ async fn patch_deployment_module_settings(
 }
 
 async fn patch_deployment_command_settings(
+    jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path(command_id): Path<String>,
     Json(patch): Json<DeploymentCommandSettingsPatch>,
 ) -> impl IntoResponse {
+    if let Err(response) = require_api_admin(&state, &jar).await {
+        return response;
+    }
     if !command_exists(&state.command_catalog, &command_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -908,9 +1917,13 @@ async fn patch_deployment_command_settings(
 }
 
 async fn get_guild_settings(
+    jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path(guild_id): Path<u64>,
 ) -> impl IntoResponse {
+    if let Err(response) = require_api_guild_access(&state, &jar, guild_id).await {
+        return response;
+    }
     match state.persistence.guild_settings_or_default(guild_id).await {
         Ok(settings) => Json(settings).into_response(),
         Err(error) => (
@@ -924,10 +1937,14 @@ async fn get_guild_settings(
 }
 
 async fn patch_guild_module_settings(
+    jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path((guild_id, module_id)): Path<(u64, String)>,
     Json(patch): Json<GuildModuleSettingsPatch>,
 ) -> impl IntoResponse {
+    if let Err(response) = require_api_guild_access(&state, &jar, guild_id).await {
+        return response;
+    }
     if !module_exists(&state.module_catalog, &module_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -988,10 +2005,14 @@ async fn patch_guild_module_settings(
 }
 
 async fn patch_guild_command_settings(
+    jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path((guild_id, command_id)): Path<(u64, String)>,
     Json(patch): Json<GuildCommandSettingsPatch>,
 ) -> impl IntoResponse {
+    if let Err(response) = require_api_guild_access(&state, &jar, guild_id).await {
+        return response;
+    }
     if !command_exists(&state.command_catalog, &command_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -1283,7 +2304,8 @@ async function patchGuildCommandJson(event, guildId, commandId) {
 #[cfg(test)]
 mod tests {
     use super::{
-        escape_html, render_advanced_json_form, render_field, render_module_runtime_notice,
+        DashboardGuild, escape_html, render_advanced_json_form, render_field,
+        render_module_runtime_notice, sanitize_redirect_target, user_can_manage_guild,
     };
     use dynamo_core::{SettingsField, SettingsFieldKind};
 
@@ -1324,5 +2346,44 @@ mod tests {
         let rendered = render_module_runtime_notice("music");
         assert!(rendered.contains("Runtime notice"));
         assert!(rendered.contains("DAVE/E2EE"));
+    }
+
+    #[test]
+    fn sanitize_redirect_rejects_external_targets() {
+        assert_eq!(sanitize_redirect_target(Some("/selector")), "/selector");
+        assert_eq!(
+            sanitize_redirect_target(Some("https://evil.example")),
+            "/selector"
+        );
+        assert_eq!(
+            sanitize_redirect_target(Some("//evil.example")),
+            "/selector"
+        );
+    }
+
+    #[test]
+    fn guild_manage_check_accepts_manage_guild_or_admin() {
+        let manage_guild = DashboardGuild {
+            id: 1,
+            name: "Guild".to_string(),
+            icon: None,
+            permissions: (1u64 << 5).to_string(),
+        };
+        let admin = DashboardGuild {
+            id: 1,
+            name: "Guild".to_string(),
+            icon: None,
+            permissions: (1u64 << 3).to_string(),
+        };
+        let member = DashboardGuild {
+            id: 1,
+            name: "Guild".to_string(),
+            icon: None,
+            permissions: "0".to_string(),
+        };
+
+        assert!(user_can_manage_guild(&manage_guild));
+        assert!(user_can_manage_guild(&admin));
+        assert!(!user_can_manage_guild(&member));
     }
 }

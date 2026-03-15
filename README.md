@@ -69,6 +69,9 @@ Common optional variables:
 - `MONGODB_DATABASE` default: `dynamo-rs`
 - `DASHBOARD_HOST` default: `127.0.0.1`
 - `DASHBOARD_PORT` default: `3000`
+- `DASHBOARD_BASE_URL` default: `http://127.0.0.1:3000`
+- `DISCORD_CLIENT_SECRET` or `BOT_SECRET` required for dashboard OAuth login
+- `DASHBOARD_ADMIN_USER_IDS` optional comma-separated override for deployment-wide dashboard admins
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG`
 
@@ -173,6 +176,7 @@ cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to
 
 The companion dashboard exposes:
 
+- Discord OAuth login with a Dyno-style server selector for guilds you can manage
 - deployment-level module install/enable toggles
 - guild-level module enablement and structured settings forms
 - deployment-level and guild-level command toggles for individual leaf slash commands
@@ -190,8 +194,16 @@ Command sync behavior:
 Open:
 
 - [http://127.0.0.1:3000/](http://127.0.0.1:3000/)
+- [http://127.0.0.1:3000/selector](http://127.0.0.1:3000/selector)
 - [http://127.0.0.1:3000/deployment](http://127.0.0.1:3000/deployment)
 - `http://127.0.0.1:3000/guild/<guild_id>`
+
+OAuth notes:
+
+- Add the dashboard callback URL `{DASHBOARD_BASE_URL}/auth/discord/callback` to your Discord application OAuth settings.
+- The dashboard signs users in with `identify` and `guilds` scopes.
+- Guild pages are available only for servers where the signed-in user has `Manage Server` or `Administrator`.
+- The deployment page is restricted to the bot application owner or `DASHBOARD_ADMIN_USER_IDS`.
 
 ## Smoke Checklist
 

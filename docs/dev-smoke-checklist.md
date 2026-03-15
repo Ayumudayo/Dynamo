@@ -34,13 +34,14 @@ Run this checklist after major module, persistence, or dashboard changes.
 
 ## Dashboard
 
-1. Open `/deployment`.
-2. Toggle one module off and on again.
-3. Open `/guild/<guild_id>`.
-4. Change one structured field and confirm it persists after reload.
-5. Save one module configuration through the advanced JSON editor.
-6. Disable one leaf command in deployment settings and confirm it disappears or becomes unavailable after the next sync cycle.
-7. Disable one leaf command in guild settings and confirm the guild-specific command set updates after the next sync cycle.
+1. Open `/` and confirm the landing page shows a Discord sign-in CTA.
+2. Complete Discord OAuth login and confirm `/selector` lists only guilds where the signed-in user has `Manage Server` or `Administrator`.
+3. Open `/deployment` with an admin account and confirm it loads.
+4. Open `/guild/<guild_id>`.
+5. Change one structured field and confirm it persists after reload.
+6. Save one module configuration through the advanced JSON editor.
+7. Disable one leaf command in deployment settings and confirm it disappears or becomes unavailable after the next sync cycle.
+8. Disable one leaf command in guild settings and confirm the guild-specific command set updates after the next sync cycle.
 
 ## Core Commands
 
