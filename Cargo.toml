@@ -21,9 +21,15 @@ authors = ["MARU"]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 axum = "0.8.6"
+chrono = { version = "0.4.44", features = ["clock", "serde"] }
+chrono-tz = "0.10.4"
 dotenvy = "0.15.7"
 mongodb = "3.5.0"
 poise = "0.6.1"
+regex = "1.12.2"
+reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
+rss = "2.0.12"
+scraper = "0.24.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "net"] }
