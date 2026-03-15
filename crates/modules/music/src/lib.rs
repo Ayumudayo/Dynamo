@@ -8,8 +8,7 @@ use serde::{Deserialize, Serialize};
 
 const MODULE_ID: &str = "music";
 const DEFAULT_AUTO_LEAVE_SECONDS: u64 = 180;
-const DAVE_LIMITATION_NOTE: &str =
-    "Discord now requires DAVE/E2EE for non-stage voice calls. This build does not support DAVE yet, so regular voice-channel join/play is currently unavailable.";
+const DAVE_LIMITATION_NOTE: &str = "Discord now requires DAVE/E2EE for non-stage voice calls. This build does not support DAVE yet, so regular voice-channel join/play is currently unavailable.";
 
 pub struct MusicModule;
 

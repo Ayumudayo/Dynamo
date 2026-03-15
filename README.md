@@ -118,6 +118,7 @@ If `DISCORD_REGISTER_GLOBALLY=false`, commands are registered only in `DISCORD_D
 
 Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and start the dashboard and bot with log files and pid files under `logs/`.
 They prebuild `dynamo-bootstrap`, `dynamo-dashboard`, and `dynamo-bot` once with a single `cargo build` invocation, then run the shared binaries from `target/debug/`.
+Bot startup logs include the resolved command scope, loaded module count, loaded leaf command count, and loaded module ids. Dashboard startup logs include the listening URL plus loaded module and command counts.
 
 PowerShell:
 
@@ -178,6 +179,7 @@ The companion dashboard exposes:
 - advanced JSON editor fallback for module configuration
 - advanced JSON editor fallback for command configuration
 - effective module state rendering shared with the runtime guard layer
+- runtime notices for modules with known platform limitations, such as the current DAVE restriction on `music`
 
 Command sync behavior:
 

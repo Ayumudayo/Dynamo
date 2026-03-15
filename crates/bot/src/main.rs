@@ -73,6 +73,7 @@ async fn main() -> Result<(), Error> {
                 info!(
                     user = %ready.user.name,
                     modules = setup_catalog.entries.len(),
+                    leaf_command_count = setup_command_catalog.entries.len(),
                     "Connected to Discord"
                 );
 
@@ -242,6 +243,7 @@ async fn sync_registered_commands(
 
     if discord_config.register_globally {
         let global_commands = dynamo_app::create_application_commands_for_scope(&deployment, None);
+        let global_command_count = global_commands.len();
         let global_fingerprint = format!("{global_commands:#?}");
 
         {
@@ -249,7 +251,10 @@ async fn sync_registered_commands(
             if fingerprints.global.as_ref() != Some(&global_fingerprint) {
                 serenity::Command::set_global_commands(&ctx.http, global_commands).await?;
                 fingerprints.global = Some(global_fingerprint);
-                info!("Synchronized global application commands");
+                info!(
+                    command_count = global_command_count,
+                    "Synchronized global application commands"
+                );
             }
         }
 
@@ -265,7 +270,11 @@ async fn sync_registered_commands(
                 fingerprints
                     .guilds
                     .insert(guild_id.get(), "<cleared>".to_string());
-                info!(guild_id = guild_id.get(), "Cleared guild-specific commands");
+                info!(
+                    guild_id = guild_id.get(),
+                    command_count = 0,
+                    "Cleared guild-specific commands"
+                );
             }
         }
     } else {
@@ -287,6 +296,7 @@ async fn sync_registered_commands(
                 &deployment,
                 Some(&guild_settings),
             );
+            let guild_command_count = guild_commands.len();
             let guild_fingerprint = format!("{guild_commands:#?}");
 
             let should_sync = {
@@ -302,6 +312,7 @@ async fn sync_registered_commands(
                     .insert(guild_id.get(), guild_fingerprint);
                 info!(
                     guild_id = guild_id.get(),
+                    command_count = guild_command_count,
                     "Synchronized guild application commands"
                 );
             }

@@ -18,6 +18,8 @@ use serde::Deserialize;
 use serde_json::Value;
 use tracing::info;
 
+const MUSIC_RUNTIME_NOTICE: &str = "Regular voice channels currently require Discord DAVE/E2EE support. This stable build does not support DAVE yet, so music commands only work for stage-channel smoke tests.";
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
@@ -124,6 +126,7 @@ struct DashboardState {
 async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
     let default_states =
         resolve_module_states(&state.module_catalog, &DeploymentSettings::default(), None);
+    let runtime_notices = render_runtime_notices(&state.module_catalog);
     let items = state
         .module_catalog
         .entries
@@ -142,9 +145,10 @@ async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
         .join("\n");
 
     Html(format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Dynamo Dashboard</title></head><body><h1>Dynamo Dashboard Companion</h1><p>Loaded modules: {}</p><p><a href=\"/deployment\">Manage deployment settings</a></p><form action=\"/guild/\" method=\"get\" onsubmit=\"event.preventDefault(); window.location='/guild/' + document.getElementById('guild-id').value;\"><label for=\"guild-id\">Guild ID:</label><input id=\"guild-id\" name=\"guild-id\" /><button type=\"submit\">Open guild settings</button></form><ul>{}</ul></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Dynamo Dashboard</title></head><body><h1>Dynamo Dashboard Companion</h1><p>Loaded modules: {}</p>{runtime_notices}<p><a href=\"/deployment\">Manage deployment settings</a></p><form action=\"/guild/\" method=\"get\" onsubmit=\"event.preventDefault(); window.location='/guild/' + document.getElementById('guild-id').value;\"><label for=\"guild-id\">Guild ID:</label><input id=\"guild-id\" name=\"guild-id\" /><button type=\"submit\">Open guild settings</button></form><ul>{}</ul></body></html>",
         state.module_catalog.entries.len(),
-        items
+        items,
+        runtime_notices = runtime_notices
     ))
 }
 
@@ -182,12 +186,14 @@ async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<Strin
                 &resolved_command_states,
                 entry.module.id,
             );
+            let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
+                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
                 status = render_deployment_status(resolved),
+                runtime_notice = runtime_notice,
                 module_id = escape_html(entry.module.id),
                 installed = if current.installed { "checked" } else { "" },
                 enabled = if current.enabled { "checked" } else { "" },
@@ -253,13 +259,15 @@ async fn guild_page(
                 guild_id,
                 entry.module.id,
             );
+            let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
+                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
                 guild_id = guild_id,
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
                 status = render_guild_status(resolved),
+                runtime_notice = runtime_notice,
                 module_id = escape_html(entry.module.id),
                 enabled = if current.enabled { "checked" } else { "" },
                 structured_fields = structured_fields,
@@ -276,6 +284,51 @@ async fn guild_page(
         sections = sections,
         script = dashboard_script()
     ))
+}
+
+fn render_runtime_notices(catalog: &ModuleCatalog) -> String {
+    let notices = catalog
+        .entries
+        .iter()
+        .filter_map(|entry| {
+            runtime_notice_text(entry.module.id).map(|note| (entry.module.display_name, note))
+        })
+        .map(|(display_name, note)| {
+            format!(
+                "<li><strong>{}</strong>: {}</li>",
+                escape_html(display_name),
+                escape_html(note)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if notices.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "<section><h2>Runtime Notices</h2><ul>{}</ul></section>",
+            notices
+        )
+    }
+}
+
+fn render_module_runtime_notice(module_id: &str) -> String {
+    runtime_notice_text(module_id)
+        .map(|note| {
+            format!(
+                "<p style=\"padding:8px 12px; border:1px solid #d99; background:#fff6f6\"><strong>Runtime notice:</strong> {}</p>",
+                escape_html(note)
+            )
+        })
+        .unwrap_or_default()
+}
+
+fn runtime_notice_text(module_id: &str) -> Option<&'static str> {
+    match module_id {
+        "music" => Some(MUSIC_RUNTIME_NOTICE),
+        _ => None,
+    }
 }
 
 fn render_structured_fields(
@@ -1229,7 +1282,9 @@ async function patchGuildCommandJson(event, guildId, commandId) {
 
 #[cfg(test)]
 mod tests {
-    use super::{escape_html, render_advanced_json_form, render_field};
+    use super::{
+        escape_html, render_advanced_json_form, render_field, render_module_runtime_notice,
+    };
     use dynamo_core::{SettingsField, SettingsFieldKind};
 
     #[test]
@@ -1262,5 +1317,12 @@ mod tests {
         assert!(rendered.contains("textarea"));
         assert!(rendered.contains("patchGuildModuleJson"));
         assert!(rendered.contains("guild-json-status-stock"));
+    }
+
+    #[test]
+    fn music_module_renders_runtime_notice() {
+        let rendered = render_module_runtime_notice("music");
+        assert!(rendered.contains("Runtime notice"));
+        assert!(rendered.contains("DAVE/E2EE"));
     }
 }

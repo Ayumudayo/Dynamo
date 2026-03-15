@@ -18,10 +18,19 @@ Run this checklist after major module, persistence, or dashboard changes.
 
 ## Startup
 
-1. Start `cargo run -p dynamo-dashboard`.
-2. Start `cargo run -p dynamo-bot`.
-3. Confirm the dashboard root and deployment page load.
-4. Confirm commands register in the development guild when `DISCORD_REGISTER_GLOBALLY=false`.
+1. Run `./scripts/dev-up.ps1` or `./scripts/dev-up.sh`.
+2. Confirm the dashboard root and deployment page load.
+3. Confirm the bot startup log shows:
+   - persistence database name
+   - command scope
+   - loaded module count
+   - loaded leaf command count
+4. Confirm the dashboard startup log shows:
+   - persistence database name
+   - host and port
+   - loaded module count
+   - loaded leaf command count
+5. Confirm commands register in the development guild when `DISCORD_REGISTER_GLOBALLY=false`.
 
 ## Dashboard
 
@@ -72,10 +81,11 @@ Run this checklist after major module, persistence, or dashboard changes.
 
 ## Music
 
-1. Enable `DYNAMO_ENABLE_MUSIC=true`.
+1. Enable the `music` module from `/deployment`, then from `/guild/<guild_id>` if you want guild-specific enablement.
 2. Ensure `yt-dlp` is available on the host path.
-3. Run `/music status` and confirm `Songbird` is shown as the configured backend.
-4. Run `/music join`, `/music play`, `/music pause`, `/music resume`, `/music skip`, `/music stop`, `/music leave`, and `/music queue`.
+3. Run `/music status` and confirm `Songbird` is shown as the configured backend and the DAVE limitation note is visible.
+4. Confirm `/music join` and `/music play` refuse regular voice channels with an explanatory message.
+5. Use a stage channel for smoke tests and run `/music join`, `/music play`, `/music pause`, `/music resume`, `/music skip`, `/music stop`, `/music leave`, and `/music queue`.
 
 ## Ticket
 
