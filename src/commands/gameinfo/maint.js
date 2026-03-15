@@ -1,12 +1,12 @@
 const { CommandCategory } = require("@src/structures");
 const { EMBED_COLORS } = require("@root/config.js");
+const Logger = require("@helpers/Logger");
 const { EmbedBuilder } = require("discord.js");
-const fs = require("fs/promises");
-const path = require("path");
 const moment = require("moment-timezone");
 const axios = require("axios");
 
-const dataFilePath = path.join(__dirname, "../../data.json");
+const gameInfoDataStore = require("@helpers/GameInfoDataStore");
+
 const API_URL = "https://lodestonenews.com/news/maintenance/current";
 
 module.exports = {
@@ -22,29 +22,35 @@ module.exports = {
       const embed = await getMaintenanceEmbed();
       await interaction.followUp({ embeds: [embed ?? createErrorEmbed()] });
     } catch (err) {
-      console.error(err);
-      await interaction.followUp("점검 정보를 불러오는 중 오류가 발생했습니다.");
+      Logger.error("maint interactionRun", err);
+      await interaction.followUp("Error loading maintenance information.");
     }
   },
 };
 
 async function getMaintenanceEmbed() {
-  const maintData = await getMaintData();
-  if (!maintData) return null;
+  const maintInfo = await getMaintInfo();
+  if (!isValidMaintInfo(maintInfo)) return null;
 
-  const { start_stamp, end_stamp, title_kr, url } = maintData.MAINTINFO;
+  const { start_stamp, end_stamp, title_kr, url } = maintInfo;
+
   return new EmbedBuilder()
     .setTitle(title_kr)
     .setURL(url)
     .addFields(
-      { name: "시작 시각",      value: `<t:${start_stamp}:F>`, inline: false },
-      { name: "종료 시각",      value: `<t:${end_stamp}:F>`, inline: false },
-      { name: "종료까지 남은 시간", value: `<t:${end_stamp}:R>`, inline: false }
+      { name: "Start time", value: `<t:${start_stamp}:F>`, inline: false },
+      { name: "End time", value: `<t:${end_stamp}:F>`, inline: false },
+      { name: "Time remaining", value: `<t:${end_stamp}:R>`, inline: false }
     )
     .setColor(EMBED_COLORS.SUCCESS)
     .setTimestamp()
     .setThumbnail(CommandCategory.GAMEINFO?.image)
     .setFooter({ text: "From Lodestone News" });
+}
+
+async function getMaintInfo() {
+  const maintData = await getMaintData();
+  return maintData?.MAINTINFO ?? null;
 }
 
 async function getMaintData() {
@@ -55,7 +61,7 @@ async function getMaintData() {
     const { data } = await axios.get(API_URL);
     gameItems = data.game;
   } catch (e) {
-    console.error("API fetch error:", e);
+    Logger.error("maint API fetch", e);
     return loadIfValid(now);
   }
 
@@ -63,32 +69,35 @@ async function getMaintData() {
     return loadIfValid(now);
   }
 
-  // 캐시된 데이터가 아직 유효한지 확인 (ID 동일 & 종료 시간 지나지 않음)
+  // Keep existing cache when it is still valid (same id and not expired).
   const saved = await loadData();
   const savedInfo = saved.MAINTINFO;
-  if (savedInfo
-    && savedInfo.id === gameItems[0].id
-    && savedInfo.end_stamp > now
-  ) {
+  if (savedInfo && savedInfo.id === gameItems[0].id && savedInfo.end_stamp > now) {
     return saved;
   }
 
   const item = gameItems[0];
-  const startMs = moment(item.start).valueOf();
-  const endMs   = moment(item.end).valueOf();
+  if (!isValidMaintItem(item)) return loadIfValid(now);
+
+  const startMoment = moment(item.start);
+  const endMoment = moment(item.end);
+  if (!startMoment.isValid() || !endMoment.isValid()) return loadIfValid(now);
+
+  const startMs = startMoment.valueOf();
+  const endMs = endMoment.valueOf();
   const startStamp = Math.floor(startMs / 1000);
-  const endStamp   = Math.floor(endMs   / 1000);
+  const endStamp = Math.floor(endMs / 1000);
 
   const titleKr = formatKoreanTitle(item.start, item.end);
 
   const newData = {
     MAINTINFO: {
-      id:         item.id,
+      id: item.id,
       start_stamp: startStamp,
-      end_stamp:   endStamp,
-      title_kr:    titleKr,
-      url:         item.url
-    }
+      end_stamp: endStamp,
+      title_kr: titleKr,
+      url: item.url,
+    },
   };
   await saveData(newData);
   return newData;
@@ -96,27 +105,41 @@ async function getMaintData() {
 
 async function loadIfValid(now) {
   const saved = await loadData();
-  if (saved.MAINTINFO?.end_stamp > now) return saved;
+  if (isValidMaintInfo(saved.MAINTINFO) && saved.MAINTINFO.end_stamp > now) return saved;
   return null;
 }
 
 async function loadData() {
-  try {
-    const text = await fs.readFile(dataFilePath, "utf-8");
-    return JSON.parse(text);
-  } catch {
-    return {};
-  }
+  return gameInfoDataStore.load();
 }
 
 async function saveData(obj) {
   try {
-    const existing = await loadData();
-    const merged = { ...existing, ...obj };
-    await fs.writeFile(dataFilePath, JSON.stringify(merged, null, 2));
+    await gameInfoDataStore.update(obj);
   } catch (e) {
-    console.error("Error saving data:", e);
+    Logger.error("maint saveData", e);
   }
+}
+
+function isValidMaintItem(item) {
+  return (
+    item &&
+    typeof item.id === "string" &&
+    typeof item.start === "string" &&
+    typeof item.end === "string" &&
+    typeof item.url === "string"
+  );
+}
+
+function isValidMaintInfo(info) {
+  return (
+    info &&
+    typeof info.id === "string" &&
+    Number.isFinite(info.start_stamp) &&
+    Number.isFinite(info.end_stamp) &&
+    typeof info.title_kr === "string" &&
+    typeof info.url === "string"
+  );
 }
 
 function formatKoreanTitle(startISO, endISO) {
@@ -131,24 +154,24 @@ function formatKoreanTitle(startISO, endISO) {
   let range;
   if (sM === eM) {
     if (sD === eD) {
-      // 같은 날: M/D
+      // Same day: M/D
       range = `${sM}/${sD}`;
     } else {
-      // 같은 달, 다른 날: M/D-D
+      // Same month, different day: M/D-D
       range = `${sM}/${sD}-${eD}`;
     }
   } else {
-    // 다른 달: M/D - M/D
+    // Different month: M/D - M/D
     range = `${sM}/${sD} - ${eM}/${eD}`;
   }
 
-  return `전 월드 유지보수 작업 (${range})`;
+  return `Global maintenance window (${range})`;
 }
 
 function createErrorEmbed() {
   return new EmbedBuilder()
-    .setTitle("점검 정보를 불러올 수 없습니다")
-    .setDescription("현재 점검 공지가 없거나 API 업데이트가 되지 않았습니다.")
+    .setTitle("Cannot load maintenance data")
+    .setDescription("No maintenance information is currently available.")
     .setURL("https://jp.finalfantasyxiv.com/lodestone")
     .setColor(EMBED_COLORS.ERROR)
     .setThumbnail(CommandCategory.GAMEINFO.image)

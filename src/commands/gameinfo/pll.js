@@ -1,15 +1,14 @@
 const { CommandCategory } = require("@src/structures");
 const { EMBED_COLORS } = require("@root/config.js");
+const Logger = require("@helpers/Logger");
 const { EmbedBuilder } = require("discord.js");
 const Parser = require("rss-parser");
 const cheerio = require("cheerio");
-const fs = require("fs/promises");
-const path = require("path");
 const moment = require("moment-timezone");
 
 const parser = new Parser();
-const dataFilePath = path.join(__dirname, "../../data.json");
-const CACHE_DURATION = 12 * 60 * 60; // 12시간 (초)
+const gameInfoDataStore = require("@helpers/GameInfoDataStore");
+const CACHE_DURATION = 12 * 60 * 60; // 12 hours (seconds)
 const PLL_TITLE_REGEX = /第\d+回\s?FFXIV\s?PLL/;
 const DATE_REGEX = /(\d{4}年\d{1,2}月\d{1,2}日（[^）]+）)\s?(\d{1,2}:\d{2})頃?～/;
 const ROUND_REGEX = /第(\d+)回/;
@@ -27,7 +26,7 @@ module.exports = {
       const embed = await getPLLEmbed();
       await interaction.followUp({ embeds: [embed ?? createErrorEmbed()] });
     } catch (err) {
-      console.error(err);
+      Logger.error("pll interactionRun", err);
       await interaction.followUp("An error occurred while processing your request.");
     }
   },
@@ -38,15 +37,15 @@ async function getPLLEmbed() {
   if (!pllData) return null;
 
   const { fixedTitle, start_stamp, url } = pllData;
-  const timeValue = start_stamp ? `<t:${start_stamp}:F>` : "확인 불가";
-  const relativeTimeValue = start_stamp ? `<t:${start_stamp}:R>` : "확인 불가";
+  const timeValue = start_stamp ? `<t:${start_stamp}:F>` : "Unavailable";
+  const relativeTimeValue = start_stamp ? `<t:${start_stamp}:R>` : "Unavailable";
 
   return new EmbedBuilder()
     .setTitle(fixedTitle)
     .setURL(url)
     .addFields(
-      { name: "방송 시작", value: timeValue, inline: false },
-      { name: "시작까지 남은 시간", value: relativeTimeValue, inline: false }
+      { name: "Broadcast start", value: timeValue, inline: false },
+      { name: "Time remaining", value: relativeTimeValue, inline: false }
     )
     .setColor(EMBED_COLORS.SUCCESS)
     .setTimestamp()
@@ -57,19 +56,19 @@ async function getPLLEmbed() {
 async function getPLLData() {
   const now = Date.now() / 1000;
 
-  // 캐시 확인
+  // Check cache first
   const cachedData = await getCachedData(now);
   if (cachedData) return cachedData;
 
   try {
     const feed = await parser.parseURL("https://jp.finalfantasyxiv.com/lodestone/news/topics.xml");
-    if (!feed?.items?.length) return null;
+    if (!feed?.items?.length) return loadFallbackData(now);
 
-    const targetItem = feed.items.find(item => PLL_TITLE_REGEX.test(item.title || ""));
-    if (!targetItem) return null;
+    const targetItem = findPllItem(feed.items);
+    if (!targetItem) return loadFallbackData(now);
 
     const pllInfo = await processPLLItem(targetItem);
-    if (!pllInfo) return null;
+    if (!pllInfo || !isValidPllInfo(pllInfo)) return loadFallbackData(now);
 
     const newData = {
       PLLINFO: {
@@ -81,85 +80,117 @@ async function getPLLData() {
     await saveData(newData);
     return newData.PLLINFO;
   } catch (error) {
-    console.error("Error fetching PLL data:", error);
-    return null;
+    Logger.error("pll fetch", error);
+    return loadFallbackData(now);
   }
 }
 
 async function processPLLItem(item) {
   const { title, link, summary } = item;
-  
-  // cheerio를 사용해 summary에서 정보 추출
-  const $ = cheerio.load(summary, { decodeEntities: false });
-  const h3Text = $("h3.mdl-title__heading--lg").first().text() || title;
-  
-  // 회차 번호 추출
-  const roundMatch = h3Text.match(ROUND_REGEX);
+  const summaryHtml = typeof summary === "string" ? summary : "";
+  const headingText = extractHeadingText(summaryHtml, title);
+
+  const roundMatch = headingText.match(ROUND_REGEX);
   const roundNumber = roundMatch?.[1] || "";
-  
-  // 방송 시작 시각 추출
-  const start_stamp = extractStartTime(summary);
-  
-  // 제목 생성
+  const start_stamp = extractStartTime(summaryHtml);
   const fixedTitle = generateFixedTitle(roundNumber, start_stamp);
-  
+
   return {
     fixedTitle,
-    url: link,
+    url: link || "https://jp.finalfantasyxiv.com/lodestone",
     start_stamp,
   };
 }
 
 function extractStartTime(summary) {
-  const dateMatch = summary.match(DATE_REGEX);
+  const summaryText = extractSummaryText(summary);
+  const dateMatch = summaryText.match(DATE_REGEX);
   if (!dateMatch) return null;
 
   const dateStrClean = dateMatch[1].replace(/（[^）]+）/, "");
   const timeString = `${dateStrClean} ${dateMatch[2]}`;
   const parsed = moment.tz(timeString, "YYYY年M月D日 HH:mm", "Asia/Tokyo");
-  
+
   return parsed.isValid() ? parsed.unix() : null;
 }
 
 function generateFixedTitle(roundNumber, start_stamp) {
   if (!start_stamp) {
-    return "제 XX회 프로듀서 레터 라이브 X월 XX일 방송 결정!";
+    return "Round XX Producer Letter Live date to be announced";
   }
 
-  const formattedDate = moment.unix(start_stamp).tz("Asia/Seoul").format("M월 D일");
-  const roundText = roundNumber ? `제 ${roundNumber}회` : "제 XX회";
-  
-  return `${roundText} 프로듀서 레터 라이브 ${formattedDate} 방송 결정!`;
+  const formattedDate = moment.unix(start_stamp).tz("Asia/Seoul").format("M/D");
+  const roundText = roundNumber ? `Round ${roundNumber}` : "Round XX";
+
+  return `${roundText} Producer Letter Live scheduled on ${formattedDate}`;
+}
+
+function findPllItem(items) {
+  return (
+    items.find((item) => PLL_TITLE_REGEX.test(item.title || "")) ||
+    items.find((item) => {
+      const headingText = extractHeadingText(item.summary || "", item.title || "");
+      return PLL_TITLE_REGEX.test(headingText);
+    })
+  );
+}
+
+function extractHeadingText(summary, title) {
+  const $ = cheerio.load(summary || "", { decodeEntities: false });
+
+  return (
+    $("h3.mdl-title__heading--lg").first().text().trim() ||
+    $("h3").first().text().trim() ||
+    (typeof title === "string" ? title : "")
+  );
+}
+
+function extractSummaryText(summary) {
+  const $ = cheerio.load(summary || "", { decodeEntities: false });
+  return $.text().replace(/\s+/g, " ").trim();
 }
 
 async function getCachedData(now) {
   const savedData = await loadData();
-  return savedData.PLLINFO?.expireTime > now ? savedData.PLLINFO : null;
+  return isValidPllInfo(savedData.PLLINFO) && savedData.PLLINFO.expireTime > now ? savedData.PLLINFO : null;
+}
+
+async function loadFallbackData(now) {
+  const savedData = await loadData();
+  const savedInfo = savedData.PLLINFO;
+
+  if (!isValidPllInfo(savedInfo)) return null;
+  if (savedInfo.expireTime > now) return savedInfo;
+  if (savedInfo.start_stamp && savedInfo.start_stamp > now) return savedInfo;
+  return null;
 }
 
 async function loadData() {
-  try {
-    const data = await fs.readFile(dataFilePath, "utf-8");
-    return JSON.parse(data);
-  } catch (error) {
-    return {};
-  }
+  return gameInfoDataStore.load();
 }
 
 async function saveData(newData) {
   try {
-    const existingData = await loadData();
-    const mergedData = { ...existingData, ...newData };
-    await fs.writeFile(dataFilePath, JSON.stringify(mergedData, null, 2));
+    await gameInfoDataStore.update(newData);
   } catch (error) {
-    console.error("Error saving data:", error);
+    Logger.error("pll saveData", error);
   }
+}
+
+function isValidPllInfo(info) {
+  return (
+    info &&
+    typeof info.fixedTitle === "string" &&
+    typeof info.url === "string" &&
+    Number.isFinite(info.expireTime) &&
+    (info.start_stamp === null || Number.isFinite(info.start_stamp))
+  );
 }
 
 function createErrorEmbed() {
   return new EmbedBuilder()
     .setTitle("No PLL Info")
-    .setDescription("PLL 관련 정보를 찾을 수 없습니다.")
+    .setDescription("No producer letter schedule found.")
     .setURL("https://jp.finalfantasyxiv.com/lodestone")
     .setColor(EMBED_COLORS.ERROR)
     .setThumbnail(CommandCategory.GAMEINFO?.image);

@@ -32,6 +32,7 @@ module.exports.launch = async (client) => {
     .use(express.static(path.join(__dirname, "/public"))) // Set the css and js folder to ./public
     .set("views", path.join(__dirname, "/views")) // Set the ejs templates to ./views
     .set("port", config.DASHBOARD.port) // Set the dashboard port
+    .set("host", config.DASHBOARD.host || "0.0.0.0") // Set the dashboard host
     .use(
       session({
         secret: process.env.SESSION_PASSWORD,
@@ -75,7 +76,7 @@ module.exports.launch = async (client) => {
     });
 
   /* Start */
-  app.listen(app.get("port"), () => {
-    client.logger.success("Dashboard is listening on port " + app.get("port"));
+  app.listen(app.get("port"), app.get("host"), () => {
+    client.logger.success(`Dashboard is listening on ${app.get("host")}:${app.get("port")}`);
   });
 };

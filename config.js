@@ -46,6 +46,7 @@ module.exports = {
     baseURL: "http://localhost:8080", // base url
     failureURL: "http://localhost:8080", // failure redirect url
     port: "8080", // port to run the bot on
+    host: "0.0.0.0", // host interface for dashboard server
   },
 
   CURRENCY: {
@@ -136,6 +137,7 @@ module.exports = {
     DOWNWARD_EMBED: "#F04747",
     REFRESH_INTERVAL: 5000, // ms
     MAX_REFRESH_TIME: 60000, // ms
+    MAX_MANUAL_REFRESHES: 5,
   },
 
   SUGGESTIONS: {

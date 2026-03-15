@@ -4,6 +4,10 @@ const express = require("express"),
 const fetch = require("node-fetch"),
   btoa = require("btoa");
 
+function getDashboardBaseURL(req) {
+  return req.client.config.DASHBOARD.baseURL.replace(/\/+$/, "");
+}
+
 // Gets login page
 router.get("/login", async function (req, res) {
   if (!req.user || !req.user.id || !req.user.guilds) {
@@ -14,10 +18,10 @@ router.get("/login", async function (req, res) {
     }
 
     return res.redirect(
-      `https://discordapp.com/api/oauth2/authorize?client_id=${
+      `https://discord.com/oauth2/authorize?client_id=${
         req.client.user.id
       }&scope=identify%20guilds&response_type=code&redirect_uri=${encodeURIComponent(
-        req.client.config.DASHBOARD.baseURL + "/api/callback"
+        `${getDashboardBaseURL(req)}/api/callback`
       )}&state=${req.query.state || "no"}`
     );
   }
@@ -41,7 +45,7 @@ router.get("/callback", async (req, res) => {
   const params = new URLSearchParams();
   params.set("grant_type", "authorization_code");
   params.set("code", req.query.code);
-  params.set("redirect_uri", `${req.client.config.DASHBOARD.baseURL}/api/callback`);
+  params.set("redirect_uri", `${getDashboardBaseURL(req)}/api/callback`);
   let response = await fetch("https://discord.com/api/oauth2/token", {
     method: "POST",
     body: params.toString(),
@@ -56,7 +60,7 @@ router.get("/callback", async (req, res) => {
   if (tokens.error || !tokens.access_token) {
     req.client.logger.debug(tokens);
     req.client.logger.error("Failed to login to dashboard! Check /logs folder for more details");
-    return res.redirect(`/api/login&state=${req.query.state}`);
+    return res.redirect(`/api/login?state=${req.query.state}`);
   }
   const userData = {
     infos: null,
@@ -65,7 +69,7 @@ router.get("/callback", async (req, res) => {
   while (!userData.infos || !userData.guilds) {
     /* User infos */
     if (!userData.infos) {
-      response = await fetch("https://discordapp.com/api/users/@me", {
+      response = await fetch("https://discord.com/api/users/@me", {
         method: "GET",
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       });
@@ -75,7 +79,7 @@ router.get("/callback", async (req, res) => {
     }
     /* User guilds */
     if (!userData.guilds) {
-      response = await fetch("https://discordapp.com/api/users/@me/guilds", {
+      response = await fetch("https://discord.com/api/users/@me/guilds", {
         method: "GET",
         headers: { Authorization: `Bearer ${tokens.access_token}` },
       });

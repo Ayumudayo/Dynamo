@@ -7,6 +7,8 @@ node_modules/
 src/test.js
 removecmd.js
 src/removecmd.js
+src/data/gameinfo-cache.json
+.sisyphus/
 
 ### Intellij ###
 # Covers JetBrains IDEs: IntelliJ, RubyMine, PhpStorm, AppCode, PyCharm, CLion, Android Studio, WebStorm and Rider

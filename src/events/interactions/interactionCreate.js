@@ -1,5 +1,13 @@
 const { getSettings } = require("@schemas/Guild");
-const { commandHandler, contextHandler, statsHandler, suggestionHandler, ticketHandler } = require("@src/handlers");
+const { STOCK_REFRESH_BUTTON_ID } = require("@helpers/StockRefreshSession");
+const {
+  commandHandler,
+  contextHandler,
+  statsHandler,
+  stockHandler,
+  suggestionHandler,
+  ticketHandler,
+} = require("@src/handlers");
 const { InteractionType } = require("discord.js");
 
 /**
@@ -42,6 +50,9 @@ module.exports = async (client, interaction) => {
 
       case "SUGGEST_DELETE":
         return suggestionHandler.handleDeleteBtn(interaction);
+
+      case STOCK_REFRESH_BUTTON_ID:
+        return stockHandler.handleRefreshButton(interaction);
     }
   }
 

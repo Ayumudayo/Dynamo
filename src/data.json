@@ -162,19 +162,6 @@
     "ARS": "Argentine Peso",
     "UAH": "Ukrainian Hryvnia"
   },
-  "MAINTINFO": {
-    "id": "f48390e6815a3a9079281c9ccd9fb4883786eb3a",
-    "start_stamp": 1750104000,
-    "end_stamp": 1750154400,
-    "title_kr": "전 월드 유지보수 작업 (6/17)",
-    "url": "https://na.finalfantasyxiv.com/lodestone/news/detail/f48390e6815a3a9079281c9ccd9fb4883786eb3a"
-  },
-  "PLLINFO": {
-    "fixedTitle": "제 87회 프로듀서 레터 라이브 6월 20일 방송 결정!",
-    "url": "https://jp.finalfantasyxiv.com/lodestone/topics/detail/abbf5b5505ce4a1c0db880ba867288ac95a8eaec",
-    "start_stamp": 1750417200,
-    "expireTime": 1749517929
-  },
   "IMP_UNIT": {
     "in": "inch",
     "ft": "feet",
