@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 dynamo-core = { path = "../../core" }
 poise.workspace = true
 serde.workspace = true

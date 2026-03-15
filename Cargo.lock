@@ -803,6 +803,7 @@ dependencies = [
 name = "dynamo-module-ticket"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dynamo-core",
  "poise",
  "serde",

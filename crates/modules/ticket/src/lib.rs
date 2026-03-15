@@ -5,10 +5,11 @@ use dynamo_core::{
 };
 use poise::serenity_prelude::{
     ButtonStyle, Channel, ChannelId, ChannelType, ComponentInteraction, CreateActionRow,
-    CreateButton, CreateChannel, CreateEmbed, CreateEmbedFooter, CreateInteractionResponse,
-    CreateInteractionResponseMessage, CreateMessage, CreateSelectMenu, CreateSelectMenuKind,
-    CreateSelectMenuOption, EditInteractionResponse, GuildChannel, GuildId, Interaction,
-    PermissionOverwrite, PermissionOverwriteType, Permissions,
+    CreateAttachment, CreateButton, CreateChannel, CreateEmbed, CreateEmbedFooter,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage, CreateSelectMenu,
+    CreateSelectMenuKind, CreateSelectMenuOption, EditInteractionResponse, GetMessages,
+    GuildChannel, GuildId, Interaction, Message, PermissionOverwrite, PermissionOverwriteType,
+    Permissions, RoleId, UserId,
 };
 use serde::{Deserialize, Deserializer, Serialize};
 
@@ -17,6 +18,7 @@ const TICKET_CREATE_BUTTON_ID: &str = "ticket_create";
 const TICKET_CLOSE_BUTTON_ID: &str = "ticket_close";
 const TICKET_CATEGORY_SELECT_ID: &str = "ticket_category_select";
 const DEFAULT_LIMIT: usize = 10;
+const MIN_LIMIT: usize = 5;
 const DEFAULT_SETUP_TITLE: &str = "Support Ticket";
 const DEFAULT_SETUP_DESCRIPTION: &str = "Please use the button below to create a ticket.";
 const DEFAULT_SETUP_FOOTER: &str = "You can only have one open ticket at a time.";
@@ -46,13 +48,36 @@ impl Module for TicketModule {
             sections: vec![SettingsSection {
                 id: "ticketing",
                 title: "Ticketing",
-                description: Some("Configure log channel, open-ticket limit, and category roles."),
+                description: Some(
+                    "Configure ticket panel text, log channel, open-ticket limit, and category roles.",
+                ),
                 fields: vec![
+                    SettingsField {
+                        key: "setup_title",
+                        label: "Panel title",
+                        help_text: Some("Embed title used in the ticket creation panel."),
+                        required: false,
+                        kind: SettingsFieldKind::Text,
+                    },
+                    SettingsField {
+                        key: "setup_description",
+                        label: "Panel description",
+                        help_text: Some("Embed description used in the ticket creation panel."),
+                        required: false,
+                        kind: SettingsFieldKind::Text,
+                    },
+                    SettingsField {
+                        key: "setup_footer",
+                        label: "Panel footer",
+                        help_text: Some("Embed footer used in the ticket creation panel."),
+                        required: false,
+                        kind: SettingsFieldKind::Text,
+                    },
                     SettingsField {
                         key: "log_channel_id",
                         label: "Log channel ID",
                         help_text: Some(
-                            "Optional channel that receives ticket closed notifications.",
+                            "Optional channel that receives ticket closed notifications and transcripts.",
                         ),
                         required: false,
                         kind: SettingsFieldKind::Text,
@@ -82,6 +107,9 @@ impl Module for TicketModule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct TicketSettings {
+    setup_title: String,
+    setup_description: String,
+    setup_footer: String,
     #[serde(
         alias = "log_channel",
         deserialize_with = "deserialize_optional_snowflake"
@@ -94,6 +122,9 @@ struct TicketSettings {
 impl Default for TicketSettings {
     fn default() -> Self {
         Self {
+            setup_title: DEFAULT_SETUP_TITLE.to_string(),
+            setup_description: DEFAULT_SETUP_DESCRIPTION.to_string(),
+            setup_footer: DEFAULT_SETUP_FOOTER.to_string(),
             log_channel_id: None,
             limit: DEFAULT_LIMIT,
             categories: Vec::new(),
@@ -113,7 +144,15 @@ struct TicketCategory {
     slash_command,
     guild_only,
     category = "Ticket",
-    subcommands("ticket_setup", "ticket_close", "ticket_closeall")
+    subcommands(
+        "ticket_setup",
+        "ticket_log",
+        "ticket_limit",
+        "ticket_close",
+        "ticket_closeall",
+        "ticket_add",
+        "ticket_remove"
+    )
 )]
 async fn ticket(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
@@ -142,13 +181,16 @@ async fn ticket_setup(
         return Ok(());
     }
 
+    let mut settings = load_settings(ctx.data(), ctx.guild_id().map(|id| id.get())).await?;
+    settings.setup_title = title.unwrap_or_else(|| settings.setup_title.clone());
+    settings.setup_description = description.unwrap_or_else(|| settings.setup_description.clone());
+    settings.setup_footer = footer.unwrap_or_else(|| settings.setup_footer.clone());
+
     let embed = CreateEmbed::new()
-        .title(title.unwrap_or_else(|| DEFAULT_SETUP_TITLE.to_string()))
-        .description(description.unwrap_or_else(|| DEFAULT_SETUP_DESCRIPTION.to_string()))
+        .title(&settings.setup_title)
+        .description(&settings.setup_description)
         .color(CREATE_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new(
-            footer.unwrap_or_else(|| DEFAULT_SETUP_FOOTER.to_string()),
-        ));
+        .footer(CreateEmbedFooter::new(&settings.setup_footer));
 
     channel
         .send_message(
@@ -159,9 +201,74 @@ async fn ticket_setup(
         )
         .await?;
 
+    save_settings(ctx, &settings).await?;
     ctx.send(
         poise::CreateReply::default()
-            .content("Ticket setup message created.")
+            .content("Ticket setup message created and ticket settings saved.")
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "log",
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn ticket_log(
+    ctx: Context<'_>,
+    #[description = "Optional log channel; omit to disable ticket logs"] channel: Option<ChannelId>,
+) -> Result<(), Error> {
+    let mut settings = load_settings(ctx.data(), ctx.guild_id().map(|id| id.get())).await?;
+    settings.log_channel_id = channel.map(|id| id.get());
+    save_settings(ctx, &settings).await?;
+
+    let message = match channel {
+        Some(channel) => format!("Ticket logs will now be sent to <#{}>.", channel.get()),
+        None => "Ticket log channel disabled.".to_string(),
+    };
+
+    ctx.send(
+        poise::CreateReply::default()
+            .content(message)
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "limit",
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn ticket_limit(
+    ctx: Context<'_>,
+    #[description = "Maximum number of concurrently open ticket channels"] amount: i32,
+) -> Result<(), Error> {
+    if amount < MIN_LIMIT as i32 {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(format!("Ticket limit cannot be less than {MIN_LIMIT}."))
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let mut settings = load_settings(ctx.data(), ctx.guild_id().map(|id| id.get())).await?;
+    settings.limit = amount as usize;
+    save_settings(ctx, &settings).await?;
+
+    ctx.send(
+        poise::CreateReply::default()
+            .content(format!(
+                "Configuration saved. The open ticket limit is now `{}`.",
+                settings.limit
+            ))
             .ephemeral(true),
     )
     .await?;
@@ -254,6 +361,117 @@ async fn ticket_closeall(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "add",
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn ticket_add(
+    ctx: Context<'_>,
+    #[description = "User ID, role ID, or mention to add to the current ticket"] target_id: String,
+) -> Result<(), Error> {
+    let Some(channel) = current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
+    else {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("This command can only be used inside a guild text channel.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    };
+
+    if !is_ticket_channel(&channel) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("This command can only be used in ticket channels.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let overwrite =
+        resolve_permission_target(ctx.serenity_context(), channel.guild_id, &target_id).await?;
+    channel
+        .create_permission(
+            ctx.serenity_context(),
+            PermissionOverwrite {
+                allow: Permissions::VIEW_CHANNEL
+                    | Permissions::SEND_MESSAGES
+                    | Permissions::READ_MESSAGE_HISTORY,
+                deny: Permissions::empty(),
+                kind: overwrite,
+            },
+        )
+        .await?;
+
+    ctx.send(
+        poise::CreateReply::default()
+            .content("Ticket access updated.")
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
+#[poise::command(
+    slash_command,
+    guild_only,
+    rename = "remove",
+    required_permissions = "MANAGE_GUILD"
+)]
+async fn ticket_remove(
+    ctx: Context<'_>,
+    #[description = "User ID, role ID, or mention to remove from the current ticket"]
+    target_id: String,
+) -> Result<(), Error> {
+    let Some(channel) = current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
+    else {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("This command can only be used inside a guild text channel.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    };
+
+    if !is_ticket_channel(&channel) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("This command can only be used in ticket channels.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let overwrite =
+        resolve_permission_target(ctx.serenity_context(), channel.guild_id, &target_id).await?;
+    channel
+        .create_permission(
+            ctx.serenity_context(),
+            PermissionOverwrite {
+                allow: Permissions::empty(),
+                deny: Permissions::VIEW_CHANNEL
+                    | Permissions::SEND_MESSAGES
+                    | Permissions::READ_MESSAGE_HISTORY,
+                kind: overwrite,
+            },
+        )
+        .await?;
+
+    ctx.send(
+        poise::CreateReply::default()
+            .content("Ticket access updated.")
+            .ephemeral(true),
+    )
+    .await?;
+    Ok(())
+}
+
 async fn module_disable_reason(ctx: Context<'_>) -> Result<Option<String>, Error> {
     let deployment = ctx
         .data()
@@ -312,6 +530,37 @@ fn parse_ticket_settings(module: &GuildModuleSettings) -> Result<TicketSettings,
     Ok(serde_json::from_value::<TicketSettings>(
         module.configuration.clone(),
     )?)
+}
+
+async fn save_settings(ctx: Context<'_>, settings: &TicketSettings) -> Result<(), Error> {
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+
+    let Some(repo) = ctx.data().persistence.guild_settings.clone() else {
+        return Err(anyhow::anyhow!(
+            "guild settings repository is not configured for this deployment"
+        ));
+    };
+
+    let current = repo.get_or_create(guild_id.get()).await?;
+    let enabled = current
+        .modules
+        .get(MODULE_ID)
+        .map(|module| module.enabled)
+        .unwrap_or(true);
+
+    repo.upsert_module_settings(
+        guild_id.get(),
+        MODULE_ID,
+        GuildModuleSettings {
+            enabled,
+            configuration: serde_json::to_value(settings)?,
+        },
+    )
+    .await?;
+
+    Ok(())
 }
 
 pub async fn handle_interaction(
@@ -375,8 +624,7 @@ async fn handle_ticket_open(
         .categories
         .first()
         .map(|category| category.name.clone());
-    let result =
-        create_ticket_channel(ctx, component, data, &settings, category_name.as_deref()).await?;
+    let result = create_ticket_channel(ctx, component, &settings, category_name.as_deref()).await?;
     component
         .edit_response(ctx, EditInteractionResponse::new().content(result))
         .await?;
@@ -410,8 +658,7 @@ async fn handle_ticket_category_select(
     };
 
     component.defer_ephemeral(ctx).await?;
-    let result =
-        create_ticket_channel(ctx, component, data, &settings, Some(&category_name)).await?;
+    let result = create_ticket_channel(ctx, component, &settings, Some(&category_name)).await?;
     component
         .edit_response(ctx, EditInteractionResponse::new().content(result))
         .await?;
@@ -457,7 +704,6 @@ async fn handle_ticket_close(
 async fn create_ticket_channel(
     ctx: &poise::serenity_prelude::Context,
     component: &ComponentInteraction,
-    _data: &AppState,
     settings: &TicketSettings,
     requested_category: Option<&str>,
 ) -> Result<String, Error> {
@@ -519,7 +765,7 @@ async fn create_ticket_channel(
                     | Permissions::SEND_MESSAGES
                     | Permissions::READ_MESSAGE_HISTORY,
                 deny: Permissions::empty(),
-                kind: PermissionOverwriteType::Role(poise::serenity_prelude::RoleId::new(*role_id)),
+                kind: PermissionOverwriteType::Role(RoleId::new(*role_id)),
             });
         }
     }
@@ -542,10 +788,10 @@ async fn create_ticket_channel(
     let welcome_embed = CreateEmbed::new()
         .title(format!("Ticket #{ticket_number}"))
         .description(format!(
-            "Hello <@{}>\nSupport will be with you shortly.\n{}",
+            "Hello <@{}>\nSupport will be with you shortly.{}",
             component.user.id.get(),
             if category_name != "Default" {
-                format!("**Category:** {category_name}")
+                format!("\n**Category:** {category_name}")
             } else {
                 String::new()
             }
@@ -580,6 +826,9 @@ async fn close_ticket_channel(
         return Ok("Could not parse ticket metadata.".to_string());
     };
 
+    let transcript = fetch_ticket_transcript(ctx, channel).await?;
+    let transcript_name = format!("{}-transcript.txt", channel.name);
+
     let mut embed = CreateEmbed::new()
         .title("Ticket Closed")
         .color(CLOSE_EMBED_COLOR)
@@ -593,12 +842,113 @@ async fn close_ticket_channel(
 
     if let Some(log_channel_id) = settings.log_channel_id {
         let _ = ChannelId::new(log_channel_id)
-            .send_message(ctx, CreateMessage::new().embed(embed.clone()))
+            .send_message(
+                ctx,
+                CreateMessage::new()
+                    .embed(embed.clone())
+                    .add_file(CreateAttachment::bytes(
+                        transcript.as_bytes(),
+                        transcript_name,
+                    )),
+            )
             .await;
     }
 
     channel.delete(ctx).await?;
     Ok("Ticket closed.".to_string())
+}
+
+async fn fetch_ticket_transcript(
+    ctx: &poise::serenity_prelude::Context,
+    channel: &GuildChannel,
+) -> Result<String, Error> {
+    let mut messages = Vec::new();
+    let mut before = None;
+
+    loop {
+        let mut builder = GetMessages::new().limit(100);
+        if let Some(before_id) = before {
+            builder = builder.before(before_id);
+        }
+
+        let batch = channel.messages(ctx, builder).await?;
+        if batch.is_empty() {
+            break;
+        }
+
+        before = batch.last().map(|message| message.id);
+        messages.extend(batch);
+        if messages.len() >= 1_000 {
+            break;
+        }
+    }
+
+    messages.reverse();
+
+    if messages.is_empty() {
+        return Ok("No messages were recorded for this ticket.".to_string());
+    }
+
+    let mut transcript = String::new();
+    for message in messages {
+        transcript.push_str(&render_transcript_message(&message));
+        transcript.push('\n');
+    }
+
+    Ok(transcript)
+}
+
+fn render_transcript_message(message: &Message) -> String {
+    let timestamp = message.timestamp.to_string();
+    let mut line = format!(
+        "[{timestamp}] {} ({})",
+        message.author.name, message.author.id
+    );
+
+    if !message.content.is_empty() {
+        line.push('\n');
+        line.push_str(&message.content);
+    }
+
+    if !message.attachments.is_empty() {
+        let attachments = message
+            .attachments
+            .iter()
+            .map(|attachment| attachment.url.clone())
+            .collect::<Vec<_>>()
+            .join(", ");
+        line.push('\n');
+        line.push_str("Attachments: ");
+        line.push_str(&attachments);
+    }
+
+    line
+}
+
+async fn resolve_permission_target(
+    ctx: &poise::serenity_prelude::Context,
+    guild_id: GuildId,
+    input: &str,
+) -> Result<PermissionOverwriteType, Error> {
+    let target_id = extract_target_id(input)?;
+    let roles = guild_id.roles(&ctx.http).await?;
+    if roles.contains_key(&RoleId::new(target_id)) {
+        return Ok(PermissionOverwriteType::Role(RoleId::new(target_id)));
+    }
+
+    Ok(PermissionOverwriteType::Member(UserId::new(target_id)))
+}
+
+fn extract_target_id(input: &str) -> Result<u64, Error> {
+    let trimmed = input.trim();
+    let digits = trimmed
+        .trim_start_matches("<@")
+        .trim_start_matches("&")
+        .trim_start_matches("!")
+        .trim_end_matches('>');
+    Ok(digits
+        .parse::<u64>()
+        .map_err(|error| anyhow::anyhow!("Invalid user/role identifier `{input}`: {error}"))?)
 }
 
 fn ticket_create_components() -> Vec<CreateActionRow> {
@@ -742,7 +1092,7 @@ fn parse_snowflake_vec_value(value: Option<serde_json::Value>) -> Result<Vec<u64
 
 #[cfg(test)]
 mod tests {
-    use super::{TicketSettings, parse_ticket_topic};
+    use super::{TicketSettings, extract_target_id, parse_ticket_topic};
 
     #[test]
     fn ticket_settings_accepts_legacy_keys() {
@@ -758,6 +1108,7 @@ mod tests {
         assert_eq!(settings.log_channel_id, Some(123));
         assert_eq!(settings.limit, 25);
         assert_eq!(settings.categories[0].staff_role_ids, vec![11, 22]);
+        assert_eq!(settings.setup_title, "Support Ticket");
     }
 
     #[test]
@@ -766,5 +1117,12 @@ mod tests {
             parse_ticket_topic("ticket|42|Billing"),
             Some((42, "Billing".to_string()))
         );
+    }
+
+    #[test]
+    fn extracts_mentions_to_numeric_ids() {
+        assert_eq!(extract_target_id("<@123>").expect("user mention"), 123);
+        assert_eq!(extract_target_id("<@&456>").expect("role mention"), 456);
+        assert_eq!(extract_target_id("<@!789>").expect("nickname mention"), 789);
     }
 }
