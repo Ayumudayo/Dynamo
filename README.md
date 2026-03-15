@@ -135,6 +135,8 @@ Useful flags:
 - `-Headless` for the PowerShell launcher
 - `--dry-run` / `-DryRun`
 
+The launchers print the effective command scope and optional-module state resolved from `.env`, with CLI flags taking precedence over `.env` for the optional modules.
+
 ## Validation Commands
 
 These are the baseline checks used during development and CI:

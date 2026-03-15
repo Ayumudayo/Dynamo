@@ -40,6 +40,54 @@ if [[ ! -f "$ENV_PATH" ]]; then
   exit 1
 fi
 
+dotenv_value() {
+  local key="$1"
+  local line
+  line="$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$ENV_PATH" | tail -n 1 || true)"
+  if [[ -z "$line" ]]; then
+    return 1
+  fi
+  line="${line#*=}"
+  line="${line%\"}"
+  line="${line#\"}"
+  line="${line%\'}"
+  line="${line#\'}"
+  printf '%s\n' "$line"
+}
+
+parse_bool_setting() {
+  local key="$1"
+  local value="${2,,}"
+  case "$value" in
+    1|true|yes|on) printf 'true\n' ;;
+    0|false|no|off) printf 'false\n' ;;
+    *)
+      echo "$key in .env must be one of true/false/1/0/yes/no/on/off." >&2
+      exit 1
+      ;;
+  esac
+}
+
+resolve_bool_setting() {
+  local key="$1"
+  local default_value="$2"
+  local cli_enabled="$3"
+
+  if [[ "$cli_enabled" == "true" ]]; then
+    printf 'true\n'
+    return
+  fi
+
+  local raw_value
+  raw_value="$(dotenv_value "$key" || true)"
+  if [[ -z "$raw_value" ]]; then
+    printf '%s\n' "$default_value"
+    return
+  fi
+
+  parse_bool_setting "$key" "$raw_value"
+}
+
 mkdir -p "$LOGS_DIR"
 
 if [[ "$DRY_RUN" != "true" ]] && ! command -v cargo >/dev/null 2>&1; then
@@ -110,6 +158,23 @@ start_process() {
 
 echo "Repo root: $ROOT_DIR"
 echo "Logs dir:  $LOGS_DIR"
+COMMAND_SCOPE="global"
+REGISTER_GLOBALLY="$(resolve_bool_setting "DISCORD_REGISTER_GLOBALLY" "true" "false")"
+DEV_GUILD_ID="$(dotenv_value "DISCORD_DEV_GUILD_ID" || true)"
+if [[ "$REGISTER_GLOBALLY" != "true" ]]; then
+  if [[ -n "$DEV_GUILD_ID" ]]; then
+    COMMAND_SCOPE="guild ($DEV_GUILD_ID)"
+  else
+    COMMAND_SCOPE="guild (missing DISCORD_DEV_GUILD_ID)"
+  fi
+fi
+EFFECTIVE_GIVEAWAY="$(resolve_bool_setting "DYNAMO_ENABLE_GIVEAWAY" "false" "$ENABLE_GIVEAWAY")"
+EFFECTIVE_MUSIC="$(resolve_bool_setting "DYNAMO_ENABLE_MUSIC" "false" "$ENABLE_MUSIC")"
+echo "Command scope: $COMMAND_SCOPE"
+echo "Optional modules: giveaway=$EFFECTIVE_GIVEAWAY music=$EFFECTIVE_MUSIC"
+if [[ "$EFFECTIVE_MUSIC" != "true" ]]; then
+  echo "WARNING: Music module is disabled. Set DYNAMO_ENABLE_MUSIC=true in .env or pass --enable-music to register /music commands and show the module in the dashboard." >&2
+fi
 
 if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then

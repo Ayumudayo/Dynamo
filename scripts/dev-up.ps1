@@ -32,6 +32,64 @@ if ($EnableMusic) {
   $EnvOverrides["DYNAMO_ENABLE_MUSIC"] = "true"
 }
 
+function Get-DotenvValue {
+  param([string]$Key)
+
+  if (-not (Test-Path $EnvPath)) {
+    return $null
+  }
+
+  $Pattern = "^\s*$([regex]::Escape($Key))\s*=\s*(.*)$"
+  foreach ($Line in Get-Content $EnvPath) {
+    if ($Line -match '^\s*#') {
+      continue
+    }
+    if ($Line -match $Pattern) {
+      return $Matches[1].Trim().Trim('"').Trim("'")
+    }
+  }
+
+  return $null
+}
+
+function ConvertTo-BoolSetting {
+  param(
+    [string]$Key,
+    [string]$Value
+  )
+
+  switch ($Value.Trim().ToLowerInvariant()) {
+    "1" { return $true }
+    "true" { return $true }
+    "yes" { return $true }
+    "on" { return $true }
+    "0" { return $false }
+    "false" { return $false }
+    "no" { return $false }
+    "off" { return $false }
+    default { throw "$Key in .env must be one of true/false/1/0/yes/no/on/off." }
+  }
+}
+
+function Resolve-BoolSetting {
+  param(
+    [string]$Key,
+    [bool]$Default,
+    [bool]$CliEnable
+  )
+
+  if ($CliEnable) {
+    return $true
+  }
+
+  $RawValue = Get-DotenvValue -Key $Key
+  if ($null -eq $RawValue -or $RawValue -eq "") {
+    return $Default
+  }
+
+  return ConvertTo-BoolSetting -Key $Key -Value $RawValue
+}
+
 function Join-CommandParts {
   param([string[]]$Parts)
   return ($Parts -join "; ")
@@ -137,7 +195,22 @@ function Invoke-Bootstrap {
 Write-Host "Repo root: $RepoRoot"
 Write-Host "Logs dir:  $LogsDir"
 Write-Host "Mode:      $($(if ($Headless) { 'headless' } else { 'visible windows' }))"
-Write-Host "Optional modules: giveaway=$($EnableGiveaway.IsPresent) music=$($EnableMusic.IsPresent)"
+$EffectiveGiveaway = Resolve-BoolSetting -Key "DYNAMO_ENABLE_GIVEAWAY" -Default $false -CliEnable $EnableGiveaway.IsPresent
+$EffectiveMusic = Resolve-BoolSetting -Key "DYNAMO_ENABLE_MUSIC" -Default $false -CliEnable $EnableMusic.IsPresent
+$RegisterGlobally = Resolve-BoolSetting -Key "DISCORD_REGISTER_GLOBALLY" -Default $true -CliEnable $false
+$DevGuildId = Get-DotenvValue -Key "DISCORD_DEV_GUILD_ID"
+$CommandScope = if ($RegisterGlobally) {
+  "global"
+} elseif ($DevGuildId) {
+  "guild ($DevGuildId)"
+} else {
+  "guild (missing DISCORD_DEV_GUILD_ID)"
+}
+Write-Host "Command scope: $CommandScope"
+Write-Host "Optional modules: giveaway=$EffectiveGiveaway music=$EffectiveMusic"
+if (-not $EffectiveMusic) {
+  Write-Warning "Music module is disabled. Set DYNAMO_ENABLE_MUSIC=true in .env or pass -EnableMusic to register /music commands and show the module in the dashboard."
+}
 
 if (-not $SkipBootstrap) {
   Write-Host "Running Mongo bootstrap..."
