@@ -562,6 +562,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dynamo-core",
+ "dynamo-module-gameinfo",
  "dynamo-module-info",
  "dynamo-persistence-mongo",
  "tracing",
@@ -619,6 +620,16 @@ dependencies = [
  "tokio",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "dynamo-module-gameinfo"
+version = "0.1.0"
+dependencies = [
+ "dynamo-core",
+ "poise",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
