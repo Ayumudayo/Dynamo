@@ -16,7 +16,7 @@ impl Module for MusicModule {
         ModuleManifest::new(
             MODULE_ID,
             "Music",
-            "Optional music module with Songbird as the built-in playback backend.",
+            "Music module with Songbird as the built-in playback backend.",
             ModuleCategory::Music,
             false,
             GatewayIntents::GUILDS | GatewayIntents::GUILD_VOICE_STATES,

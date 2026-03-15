@@ -23,6 +23,7 @@ pub fn module_registry_with_optional(optional_modules: &OptionalModulesConfig) -
         Box::new(dynamo_module_greeting::GreetingModule),
         Box::new(dynamo_module_invite::InviteModule),
         Box::new(dynamo_module_moderation::ModerationModule),
+        Box::new(dynamo_module_music::MusicModule),
         Box::new(dynamo_module_suggestion::SuggestionModule),
         Box::new(dynamo_module_stats::StatsModule),
         Box::new(dynamo_module_ticket::TicketModule),
@@ -31,9 +32,6 @@ pub fn module_registry_with_optional(optional_modules: &OptionalModulesConfig) -
 
     if optional_modules.giveaway_enabled {
         modules.push(Box::new(dynamo_module_giveaway::GiveawayModule));
-    }
-    if optional_modules.music_enabled {
-        modules.push(Box::new(dynamo_module_music::MusicModule));
     }
 
     ModuleRegistry::new(modules)

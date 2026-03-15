@@ -1,7 +1,6 @@
 param(
   [switch]$SkipBootstrap,
   [switch]$EnableGiveaway,
-  [switch]$EnableMusic,
   [switch]$Headless,
   [switch]$DryRun
 )
@@ -27,9 +26,6 @@ if (-not $Shell) {
 $EnvOverrides = @{}
 if ($EnableGiveaway) {
   $EnvOverrides["DYNAMO_ENABLE_GIVEAWAY"] = "true"
-}
-if ($EnableMusic) {
-  $EnvOverrides["DYNAMO_ENABLE_MUSIC"] = "true"
 }
 
 function Get-DotenvValue {
@@ -90,6 +86,36 @@ function Resolve-BoolSetting {
   return ConvertTo-BoolSetting -Key $Key -Value $RawValue
 }
 
+function Stop-ManagedProcess {
+  param([string]$Name)
+
+  $PidPath = Join-Path $LogsDir "$Name.pid"
+  if (-not (Test-Path $PidPath)) {
+    return
+  }
+
+  $RawPid = Get-Content $PidPath -ErrorAction SilentlyContinue | Select-Object -First 1
+  if (-not $RawPid) {
+    Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
+    return
+  }
+
+  $ManagedPid = 0
+  if (-not [int]::TryParse($RawPid, [ref]$ManagedPid)) {
+    Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
+    return
+  }
+
+  $Process = Get-Process -Id $ManagedPid -ErrorAction SilentlyContinue
+  if ($Process) {
+    Write-Host "Stopping existing $Name process (pid=$ManagedPid)..."
+    Stop-Process -Id $ManagedPid -Force
+    Start-Sleep -Seconds 1
+  }
+
+  Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
+}
+
 function Join-CommandParts {
   param([string[]]$Parts)
   return ($Parts -join "; ")
@@ -100,6 +126,8 @@ function Start-RustProcess {
     [string]$Name,
     [string]$Crate
   )
+
+  Stop-ManagedProcess -Name $Name
 
   $ConsoleLogPath = Join-Path $LogsDir "$Name.console.log"
   $PidPath = Join-Path $LogsDir "$Name.pid"
@@ -196,21 +224,22 @@ Write-Host "Repo root: $RepoRoot"
 Write-Host "Logs dir:  $LogsDir"
 Write-Host "Mode:      $($(if ($Headless) { 'headless' } else { 'visible windows' }))"
 $EffectiveGiveaway = Resolve-BoolSetting -Key "DYNAMO_ENABLE_GIVEAWAY" -Default $false -CliEnable $EnableGiveaway.IsPresent
-$EffectiveMusic = Resolve-BoolSetting -Key "DYNAMO_ENABLE_MUSIC" -Default $false -CliEnable $EnableMusic.IsPresent
-$RegisterGlobally = Resolve-BoolSetting -Key "DISCORD_REGISTER_GLOBALLY" -Default $true -CliEnable $false
 $DevGuildId = Get-DotenvValue -Key "DISCORD_DEV_GUILD_ID"
+if (-not $DevGuildId) {
+  $DevGuildId = Get-DotenvValue -Key "GUILD_ID"
+}
+$RegisterGloballyDefault = (-not $DevGuildId)
+$RegisterGlobally = Resolve-BoolSetting -Key "DISCORD_REGISTER_GLOBALLY" -Default $RegisterGloballyDefault -CliEnable $false
 $CommandScope = if ($RegisterGlobally) {
   "global"
 } elseif ($DevGuildId) {
   "guild ($DevGuildId)"
 } else {
-  "guild (missing DISCORD_DEV_GUILD_ID)"
+  "guild (missing DISCORD_DEV_GUILD_ID/GUILD_ID)"
 }
 Write-Host "Command scope: $CommandScope"
-Write-Host "Optional modules: giveaway=$EffectiveGiveaway music=$EffectiveMusic"
-if (-not $EffectiveMusic) {
-  Write-Warning "Music module is disabled. Set DYNAMO_ENABLE_MUSIC=true in .env or pass -EnableMusic to register /music commands and show the module in the dashboard."
-}
+Write-Host "Optional modules: giveaway=$EffectiveGiveaway"
+Write-Host "Built-in modules: music=available"
 
 if (-not $SkipBootstrap) {
   Write-Host "Running Mongo bootstrap..."

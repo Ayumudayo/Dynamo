@@ -24,6 +24,7 @@ The repository still contains the legacy JavaScript bot while the Rust migration
 - `suggestion`: suggestion board workflow with moderator buttons and modal reasons
 - `stats`: messages, interactions, XP leveling, voice session tracking
 - `moderation`: warnings, timeout, kick, ban, unban, softban, nickname changes
+- `music`: deployment-disabled-by-default module with `Songbird` playback and dashboard-configurable guild toggles
 - `ticket`: ticket panel, category routing, participant management, transcript logging
 
 ## Optional First-Party Modules
@@ -31,17 +32,14 @@ The repository still contains the legacy JavaScript bot while the Rust migration
 These are part of the migration plan but are not registered by default in the public v1 template:
 
 - `giveaway`
-- `music`
 
 Enable them explicitly with environment flags:
 
 - `DYNAMO_ENABLE_GIVEAWAY=true`
-- `DYNAMO_ENABLE_MUSIC=true`
 
 Current optional-module status:
 
 - `giveaway`: implemented as an opt-in persisted slash workflow with entry buttons and timed completion polling
-- `music`: `Songbird` default backend is implemented with queue-oriented slash commands, and `Lavalink` is left as a documentation-only deployment guide
 
 ## Runtime Model
 
@@ -60,7 +58,9 @@ Minimum variables:
 
 - `DISCORD_TOKEN` or `BOT_TOKEN`
 - `MONGODB_URI` or `MONGO_CONNECTION`
-- `DISCORD_DEV_GUILD_ID` when `DISCORD_REGISTER_GLOBALLY=false`
+- `DISCORD_DEV_GUILD_ID` or `GUILD_ID` when `DISCORD_REGISTER_GLOBALLY=false`
+
+If `DISCORD_REGISTER_GLOBALLY` is omitted and `DISCORD_DEV_GUILD_ID` or `GUILD_ID` is present, the launcher and bot default to guild-scoped command sync for faster development iteration.
 
 Common optional variables:
 
@@ -109,7 +109,7 @@ cargo run -p dynamo-dashboard
 cargo run -p dynamo-bot
 ```
 
-If `DISCORD_REGISTER_GLOBALLY=false`, commands are registered only in `DISCORD_DEV_GUILD_ID`.
+If `DISCORD_REGISTER_GLOBALLY=false`, commands are registered only in `DISCORD_DEV_GUILD_ID` or `GUILD_ID`.
 
 ## Startup Scripts
 
@@ -131,11 +131,20 @@ Useful flags:
 
 - `--skip-bootstrap` / `-SkipBootstrap`
 - `--enable-giveaway` / `-EnableGiveaway`
-- `--enable-music` / `-EnableMusic`
 - `-Headless` for the PowerShell launcher
 - `--dry-run` / `-DryRun`
 
-The launchers print the effective command scope and optional-module state resolved from `.env`, with CLI flags taking precedence over `.env` for the optional modules.
+Stop managed dashboard and bot processes:
+
+```powershell
+./scripts/dev-down.ps1
+```
+
+```bash
+./scripts/dev-down.sh
+```
+
+The launchers print the effective command scope and optional-module state resolved from `.env`, with CLI flags taking precedence over `.env` for optional modules.
 
 ## Validation Commands
 

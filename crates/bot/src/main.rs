@@ -81,9 +81,7 @@ async fn main() -> Result<(), Error> {
         .build();
 
     let mut client_builder = serenity::ClientBuilder::new(config.discord.token, intents);
-    if config.optional_modules.music_enabled {
-        client_builder = client_builder.register_songbird();
-    }
+    client_builder = client_builder.register_songbird();
 
     let mut client = client_builder.framework(framework).await?;
 

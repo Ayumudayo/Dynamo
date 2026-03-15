@@ -7,7 +7,6 @@ LOGS_DIR="$ROOT_DIR/logs"
 
 SKIP_BOOTSTRAP=false
 ENABLE_GIVEAWAY=false
-ENABLE_MUSIC=false
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -21,7 +20,7 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --enable-music)
-      ENABLE_MUSIC=true
+      echo "--enable-music is no longer needed. Music is a built-in module; use dashboard deployment/guild toggles." >&2
       shift
       ;;
     --dry-run)
@@ -48,6 +47,7 @@ dotenv_value() {
     return 1
   fi
   line="${line#*=}"
+  line="${line%$'\r'}"
   line="${line%\"}"
   line="${line#\"}"
   line="${line%\'}"
@@ -104,11 +104,33 @@ run_with_overrides() {
     if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
       export DYNAMO_ENABLE_GIVEAWAY=true
     fi
-    if [[ "$ENABLE_MUSIC" == "true" ]]; then
-      export DYNAMO_ENABLE_MUSIC=true
-    fi
     cargo run -p "$crate" "$@"
   )
+}
+
+stop_managed_process() {
+  local name="$1"
+  local pid_path="$LOGS_DIR/${name}.pid"
+
+  if [[ ! -f "$pid_path" ]]; then
+    return
+  fi
+
+  local pid
+  pid="$(cat "$pid_path" 2>/dev/null || true)"
+  if [[ -z "$pid" ]]; then
+    rm -f "$pid_path"
+    return
+  fi
+
+  if kill -0 "$pid" >/dev/null 2>&1; then
+    echo "Stopping existing $name process (pid=$pid)..."
+    kill "$pid" >/dev/null 2>&1 || true
+    sleep 1
+    kill -9 "$pid" >/dev/null 2>&1 || true
+  fi
+
+  rm -f "$pid_path"
 }
 
 start_process() {
@@ -117,6 +139,8 @@ start_process() {
   local stdout_path="$LOGS_DIR/${name}.stdout.log"
   local stderr_path="$LOGS_DIR/${name}.stderr.log"
   local pid_path="$LOGS_DIR/${name}.pid"
+
+  stop_managed_process "$name"
 
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[dry-run] (cd '$ROOT_DIR' && cargo run -p '$crate') >'$stdout_path' 2>'$stderr_path' &"
@@ -127,9 +151,6 @@ start_process() {
     cd "$ROOT_DIR"
     if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
       export DYNAMO_ENABLE_GIVEAWAY=true
-    fi
-    if [[ "$ENABLE_MUSIC" == "true" ]]; then
-      export DYNAMO_ENABLE_MUSIC=true
     fi
     nohup cargo run -p "$crate" >"$stdout_path" 2>"$stderr_path" &
     echo $! >"$pid_path"
@@ -159,22 +180,26 @@ start_process() {
 echo "Repo root: $ROOT_DIR"
 echo "Logs dir:  $LOGS_DIR"
 COMMAND_SCOPE="global"
-REGISTER_GLOBALLY="$(resolve_bool_setting "DISCORD_REGISTER_GLOBALLY" "true" "false")"
 DEV_GUILD_ID="$(dotenv_value "DISCORD_DEV_GUILD_ID" || true)"
+if [[ -z "$DEV_GUILD_ID" ]]; then
+  DEV_GUILD_ID="$(dotenv_value "GUILD_ID" || true)"
+fi
+REGISTER_GLOBALLY_DEFAULT="true"
+if [[ -n "$DEV_GUILD_ID" ]]; then
+  REGISTER_GLOBALLY_DEFAULT="false"
+fi
+REGISTER_GLOBALLY="$(resolve_bool_setting "DISCORD_REGISTER_GLOBALLY" "$REGISTER_GLOBALLY_DEFAULT" "false")"
 if [[ "$REGISTER_GLOBALLY" != "true" ]]; then
   if [[ -n "$DEV_GUILD_ID" ]]; then
     COMMAND_SCOPE="guild ($DEV_GUILD_ID)"
   else
-    COMMAND_SCOPE="guild (missing DISCORD_DEV_GUILD_ID)"
+    COMMAND_SCOPE="guild (missing DISCORD_DEV_GUILD_ID/GUILD_ID)"
   fi
 fi
 EFFECTIVE_GIVEAWAY="$(resolve_bool_setting "DYNAMO_ENABLE_GIVEAWAY" "false" "$ENABLE_GIVEAWAY")"
-EFFECTIVE_MUSIC="$(resolve_bool_setting "DYNAMO_ENABLE_MUSIC" "false" "$ENABLE_MUSIC")"
 echo "Command scope: $COMMAND_SCOPE"
-echo "Optional modules: giveaway=$EFFECTIVE_GIVEAWAY music=$EFFECTIVE_MUSIC"
-if [[ "$EFFECTIVE_MUSIC" != "true" ]]; then
-  echo "WARNING: Music module is disabled. Set DYNAMO_ENABLE_MUSIC=true in .env or pass --enable-music to register /music commands and show the module in the dashboard." >&2
-fi
+echo "Optional modules: giveaway=$EFFECTIVE_GIVEAWAY"
+echo "Built-in modules: music=available"
 
 if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then

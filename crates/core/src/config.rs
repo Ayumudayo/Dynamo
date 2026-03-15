@@ -15,18 +15,27 @@ impl AppConfig {
             .or_else(|_| env::var("BOT_TOKEN"))
             .map_err(|_| anyhow::anyhow!("DISCORD_TOKEN or BOT_TOKEN must be set"))?;
 
-        let register_globally = parse_bool_env("DISCORD_REGISTER_GLOBALLY", true)?;
         let dev_guild_id = env::var("DISCORD_DEV_GUILD_ID")
+            .or_else(|_| env::var("GUILD_ID"))
             .ok()
             .map(|value| value.parse::<u64>())
             .transpose()
             .map_err(|error| {
-                anyhow::anyhow!("DISCORD_DEV_GUILD_ID must be a valid u64: {error}")
+                anyhow::anyhow!("DISCORD_DEV_GUILD_ID or GUILD_ID must be a valid u64: {error}")
             })?;
+        let register_globally = match env::var("DISCORD_REGISTER_GLOBALLY") {
+            Ok(value) => parse_bool_value("DISCORD_REGISTER_GLOBALLY", &value)?,
+            Err(env::VarError::NotPresent) => dev_guild_id.is_none(),
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "DISCORD_REGISTER_GLOBALLY could not be read: {error}"
+                ));
+            }
+        };
 
         if !register_globally && dev_guild_id.is_none() {
             anyhow::bail!(
-                "DISCORD_DEV_GUILD_ID is required when DISCORD_REGISTER_GLOBALLY is false"
+                "DISCORD_DEV_GUILD_ID or GUILD_ID is required when DISCORD_REGISTER_GLOBALLY is false"
             );
         }
 
@@ -59,27 +68,29 @@ pub struct CommandSyncConfig {
 #[derive(Debug, Clone, Default)]
 pub struct OptionalModulesConfig {
     pub giveaway_enabled: bool,
-    pub music_enabled: bool,
 }
 
 impl OptionalModulesConfig {
     pub fn from_env() -> Result<Self, Error> {
         Ok(Self {
             giveaway_enabled: parse_bool_env("DYNAMO_ENABLE_GIVEAWAY", false)?,
-            music_enabled: parse_bool_env("DYNAMO_ENABLE_MUSIC", false)?,
         })
     }
 }
 
 fn parse_bool_env(key: &str, default: bool) -> Result<bool, Error> {
     match env::var(key) {
-        Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
-            "1" | "true" | "yes" | "on" => Ok(true),
-            "0" | "false" | "no" | "off" => Ok(false),
-            _ => anyhow::bail!("{key} must be one of true/false/1/0/yes/no/on/off"),
-        },
+        Ok(value) => parse_bool_value(key, &value),
         Err(env::VarError::NotPresent) => Ok(default),
         Err(error) => Err(anyhow::anyhow!("{key} could not be read: {error}")),
+    }
+}
+
+fn parse_bool_value(key: &str, value: &str) -> Result<bool, Error> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("{key} must be one of true/false/1/0/yes/no/on/off"),
     }
 }
 
