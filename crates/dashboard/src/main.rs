@@ -553,11 +553,7 @@ async fn guild_page(
                 .get(entry.module.id)
                 .cloned()
                 .unwrap_or_default();
-            let configuration_pretty = pretty_configuration(&current.configuration);
-            let structured_fields =
-                render_structured_fields(entry, &current.configuration, guild_id, entry.module.id);
-            let advanced_form =
-                render_advanced_json_form(guild_id, entry.module.id, &configuration_pretty);
+            let structured_fields = render_structured_fields(entry, &current.configuration);
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             render_guild_module_modal(
@@ -567,7 +563,6 @@ async fn guild_page(
                 &runtime_notice,
                 &current,
                 &structured_fields,
-                &advanced_form,
             )
         })
         .collect::<Vec<_>>()
@@ -1258,6 +1253,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .toggle-switch input:checked + .toggle-slider { background: rgba(72, 229, 178, 0.24); }
 .toggle-switch input:checked + .toggle-slider::after { transform: translateX(20px); background: var(--success); }
 .settings-modal-overlay { position: fixed; inset: 0; background: rgba(7, 9, 14, 0.74); display: grid; place-items: center; padding: 20px; z-index: 50; }
+.settings-modal-overlay[hidden] { display: none !important; }
 .settings-modal { width: min(560px, 100%); max-height: min(80vh, 860px); overflow: auto; background: #11151e; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
 .settings-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 18px 12px; position: sticky; top: 0; background: #11151e; }
 .settings-modal-body { padding: 0 18px 18px; }
@@ -1470,13 +1466,12 @@ fn render_guild_module_modal(
     runtime_notice: &str,
     current: &GuildModuleSettings,
     structured_fields: &str,
-    advanced_form: &str,
 ) -> String {
     render_settings_modal(
         &modal_id_for_module("guild", entry.module.id),
         entry.module.display_name,
         &format!(
-            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchGuildModule(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save</button><span id=\"guild-status-{}\" style=\"margin-left:8px\"></span></form>{}",
+            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchGuildModule(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save</button><span id=\"guild-status-{}\" style=\"margin-left:8px\"></span></form>",
             render_guild_status(resolved),
             runtime_notice,
             guild_id,
@@ -1484,7 +1479,6 @@ fn render_guild_module_modal(
             if current.enabled { "checked" } else { "" },
             structured_fields,
             escape_html(entry.module.id),
-            advanced_form,
         ),
     )
 }
@@ -1507,15 +1501,11 @@ fn render_deployment_command_modals(
                 .iter()
                 .find(|state| state.command.id == entry.command.id);
             let structured_fields = render_command_structured_fields(entry, &current.configuration);
-            let advanced_form = render_deployment_command_json_form(
-                &entry.command.id,
-                &pretty_configuration(&current.configuration),
-            );
             render_settings_modal(
                 &modal_id_for_command("deployment", &entry.command.id),
                 &entry.command.display_name,
                 &format!(
-                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchDeploymentCommand(event, '{}')\"><label><input type=\"checkbox\" name=\"installed\" {}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{}\" style=\"margin-left:8px\"></span></form>{}",
+                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchDeploymentCommand(event, '{}')\"><label><input type=\"checkbox\" name=\"installed\" {}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{}\" style=\"margin-left:8px\"></span></form>",
                     resolved
                         .map(render_deployment_command_status)
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -1524,7 +1514,6 @@ fn render_deployment_command_modals(
                     if current.enabled { "checked" } else { "" },
                     structured_fields,
                     status_key(&entry.command.id),
-                    advanced_form,
                 ),
             )
         })
@@ -1551,16 +1540,11 @@ fn render_guild_command_modals(
                 .iter()
                 .find(|state| state.command.id == entry.command.id);
             let structured_fields = render_command_structured_fields(entry, &current.configuration);
-            let advanced_form = render_guild_command_json_form(
-                guild_id,
-                &entry.command.id,
-                &pretty_configuration(&current.configuration),
-            );
             render_settings_modal(
                 &modal_id_for_command("guild", &entry.command.id),
                 &entry.command.display_name,
                 &format!(
-                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchGuildCommand(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{}\" style=\"margin-left:8px\"></span></form>{}",
+                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchGuildCommand(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{}\" style=\"margin-left:8px\"></span></form>",
                     resolved
                         .map(render_guild_command_status)
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -1569,7 +1553,6 @@ fn render_guild_command_modals(
                     if current.enabled { "checked" } else { "" },
                     structured_fields,
                     status_key(&entry.command.id),
-                    advanced_form,
                 ),
             )
         })
@@ -1809,18 +1792,11 @@ fn runtime_notice_text(module_id: &str) -> Option<&'static str> {
     }
 }
 
-fn render_structured_fields(
-    entry: &ModuleCatalogEntry,
-    configuration: &Value,
-    guild_id: u64,
-    module_id: &str,
-) -> String {
+fn render_structured_fields(entry: &ModuleCatalogEntry, configuration: &Value) -> String {
     render_settings_sections(
         &entry.settings,
         configuration,
-        &format!(
-            "<p>No structured settings for this module. Use the advanced JSON editor below.</p><input type=\"hidden\" data-setting-key=\"__empty\" data-setting-kind=\"text\" value=\"\" form=\"structured-{guild_id}-{module_id}\" />"
-        ),
+        "<p>No configurable fields for this module.</p>",
     )
 }
 
@@ -1861,7 +1837,7 @@ fn render_command_structured_fields(entry: &CommandCatalogEntry, configuration: 
     render_settings_sections(
         &entry.settings,
         configuration,
-        "<p>No structured settings for this command. Use the advanced JSON editor below.</p>",
+        "<p>No configurable fields for this command.</p>",
     )
 }
 
@@ -1948,38 +1924,6 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
     }
 }
 
-fn render_advanced_json_form(guild_id: u64, module_id: &str, configuration_pretty: &str) -> String {
-    format!(
-        "<details><summary>Advanced JSON</summary><form onsubmit=\"return patchGuildModuleJson(event, {guild_id}, '{module_id}')\"><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save JSON</button><span id=\"guild-json-status-{module_id}\" style=\"margin-left:8px\"></span></form></details>",
-        guild_id = guild_id,
-        module_id = escape_html(module_id),
-        configuration = escape_html(configuration_pretty),
-    )
-}
-
-fn render_deployment_command_json_form(command_id: &str, configuration_pretty: &str) -> String {
-    format!(
-        "<details><summary>Advanced JSON</summary><form onsubmit=\"return patchDeploymentCommandJson(event, '{command_id}')\"><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save JSON</button><span id=\"deployment-command-json-status-{command_key}\" style=\"margin-left:8px\"></span></form></details>",
-        command_id = escape_html(command_id),
-        command_key = status_key(command_id),
-        configuration = escape_html(configuration_pretty),
-    )
-}
-
-fn render_guild_command_json_form(
-    guild_id: u64,
-    command_id: &str,
-    configuration_pretty: &str,
-) -> String {
-    format!(
-        "<details><summary>Advanced JSON</summary><form onsubmit=\"return patchGuildCommandJson(event, {guild_id}, '{command_id}')\"><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save JSON</button><span id=\"guild-command-json-status-{command_key}\" style=\"margin-left:8px\"></span></form></details>",
-        guild_id = guild_id,
-        command_id = escape_html(command_id),
-        command_key = status_key(command_id),
-        configuration = escape_html(configuration_pretty),
-    )
-}
-
 fn render_deployment_status(state: &ResolvedModuleState) -> String {
     format!(
         "installed: {} | deployment: {} | effective: {}",
@@ -2045,14 +1989,6 @@ fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
         current = current.get(segment)?;
     }
     Some(current)
-}
-
-fn pretty_configuration(configuration: &Value) -> String {
-    if configuration.is_null() {
-        "{}".to_string()
-    } else {
-        serde_json::to_string_pretty(configuration).unwrap_or_else(|_| "{}".to_string())
-    }
 }
 
 fn status_key(value: &str) -> String {
@@ -2757,74 +2693,14 @@ async function toggleGuildCommand(guildId, commandId, enabled) {
 }
 
 async function patchGuildModuleJson(event, guildId, moduleId) {
-  event.preventDefault();
-  const form = event.target;
-  let configuration;
-  try {
-    configuration = JSON.parse(form.configuration.value || '{}');
-  } catch (error) {
-    document.getElementById(`guild-json-status-${moduleId}`).textContent = 'Error: invalid JSON';
-    return false;
-  }
-
-  const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ configuration }),
-  });
-  const output = await response.json();
-  document.getElementById(`guild-json-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
-  if (response.ok) {
-    closeSettingsModal(`modal-guild-module-${statusKey(moduleId)}`);
-  }
   return false;
 }
 
 async function patchDeploymentCommandJson(event, commandId) {
-  event.preventDefault();
-  const form = event.target;
-  let configuration;
-  try {
-    configuration = JSON.parse(form.configuration.value || '{}');
-  } catch (error) {
-    document.getElementById(`deployment-command-json-status-${statusKey(commandId)}`).textContent = 'Error: invalid JSON';
-    return false;
-  }
-
-  const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ configuration }),
-  });
-  const output = await response.json();
-  document.getElementById(`deployment-command-json-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
-  if (response.ok) {
-    closeSettingsModal(`modal-deployment-command-${statusKey(commandId)}`);
-  }
   return false;
 }
 
 async function patchGuildCommandJson(event, guildId, commandId) {
-  event.preventDefault();
-  const form = event.target;
-  let configuration;
-  try {
-    configuration = JSON.parse(form.configuration.value || '{}');
-  } catch (error) {
-    document.getElementById(`guild-command-json-status-${statusKey(commandId)}`).textContent = 'Error: invalid JSON';
-    return false;
-  }
-
-  const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ configuration }),
-  });
-  const output = await response.json();
-  document.getElementById(`guild-command-json-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
-  if (response.ok) {
-    closeSettingsModal(`modal-guild-command-${statusKey(commandId)}`);
-  }
   return false;
 }
 "#
@@ -2833,8 +2709,8 @@ async function patchGuildCommandJson(event, guildId, commandId) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardGuild, escape_html, render_advanced_json_form, render_field,
-        render_module_runtime_notice, sanitize_redirect_target, user_can_manage_guild,
+        DashboardGuild, escape_html, render_field, render_module_runtime_notice,
+        sanitize_redirect_target, user_can_manage_guild,
     };
     use dynamo_core::{SettingsField, SettingsFieldKind};
 
@@ -2860,14 +2736,6 @@ mod tests {
         assert!(rendered.contains("data-setting-key=\"channel_id\""));
         assert!(rendered.contains("data-setting-kind=\"text\""));
         assert!(rendered.contains("value=\"123\""));
-    }
-
-    #[test]
-    fn advanced_json_form_includes_textarea_and_submit() {
-        let rendered = render_advanced_json_form(1, "stock", "{\n  \"foo\": \"bar\"\n}");
-        assert!(rendered.contains("textarea"));
-        assert!(rendered.contains("patchGuildModuleJson"));
-        assert!(rendered.contains("guild-json-status-stock"));
     }
 
     #[test]

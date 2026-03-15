@@ -5,8 +5,9 @@ use std::{
 };
 
 use dynamo_core::{
-    Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module, ModuleCategory,
-    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, StockQuote,
+    Context, DeploymentCommandSettings, DiscordCommand, Error, GatewayIntents,
+    GuildCommandSettings, GuildModuleSettings, Module, ModuleCategory, ModuleManifest,
+    SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, StockQuote,
     StockQuoteService, module_access_for_context,
 };
 use poise::serenity_prelude::{
@@ -120,6 +121,26 @@ impl Module for StockModule {
             }],
         }
     }
+
+    fn command_settings_schema(&self, command_id: &str) -> SettingsSchema {
+        match command_id {
+            "etf" => SettingsSchema {
+                sections: vec![SettingsSection {
+                    id: "etf",
+                    title: "ETF Tickers",
+                    description: Some("Set up to five ETF tickers for /etf in display order."),
+                    fields: vec![
+                        etf_ticker_field("ticker_1", "Ticker 1"),
+                        etf_ticker_field("ticker_2", "Ticker 2"),
+                        etf_ticker_field("ticker_3", "Ticker 3"),
+                        etf_ticker_field("ticker_4", "Ticker 4"),
+                        etf_ticker_field("ticker_5", "Ticker 5"),
+                    ],
+                }],
+            },
+            _ => SettingsSchema::empty(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -127,6 +148,16 @@ impl Module for StockModule {
 struct StockSettings {
     default_symbol: String,
     etf_tickers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(default)]
+struct EtfCommandSettings {
+    ticker_1: String,
+    ticker_2: String,
+    ticker_3: String,
+    ticker_4: String,
+    ticker_5: String,
 }
 
 impl Default for StockSettings {
@@ -214,8 +245,7 @@ async fn etf(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
 
-    let settings = load_settings(ctx).await?;
-    let tickers = normalize_symbols(settings.etf_tickers);
+    let tickers = load_effective_etf_tickers(ctx).await?;
     if tickers.is_empty() {
         ctx.say(
             "No stock tickers configured for this server. Please configure them in the dashboard.",
@@ -281,10 +311,85 @@ async fn load_settings(ctx: Context<'_>) -> Result<StockSettings, Error> {
     Ok(settings)
 }
 
+async fn load_effective_etf_tickers(ctx: Context<'_>) -> Result<Vec<String>, Error> {
+    let settings = load_settings(ctx).await?;
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(normalize_symbols(settings.etf_tickers));
+    };
+
+    let deployment = ctx
+        .data()
+        .persistence
+        .deployment_settings_or_default()
+        .await?;
+    let guild_settings = ctx
+        .data()
+        .persistence
+        .guild_settings_or_default(guild_id.get())
+        .await?;
+
+    let guild_override = guild_settings
+        .commands
+        .get("etf")
+        .and_then(parse_etf_command_settings)
+        .filter(|tickers| !tickers.is_empty());
+    if let Some(tickers) = guild_override {
+        return Ok(tickers);
+    }
+
+    let deployment_override = deployment
+        .commands
+        .get("etf")
+        .and_then(parse_deployment_etf_command_settings)
+        .filter(|tickers| !tickers.is_empty());
+    if let Some(tickers) = deployment_override {
+        return Ok(tickers);
+    }
+
+    Ok(normalize_symbols(settings.etf_tickers))
+}
+
 fn parse_stock_settings(module: &GuildModuleSettings) -> Result<StockSettings, Error> {
     Ok(serde_json::from_value::<StockSettings>(
         module.configuration.clone(),
     )?)
+}
+
+fn parse_etf_command_settings(command: &GuildCommandSettings) -> Option<Vec<String>> {
+    parse_etf_command_configuration(&command.configuration).ok()
+}
+
+fn parse_deployment_etf_command_settings(
+    command: &DeploymentCommandSettings,
+) -> Option<Vec<String>> {
+    parse_etf_command_configuration(&command.configuration).ok()
+}
+
+fn parse_etf_command_configuration(
+    configuration: &serde_json::Value,
+) -> Result<Vec<String>, Error> {
+    if configuration.is_null() {
+        return Ok(Vec::new());
+    }
+
+    let settings = serde_json::from_value::<EtfCommandSettings>(configuration.clone())?;
+    Ok(normalize_symbols(vec![
+        settings.ticker_1,
+        settings.ticker_2,
+        settings.ticker_3,
+        settings.ticker_4,
+        settings.ticker_5,
+    ]))
+}
+
+fn etf_ticker_field(key: &'static str, label: &'static str) -> SettingsField {
+    SettingsField {
+        key,
+        label,
+        help_text: Some("Optional ticker symbol. Leave blank to skip this slot."),
+        required: false,
+        kind: SettingsFieldKind::Text,
+    }
 }
 
 fn normalize_symbol(symbol: String) -> String {
