@@ -819,22 +819,34 @@ fn render_selector_page(
 ) -> String {
     let manageable_now = guild_cards.iter().filter(|card| card.bot_present).count();
     let needs_install = guild_cards.len().saturating_sub(manageable_now);
-    let guild_cards_markup = if guild_cards.is_empty() {
-        "<article class=\"panel\"><h2>No manageable servers</h2><p>Your Discord account does not currently have Manage Server or Administrator in any shared guilds.</p></article>".to_string()
-    } else {
-        guild_cards
-            .iter()
-            .map(render_guild_card)
-            .collect::<Vec<_>>()
-            .join("\n")
-    };
+    let connected_markup = guild_cards
+        .iter()
+        .filter(|card| card.bot_present)
+        .map(render_guild_card)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let install_markup = guild_cards
+        .iter()
+        .filter(|card| !card.bot_present)
+        .map(render_guild_card)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     let content = format!(
-        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Server Selector</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your Discord account has Manage Server or Administrator are listed.</p></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"grid three\">{guild_cards_markup}</section>",
+        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section>",
         manageable_now = manageable_now,
         needs_install = needs_install,
         total = guild_cards.len(),
-        guild_cards_markup = guild_cards_markup,
+        connected_markup = if connected_markup.is_empty() {
+            "<article class=\"panel empty-state\"><h3>No connected servers</h3><p>Invite the bot into one of your manageable servers to unlock guild settings here.</p></article>".to_string()
+        } else {
+            connected_markup
+        },
+        install_markup = if install_markup.is_empty() {
+            "<article class=\"panel empty-state\"><h3>Nothing pending</h3><p>Every eligible server already has the bot installed.</p></article>".to_string()
+        } else {
+            install_markup
+        },
     );
 
     render_document(
@@ -882,7 +894,8 @@ fn render_guild_card(card: &GuildCard) -> String {
         });
 
     format!(
-        "<article class=\"panel guild-card\"><div class=\"guild-card-head\">{media}<div><h2>{name}</h2>{badge}</div></div><p>{description}</p>{action}</article>",
+        "<article class=\"panel guild-card\" data-guild-name=\"{data_name}\"><div class=\"guild-card-head\">{media}<div><h2>{name}</h2>{badge}</div></div><p>{description}</p><div class=\"guild-card-meta\"><span>Guild ID</span><code>{guild_id}</code></div>{action}</article>",
+        data_name = escape_html(&card.name.to_ascii_lowercase()),
         media = media,
         name = escape_html(&card.name),
         badge = badge,
@@ -891,6 +904,7 @@ fn render_guild_card(card: &GuildCard) -> String {
         } else {
             "The bot is not in this server yet. Install it first, then return here."
         },
+        guild_id = card.id,
         action = action,
     )
 }
@@ -951,9 +965,10 @@ fn render_document(
     });
 
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{title}</title><style>{styles}</style></head><body><div class=\"backdrop\"></div><main class=\"shell\"><header class=\"topbar\"><div class=\"brand\">{brand_media}<div><p class=\"eyebrow\">Dynamo Dashboard</p><h1>{app_name}</h1></div></div><nav class=\"nav\">{nav}</nav><div class=\"session-box\">{session_summary}</div></header><section class=\"page-head\"><div><p class=\"eyebrow\">Control Plane</p><h2>{page_title}</h2><p class=\"lede\">{subtitle}</p></div><div class=\"stat-strip\"><div class=\"stat\"><span>Modules</span><strong>{module_count}</strong></div><div class=\"stat\"><span>Commands</span><strong>{command_count}</strong></div></div></section>{content}</main></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{title}</title><style>{styles}</style></head><body><div class=\"backdrop\"></div><div class=\"app-shell\"><aside class=\"sidebar\"><div class=\"sidebar-brand\">{brand_media}<div><p class=\"eyebrow\">Dynamo</p><h1>{app_name}</h1></div></div><nav class=\"sidebar-nav\">{nav}</nav><div class=\"sidebar-footer\"><span class=\"sidebar-footnote\">Rust dashboard control plane</span></div></aside><main class=\"content-shell\"><header class=\"content-topbar\"><div class=\"content-topbar-copy\"><p class=\"eyebrow\">Control Plane</p><h2>{page_title}</h2><p class=\"lede\">{subtitle}</p></div><div class=\"content-topbar-right\"><div class=\"stat-strip\"><div class=\"stat\"><span>Modules</span><strong>{module_count}</strong></div><div class=\"stat\"><span>Commands</span><strong>{command_count}</strong></div></div><div class=\"session-box\">{session_summary}</div></div></header><section class=\"content-body\">{content}</section></main></div><script>{ui_script}</script></body></html>",
         title = escape_html(title),
         styles = dashboard_styles(),
+        ui_script = dashboard_ui_script(),
         brand_media =
             app_icon
                 .map(|url| format!(
@@ -979,13 +994,21 @@ fn render_nav(
     session: Option<&DashboardSession>,
     active_path: Option<&str>,
 ) -> String {
-    let mut items = vec![nav_link("Home", "/", active_path == Some("/"))];
+    let default_dashboard = if session.is_some() { "/selector" } else { "/" };
+    let mut items = vec![nav_link(
+        "Dashboard",
+        default_dashboard,
+        active_path == Some("/") || active_path == Some("/selector"),
+    )];
     if session.is_some() {
+        items.push(nav_link("Modules", "#modules", false));
+        items.push(nav_link("Commands", "#commands", false));
         items.push(nav_link(
-            "Servers",
+            "Server Listing",
             "/selector",
             active_path == Some("/selector"),
         ));
+        items.push(nav_link("Logs", "#activity", false));
         if session
             .map(|session| user_is_dashboard_admin(state, &session.user))
             .unwrap_or(false)
@@ -1051,16 +1074,19 @@ fn dashboard_styles() -> &'static str {
     r#"
 @import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
 :root {
-  --bg: #020617;
-  --panel: rgba(15, 23, 42, 0.9);
-  --panel-strong: rgba(15, 23, 42, 0.96);
-  --panel-border: rgba(148, 163, 184, 0.18);
+  --bg: #0c0f17;
+  --sidebar: #0b0e15;
+  --panel: #171b24;
+  --panel-strong: #1f2430;
+  --panel-border: rgba(255, 255, 255, 0.04);
   --text: #f8fafc;
-  --muted: #94a3b8;
-  --accent: #22c55e;
-  --accent-strong: #16a34a;
+  --muted: #7f8ba3;
+  --accent: #dd2e53;
+  --accent-strong: #ff4d6d;
+  --accent-soft: rgba(221, 46, 83, 0.16);
+  --success: #48e5b2;
   --danger: #f97316;
-  --shadow: 0 24px 80px rgba(2, 6, 23, 0.45);
+  --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 * { box-sizing: border-box; }
 html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: 'Fira Sans', sans-serif; }
@@ -1068,87 +1094,119 @@ body { position: relative; }
 .backdrop {
   position: fixed; inset: 0;
   background:
-    radial-gradient(circle at top left, rgba(34, 197, 94, 0.18), transparent 28%),
-    radial-gradient(circle at top right, rgba(59, 130, 246, 0.14), transparent 24%),
-    linear-gradient(180deg, rgba(2, 6, 23, 0.98), rgba(2, 6, 23, 1));
+    radial-gradient(circle at left bottom, rgba(221, 46, 83, 0.18), transparent 18%),
+    radial-gradient(circle at top left, rgba(61, 84, 143, 0.12), transparent 24%),
+    linear-gradient(180deg, #0b0e15, #0c0f17);
   pointer-events: none;
 }
-.shell { position: relative; max-width: 1440px; margin: 0 auto; padding: 24px; }
-.topbar, .page-head, .panel, section, article, details { border: 1px solid var(--panel-border); background: var(--panel); box-shadow: var(--shadow); backdrop-filter: blur(18px); }
-.topbar {
-  position: sticky; top: 16px; z-index: 20;
-  display: grid; grid-template-columns: auto 1fr auto; gap: 16px; align-items: center;
-  padding: 16px 20px; border-radius: 24px; margin-bottom: 24px;
+.app-shell { position: relative; display: grid; grid-template-columns: 252px minmax(0, 1fr); min-height: 100vh; }
+.sidebar {
+  position: sticky; top: 0; align-self: start; height: 100vh; padding: 24px 18px;
+  background: rgba(8, 10, 16, 0.96); border-right: 1px solid rgba(255,255,255,0.05);
+  display: flex; flex-direction: column; gap: 28px;
 }
-.brand, .session-summary, .guild-card-head { display: flex; align-items: center; gap: 14px; }
+.content-shell { padding: 28px 28px 40px; min-width: 0; }
+.content-topbar, .panel, section, article, details { border: 1px solid var(--panel-border); background: var(--panel); box-shadow: var(--shadow); }
+.content-topbar {
+  display: flex; justify-content: space-between; gap: 18px; align-items: center;
+  padding: 22px 24px; border-radius: 22px; margin-bottom: 24px;
+}
+.content-topbar-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: end; }
+.sidebar-brand, .session-summary, .guild-card-head { display: flex; align-items: center; gap: 14px; }
 .app-avatar, .user-avatar, .guild-avatar, .app-avatar-fallback, .user-avatar-fallback, .guild-avatar-fallback {
-  width: 52px; height: 52px; border-radius: 16px; object-fit: cover; flex: none;
+  width: 56px; height: 56px; border-radius: 18px; object-fit: cover; flex: none;
   display: grid; place-items: center; font-family: 'Fira Code', monospace; font-weight: 700;
-  background: linear-gradient(135deg, rgba(34, 197, 94, 0.2), rgba(59, 130, 246, 0.16));
-  border: 1px solid rgba(255,255,255,0.08);
+  background: linear-gradient(135deg, rgba(221, 46, 83, 0.22), rgba(61, 84, 143, 0.18));
+  border: 1px solid rgba(255,255,255,0.06);
 }
 .eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-family: 'Fira Code', monospace; }
 h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
-.nav { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+.sidebar-nav { display: grid; gap: 8px; }
 .nav-link {
-  color: var(--muted); text-decoration: none; padding: 10px 14px; border-radius: 999px;
+  color: var(--muted); text-decoration: none; padding: 13px 14px; border-radius: 14px;
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
-  border: 1px solid transparent; cursor: pointer;
+  border: 1px solid transparent; cursor: pointer; font-weight: 600;
 }
-.nav-link:hover, .nav-link.active { color: var(--text); background: rgba(30, 41, 59, 0.9); border-color: rgba(148,163,184,0.18); }
-.page-head { display: flex; justify-content: space-between; gap: 20px; align-items: end; padding: 24px; border-radius: 28px; margin-bottom: 24px; }
+.nav-link:hover, .nav-link.active { color: var(--text); background: rgba(221, 46, 83, 0.14); border-color: rgba(221,46,83,0.2); }
+.sidebar-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
+.sidebar-footnote { color: var(--muted); font-size: 12px; }
 .lede { margin: 8px 0 0; color: var(--muted); max-width: 70ch; line-height: 1.6; }
 .stat-strip, .hero-card dl { display: grid; grid-template-columns: repeat(2, minmax(120px, 1fr)); gap: 12px; }
 .stat, .hero-card dl > div {
-  padding: 16px; border-radius: 20px; background: rgba(30, 41, 59, 0.72); border: 1px solid rgba(148, 163, 184, 0.12);
+  padding: 14px 16px; border-radius: 16px; background: var(--panel-strong); border: 1px solid rgba(255,255,255,0.04);
 }
 .stat span, dt { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 .stat strong, dd { margin: 8px 0 0; font-size: 24px; font-weight: 700; }
-.hero { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; padding: 28px; border-radius: 32px; margin-bottom: 24px; }
+.hero { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; padding: 28px; border-radius: 24px; margin-bottom: 24px; }
 .hero.compact { grid-template-columns: 1.4fr 0.8fr; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 .button {
   display: inline-flex; align-items: center; justify-content: center; text-decoration: none; cursor: pointer;
-  padding: 12px 18px; border-radius: 16px; border: 1px solid transparent; font-weight: 600;
+  padding: 12px 18px; border-radius: 10px; border: 1px solid transparent; font-weight: 700;
   transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease, color 180ms ease;
 }
 .button:hover { transform: translateY(-1px); }
-.button-primary { background: var(--accent); color: #04130a; }
+.button-primary { background: var(--accent); color: #fff6fa; }
 .button-primary:hover { background: var(--accent-strong); }
-.button-secondary { background: rgba(30, 41, 59, 0.92); color: var(--text); border-color: rgba(148,163,184,0.18); }
+.button-secondary { background: var(--panel-strong); color: var(--text); border-color: rgba(255,255,255,0.06); }
 .grid { display: grid; gap: 20px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 24px; }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.panel, section, article, details { padding: 20px; border-radius: 28px; margin-bottom: 20px; }
+.panel, section, article, details { padding: 20px; border-radius: 18px; margin-bottom: 20px; }
 .guild-card p, .panel p { color: var(--muted); line-height: 1.6; }
 .pill {
   display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px;
   font-size: 12px; font-family: 'Fira Code', monospace; border: 1px solid rgba(255,255,255,0.08);
 }
-.pill-success { color: #bbf7d0; background: rgba(34, 197, 94, 0.12); }
+.pill-success { color: #bbf7d0; background: rgba(72, 229, 178, 0.14); }
 .pill-warn { color: #fdba74; background: rgba(249, 115, 22, 0.12); }
+.toolbar-panel, .section-block { margin-bottom: 22px; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.toolbar-search { max-width: 320px; margin: 0; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
+.module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.guild-card-meta { display: flex; align-items: center; gap: 10px; margin: 14px 0 16px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.guild-card-meta code { color: var(--text); background: rgba(255,255,255,0.04); padding: 4px 8px; border-radius: 8px; }
+.empty-state { min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
 .card-action { margin-top: 10px; }
 form, .advanced-json-form { margin-top: 14px; }
 label, small, legend { color: var(--text); }
 small { color: var(--muted); }
 input, textarea, select, button {
-  width: 100%; margin-top: 8px; margin-bottom: 12px; border-radius: 14px; border: 1px solid rgba(148,163,184,0.18);
-  background: rgba(15, 23, 42, 0.88); color: var(--text); padding: 12px 14px; font: inherit;
+  width: 100%; margin-top: 8px; margin-bottom: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06);
+  background: #262b36; color: var(--text); padding: 12px 14px; font: inherit;
 }
 input[type='checkbox'] { width: auto; margin-right: 8px; }
-button { width: auto; cursor: pointer; background: rgba(34,197,94,0.12); color: #bbf7d0; }
-button:hover { background: rgba(34,197,94,0.2); }
-fieldset { border: 1px solid rgba(148,163,184,0.16); border-radius: 20px; padding: 16px; margin-top: 16px; }
+button { width: auto; cursor: pointer; background: var(--accent-soft); color: #ffd5df; }
+button:hover { background: rgba(221, 46, 83, 0.24); }
+fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 16px; margin-top: 16px; }
 details summary { cursor: pointer; color: var(--text); font-weight: 600; }
 article { margin-top: 16px; }
-a { color: #86efac; }
+a { color: #ff6b87; }
 .runtime-notice { border-color: rgba(249,115,22,0.22); background: rgba(124, 45, 18, 0.22); }
+.content-body > section[id], .content-body > section.section-block { scroll-margin-top: 24px; }
 @media (max-width: 1100px) {
-  .topbar, .page-head, .hero, .hero.compact, .grid.two, .grid.three { grid-template-columns: 1fr; }
-  .nav { justify-content: start; }
+  .app-shell { grid-template-columns: 1fr; }
+  .sidebar { position: relative; height: auto; }
+  .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid { grid-template-columns: 1fr; }
+  .toolbar { flex-direction: column; align-items: stretch; }
+  .content-shell { padding: 20px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
+}
+"#
+}
+
+fn dashboard_ui_script() -> &'static str {
+    r#"
+function filterGuildCards(query) {
+  const value = (query || '').trim().toLowerCase();
+  const cards = document.querySelectorAll('[data-guild-name]');
+  for (const card of cards) {
+    const guildName = card.getAttribute('data-guild-name') || '';
+    card.style.display = guildName.includes(value) ? '' : 'none';
+  }
 }
 "#
 }
