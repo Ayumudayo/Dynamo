@@ -119,11 +119,7 @@ fn framework_on_error(error: FrameworkError<'_, AppState, Error>) -> poise::BoxF
 
                 let user_message = format!("Command failed: {error}");
                 if let Err(send_error) = ctx
-                    .send(
-                        CreateReply::default()
-                            .content(user_message)
-                            .ephemeral(true),
-                    )
+                    .send(CreateReply::default().content(user_message).ephemeral(true))
                     .await
                 {
                     if send_error.to_string().contains("Unknown interaction") {
@@ -267,8 +263,10 @@ async fn sync_registered_commands(
                 .persistence
                 .guild_settings_or_default(guild_id.get())
                 .await?;
-            let guild_commands =
-                dynamo_app::create_application_commands_for_scope(&deployment, Some(&guild_settings));
+            let guild_commands = dynamo_app::create_application_commands_for_scope(
+                &deployment,
+                Some(&guild_settings),
+            );
             let guild_fingerprint = format!("{guild_commands:#?}");
 
             let should_sync = {
