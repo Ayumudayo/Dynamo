@@ -3,11 +3,13 @@ use dynamo_core::{
     ModuleManifest, MusicBackendConfig, MusicBackendKind, MusicQueueSnapshot, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection, module_access_for_context,
 };
-use poise::serenity_prelude::CreateEmbed;
+use poise::serenity_prelude::{ChannelType, CreateEmbed};
 use serde::{Deserialize, Serialize};
 
 const MODULE_ID: &str = "music";
 const DEFAULT_AUTO_LEAVE_SECONDS: u64 = 180;
+const DAVE_LIMITATION_NOTE: &str =
+    "Discord now requires DAVE/E2EE for non-stage voice calls. This build does not support DAVE yet, so regular voice-channel join/play is currently unavailable.";
 
 pub struct MusicModule;
 
@@ -200,6 +202,7 @@ async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
             "Lavalink is documented as an external deployment guide only and is not configurable from this runtime.",
             false,
         )
+        .field("Current Limitation", DAVE_LIMITATION_NOTE, false)
         .field("Runtime", runtime_status, false);
 
     ctx.send(poise::CreateReply::default().embed(embed).ephemeral(true))
@@ -222,8 +225,6 @@ async fn music_join(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    ctx.defer().await?;
-
     let config = load_settings(ctx).await?.to_backend_config();
     let Some(service) = ctx.data().services.music.as_ref() else {
         ctx.say("Music runtime service is not configured in this build.")
@@ -237,6 +238,17 @@ async fn music_join(ctx: Context<'_>) -> Result<(), Error> {
         ctx.say("You need to join a voice channel first.").await?;
         return Ok(());
     };
+    if let Some(reason) = unsupported_voice_channel_reason(ctx, voice_channel_id) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    ctx.defer().await?;
 
     service
         .join(
@@ -265,8 +277,6 @@ async fn music_leave(ctx: Context<'_>) -> Result<(), Error> {
         .await?;
         return Ok(());
     }
-
-    ctx.defer().await?;
 
     let config = load_settings(ctx).await?.to_backend_config();
     let Some(service) = ctx.data().services.music.as_ref() else {
@@ -318,6 +328,17 @@ async fn music_play(
         ctx.say("You need to join a voice channel first.").await?;
         return Ok(());
     };
+    if let Some(reason) = unsupported_voice_channel_reason(ctx, voice_channel_id) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    ctx.defer().await?;
 
     let result = service
         .play(
@@ -427,6 +448,21 @@ fn author_voice_channel_id(ctx: Context<'_>) -> Option<u64> {
         .get(&ctx.author().id)
         .and_then(|voice_state| voice_state.channel_id)
         .map(|channel_id| channel_id.get())
+}
+
+fn unsupported_voice_channel_reason(ctx: Context<'_>, voice_channel_id: u64) -> Option<String> {
+    let guild_id = ctx.guild_id()?;
+    let guild = ctx.serenity_context().cache.guild(guild_id)?;
+    let channel_id = poise::serenity_prelude::ChannelId::new(voice_channel_id);
+    let channel = guild.channels.get(&channel_id)?;
+
+    if channel.kind == ChannelType::Stage {
+        return None;
+    }
+
+    Some(format!(
+        "{DAVE_LIMITATION_NOTE}\nTry a stage channel instead, or wait for DAVE-capable music support."
+    ))
 }
 
 enum QueueAction {

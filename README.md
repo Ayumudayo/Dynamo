@@ -76,6 +76,7 @@ Music runtime notes:
 
 - `Songbird` is the implemented default backend.
 - `yt-dlp` must be available on the host path for YouTube URL/search playback.
+- Discord non-stage voice channels currently require DAVE/E2EE, which this build does not support yet. `/music join` and `/music play` will refuse regular voice channels and point users at this limitation.
 - `Lavalink` is not exposed in the runtime settings UI. If you want to experiment with an external node later, use [`docs/music-lavalink-guide.md`](./docs/music-lavalink-guide.md) as an operational reference only.
 
 ## Discord Intents
