@@ -840,6 +840,9 @@ name = "dynamo-module-music"
 version = "0.1.0"
 dependencies = [
  "dynamo-core",
+ "poise",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

@@ -75,8 +75,10 @@ pub trait GiveawaysRepository: Send + Sync {
     ) -> Result<Option<GiveawayRecord>, Error>;
     async fn save(&self, record: GiveawayRecord) -> Result<GiveawayRecord, Error>;
     async fn list_by_guild(&self, guild_id: u64) -> Result<Vec<GiveawayRecord>, Error>;
-    async fn list_due_before(&self, timestamp: chrono::DateTime<chrono::Utc>)
-        -> Result<Vec<GiveawayRecord>, Error>;
+    async fn list_due_before(
+        &self,
+        timestamp: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<GiveawayRecord>, Error>;
 }
 
 #[async_trait]

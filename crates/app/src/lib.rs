@@ -82,7 +82,7 @@ pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<Se
     let stock_quotes: Arc<dyn StockQuoteService> = Arc::new(
         dynamo_provider_yahoo::YahooFinanceClient::new(persistence.provider_state.clone())?,
     );
-    Ok(ServiceRegistry::new(Some(stock_quotes)))
+    Ok(ServiceRegistry::new(Some(stock_quotes), None))
 }
 
 pub fn create_application_commands_for_scope(

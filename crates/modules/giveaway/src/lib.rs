@@ -67,7 +67,10 @@ impl Module for GiveawayModule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct GiveawaySettings {
-    #[serde(alias = "default_channel_id", deserialize_with = "deserialize_optional_snowflake")]
+    #[serde(
+        alias = "default_channel_id",
+        deserialize_with = "deserialize_optional_snowflake"
+    )]
     default_channel: Option<u64>,
     button_label: String,
 }
@@ -111,9 +114,13 @@ async fn giveaway_start(
     #[description = "Duration like 30m, 1h, or 2d"] duration: String,
     #[description = "Prize shown in the giveaway message"] prize: String,
     #[description = "Number of winners"] winners: i32,
-    #[description = "Optional giveaway channel; omit to use module settings"] channel: Option<ChannelId>,
+    #[description = "Optional giveaway channel; omit to use module settings"] channel: Option<
+        ChannelId,
+    >,
     #[description = "Optional host user override"] host: Option<User>,
-    #[description = "Optional comma-separated role IDs allowed to enter"] allowed_roles: Option<String>,
+    #[description = "Optional comma-separated role IDs allowed to enter"] allowed_roles: Option<
+        String,
+    >,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
@@ -427,7 +434,9 @@ pub async fn handle_interaction(
     data: &AppState,
 ) -> Result<bool, Error> {
     match interaction {
-        Interaction::Component(component) if component.data.custom_id == GIVEAWAY_ENTER_BUTTON_ID => {
+        Interaction::Component(component)
+            if component.data.custom_id == GIVEAWAY_ENTER_BUTTON_ID =>
+        {
             handle_entry_interaction(ctx, component, data).await?;
             Ok(true)
         }
@@ -526,7 +535,8 @@ async fn handle_entry_interaction(
 
     component.defer_ephemeral(ctx).await?;
     let user_id = component.user.id.get();
-    let response = if let Some(position) = record.entries.iter().position(|entry| *entry == user_id) {
+    let response = if let Some(position) = record.entries.iter().position(|entry| *entry == user_id)
+    {
         record.entries.remove(position);
         "You left the giveaway."
     } else {
@@ -586,7 +596,10 @@ async fn finalize_giveaway(
     sync_message(ctx.http.as_ref(), &record).await?;
 
     let message = if record.winner_ids.is_empty() {
-        format!("Giveaway `{}` ended with no eligible winners.", record.prize)
+        format!(
+            "Giveaway `{}` ended with no eligible winners.",
+            record.prize
+        )
     } else {
         format!(
             "Giveaway `{}` ended. Winners: {}",

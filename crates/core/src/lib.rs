@@ -38,7 +38,10 @@ pub use repositories::{
     MemberStatsRepository, Persistence, ProviderStateRepository, SuggestionsRepository,
     WarningLogRepository,
 };
-pub use services::{ServiceRegistry, StockQuote, StockQuoteService};
+pub use services::{
+    MusicBackendKind, MusicBackendStatus, MusicService, ServiceRegistry, StockQuote,
+    StockQuoteService,
+};
 pub use settings::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
     GuildModuleSettings, GuildSettings,

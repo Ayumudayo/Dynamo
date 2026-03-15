@@ -3,12 +3,12 @@ use std::{collections::BTreeMap, env};
 use async_trait::async_trait;
 use dynamo_core::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
-    DeploymentSettingsRepository, Error, GuildCommandSettings, GuildModuleSettings, GuildSettings,
-    GuildSettingsRepository, GiveawayRecord, GiveawayStatus, GiveawaysRepository, InviteCounters,
-    InviteLeaderboardEntry, InviteMemberRecord, InviteRepository, MemberStatsRecord,
-    MemberStatsRepository, ProviderStateRepository, SuggestionRecord, SuggestionStats,
-    SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository, WarningLogRecord,
-    WarningLogRepository,
+    DeploymentSettingsRepository, Error, GiveawayRecord, GiveawayStatus, GiveawaysRepository,
+    GuildCommandSettings, GuildModuleSettings, GuildSettings, GuildSettingsRepository,
+    InviteCounters, InviteLeaderboardEntry, InviteMemberRecord, InviteRepository,
+    MemberStatsRecord, MemberStatsRepository, ProviderStateRepository, SuggestionRecord,
+    SuggestionStats, SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository,
+    WarningLogRecord, WarningLogRepository,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -413,9 +413,17 @@ impl GiveawayDocument {
             prize: value.prize,
             winner_count: value.winner_count,
             host_user_id: value.host_user_id.to_string(),
-            allowed_role_ids: value.allowed_role_ids.into_iter().map(|id| id.to_string()).collect(),
+            allowed_role_ids: value
+                .allowed_role_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
             entries: value.entries.into_iter().map(|id| id.to_string()).collect(),
-            winner_ids: value.winner_ids.into_iter().map(|id| id.to_string()).collect(),
+            winner_ids: value
+                .winner_ids
+                .into_iter()
+                .map(|id| id.to_string())
+                .collect(),
             status: value.status,
             started_at: BsonDateTime::from_millis(value.started_at.timestamp_millis()),
             ends_at: BsonDateTime::from_millis(value.ends_at.timestamp_millis()),
@@ -454,7 +462,9 @@ impl GiveawayDocument {
             status: self.status,
             started_at: self.started_at.to_system_time().into(),
             ends_at: self.ends_at.to_system_time().into(),
-            paused_at: self.paused_at.map(|timestamp| timestamp.to_system_time().into()),
+            paused_at: self
+                .paused_at
+                .map(|timestamp| timestamp.to_system_time().into()),
             button_label: self.button_label,
             created_at: self.created_at.to_system_time().into(),
             updated_at: self.updated_at.to_system_time().into(),

@@ -46,13 +46,40 @@ pub trait StockQuoteService: Send + Sync {
     ) -> Result<Vec<Result<StockQuote, String>>, Error>;
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum MusicBackendKind {
+    #[default]
+    Songbird,
+    Lavalink,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicBackendStatus {
+    pub backend: MusicBackendKind,
+    pub healthy: bool,
+    pub summary: String,
+}
+
+#[async_trait]
+pub trait MusicService: Send + Sync {
+    async fn status(&self) -> Result<MusicBackendStatus, Error>;
+}
+
 #[derive(Clone, Default)]
 pub struct ServiceRegistry {
     pub stock_quotes: Option<Arc<dyn StockQuoteService>>,
+    pub music: Option<Arc<dyn MusicService>>,
 }
 
 impl ServiceRegistry {
-    pub fn new(stock_quotes: Option<Arc<dyn StockQuoteService>>) -> Self {
-        Self { stock_quotes }
+    pub fn new(
+        stock_quotes: Option<Arc<dyn StockQuoteService>>,
+        music: Option<Arc<dyn MusicService>>,
+    ) -> Self {
+        Self {
+            stock_quotes,
+            music,
+        }
     }
 }

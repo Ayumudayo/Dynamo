@@ -41,7 +41,7 @@ Enable them explicitly with environment flags:
 Current optional-module status:
 
 - `giveaway`: implemented as an opt-in persisted slash workflow with entry buttons and timed completion polling
-- `music`: registry-ready scaffold only, playback backend still pending
+- `music`: dual-backend configuration layer is implemented; `Songbird` default and `Lavalink` settings are configurable, while playback runtime wiring is the next phase
 
 ## Runtime Model
 
