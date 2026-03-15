@@ -238,8 +238,9 @@ $CommandScope = if ($RegisterGlobally) {
   "guild (missing DISCORD_DEV_GUILD_ID/GUILD_ID)"
 }
 Write-Host "Command scope: $CommandScope"
-Write-Host "Optional modules: giveaway=$EffectiveGiveaway"
-Write-Host "Built-in modules: music=available"
+if ($EffectiveGiveaway) {
+  Write-Host "Giveaway module override: enabled"
+}
 
 if (-not $SkipBootstrap) {
   Write-Host "Running Mongo bootstrap..."

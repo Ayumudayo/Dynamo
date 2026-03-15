@@ -144,7 +144,7 @@ Stop managed dashboard and bot processes:
 ./scripts/dev-down.sh
 ```
 
-The launchers print the effective command scope and optional-module state resolved from `.env`, with CLI flags taking precedence over `.env` for optional modules.
+The launchers print the effective command scope resolved from `.env`. Optional module state is managed from the dashboard rather than the launcher output.
 
 ## Validation Commands
 

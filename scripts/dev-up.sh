@@ -198,8 +198,9 @@ if [[ "$REGISTER_GLOBALLY" != "true" ]]; then
 fi
 EFFECTIVE_GIVEAWAY="$(resolve_bool_setting "DYNAMO_ENABLE_GIVEAWAY" "false" "$ENABLE_GIVEAWAY")"
 echo "Command scope: $COMMAND_SCOPE"
-echo "Optional modules: giveaway=$EFFECTIVE_GIVEAWAY"
-echo "Built-in modules: music=available"
+if [[ "$EFFECTIVE_GIVEAWAY" == "true" ]]; then
+  echo "Giveaway module override: enabled"
+fi
 
 if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then
