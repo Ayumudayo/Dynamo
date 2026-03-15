@@ -1,0 +1,76 @@
+use dynamo_core::{AppConfig, AppState, Error, Module, ModuleManifest, aggregate_intents};
+use poise::serenity_prelude as serenity;
+use tracing::info;
+
+#[tokio::main]
+async fn main() -> Result<(), Error> {
+    init_tracing();
+
+    let config = AppConfig::from_env()?;
+    let modules = builtin_modules();
+    let manifests: Vec<ModuleManifest> = modules.iter().map(|module| module.manifest()).collect();
+    let commands = modules
+        .iter()
+        .flat_map(|module| module.commands())
+        .collect::<Vec<_>>();
+    let intents = aggregate_intents(manifests.iter().copied());
+    let setup_manifests = manifests.clone();
+    let discord_config = config.discord.clone();
+
+    let framework = poise::Framework::builder()
+        .options(poise::FrameworkOptions {
+            commands,
+            ..Default::default()
+        })
+        .setup(move |ctx, ready, framework| {
+            let discord_config = discord_config.clone();
+            let setup_manifests = setup_manifests.clone();
+
+            Box::pin(async move {
+                info!(
+                    user = %ready.user.name,
+                    modules = setup_manifests.len(),
+                    "Connected to Discord"
+                );
+
+                if discord_config.register_globally {
+                    poise::builtins::register_globally(ctx, &framework.options().commands).await?;
+                    info!("Registered application commands globally");
+                } else if let Some(guild_id) = discord_config.dev_guild_id {
+                    poise::builtins::register_in_guild(
+                        ctx,
+                        &framework.options().commands,
+                        serenity::GuildId::new(guild_id),
+                    )
+                    .await?;
+                    info!(
+                        guild_id,
+                        "Registered application commands in development guild"
+                    );
+                }
+
+                Ok(AppState::new(setup_manifests))
+            })
+        })
+        .build();
+
+    let mut client = serenity::ClientBuilder::new(config.discord.token, intents)
+        .framework(framework)
+        .await?;
+
+    client.start().await?;
+    Ok(())
+}
+
+fn builtin_modules() -> Vec<Box<dyn Module>> {
+    vec![Box::new(dynamo_module_info::InfoModule)]
+}
+
+fn init_tracing() {
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "dynamo_bot=info,dynamo_core=info,poise=info".into()),
+        )
+        .try_init();
+}
