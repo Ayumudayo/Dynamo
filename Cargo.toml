@@ -2,6 +2,7 @@
 members = [
   "crates/app",
   "crates/dashboard",
+  "crates/bootstrap",
   "crates/core",
   "crates/bot",
   "crates/persistence-mongo",

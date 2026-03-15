@@ -565,6 +565,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-bootstrap"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dotenvy",
+ "dynamo-persistence-mongo",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "dynamo-bot"
 version = "0.1.0"
 dependencies = [
