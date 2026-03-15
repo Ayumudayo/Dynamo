@@ -9,8 +9,9 @@ use axum::{
     routing::{get, patch},
 };
 use dynamo_core::{
-    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog,
-    ModuleCatalogEntry, Persistence, ResolvedModuleState, SettingsField, SettingsFieldKind,
+    CommandCatalog, CommandCatalogEntry, DeploymentModuleSettings, DeploymentSettings,
+    GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence, ResolvedCommandState,
+    ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, resolve_command_states,
     resolve_module_states,
 };
 use serde::Deserialize;
@@ -27,6 +28,7 @@ async fn main() -> anyhow::Result<()> {
     let persistence = dynamo_app::persistence_from_env().await?;
     let state = Arc::new(DashboardState {
         module_catalog: registry.catalog().clone(),
+        command_catalog: registry.command_catalog().clone(),
         persistence,
     });
 
@@ -46,10 +48,18 @@ async fn main() -> anyhow::Result<()> {
             "/api/deployment-settings/:module_id",
             patch(patch_deployment_module_settings),
         )
+        .route(
+            "/api/deployment-command-settings/:command_id",
+            patch(patch_deployment_command_settings),
+        )
         .route("/api/guild-settings/:guild_id", get(get_guild_settings))
         .route(
             "/api/guild-settings/:guild_id/:module_id",
             patch(patch_guild_module_settings),
+        )
+        .route(
+            "/api/guild-command-settings/:guild_id/:command_id",
+            patch(patch_guild_command_settings),
         )
         .with_state(state);
 
@@ -88,6 +98,7 @@ impl DashboardConfig {
 #[derive(Clone)]
 struct DashboardState {
     module_catalog: ModuleCatalog,
+    command_catalog: CommandCatalog,
     persistence: Persistence,
 }
 
@@ -125,6 +136,12 @@ async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<Strin
         .await
         .unwrap_or_default();
     let resolved_states = resolve_module_states(&state.module_catalog, &settings, None);
+    let resolved_command_states = resolve_command_states(
+        &state.module_catalog,
+        &state.command_catalog,
+        &settings,
+        None,
+    );
 
     let sections = state
         .module_catalog
@@ -140,15 +157,22 @@ async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<Strin
                     installed: true,
                     enabled: entry.module.enabled_by_default,
                 });
+            let command_sections = render_deployment_command_sections(
+                &state.command_catalog,
+                &settings,
+                &resolved_command_states,
+                entry.module.id,
+            );
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form></section>",
+                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
                 status = render_deployment_status(resolved),
                 module_id = escape_html(entry.module.id),
                 installed = if current.installed { "checked" } else { "" },
                 enabled = if current.enabled { "checked" } else { "" },
+                command_sections = command_sections,
             )
         })
         .collect::<Vec<_>>()
@@ -177,6 +201,12 @@ async fn guild_page(
         .unwrap_or_default();
     let resolved_states =
         resolve_module_states(&state.module_catalog, &deployment, Some(&settings));
+    let resolved_command_states = resolve_command_states(
+        &state.module_catalog,
+        &state.command_catalog,
+        &deployment,
+        Some(&settings),
+    );
 
     let sections = state
         .module_catalog
@@ -197,9 +227,16 @@ async fn guild_page(
                 entry.module.id,
                 &configuration_pretty,
             );
+            let command_sections = render_guild_command_sections(
+                &state.command_catalog,
+                &settings,
+                &resolved_command_states,
+                guild_id,
+                entry.module.id,
+            );
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}</section>",
+                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
                 guild_id = guild_id,
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
@@ -208,6 +245,7 @@ async fn guild_page(
                 enabled = if current.enabled { "checked" } else { "" },
                 structured_fields = structured_fields,
                 advanced_form = advanced_form,
+                command_sections = command_sections,
             )
         })
         .collect::<Vec<_>>()
@@ -227,8 +265,21 @@ fn render_structured_fields(
     guild_id: u64,
     module_id: &str,
 ) -> String {
-    let fields = entry
-        .settings
+    render_settings_sections(
+        &entry.settings,
+        configuration,
+        &format!(
+            "<p>No structured settings for this module. Use the advanced JSON editor below.</p><input type=\"hidden\" data-setting-key=\"__empty\" data-setting-kind=\"text\" value=\"\" form=\"structured-{guild_id}-{module_id}\" />"
+        ),
+    )
+}
+
+fn render_settings_sections(
+    settings: &SettingsSchema,
+    configuration: &Value,
+    empty_markup: &str,
+) -> String {
+    let fields = settings
         .sections
         .iter()
         .map(|section| {
@@ -250,12 +301,118 @@ fn render_structured_fields(
         .join("\n");
 
     if fields.is_empty() {
-        format!(
-            "<p>No structured settings for this module. Use the advanced JSON editor below.</p><input type=\"hidden\" data-setting-key=\"__empty\" data-setting-kind=\"text\" value=\"\" form=\"structured-{guild_id}-{module_id}\" />"
-        )
+        empty_markup.to_string()
     } else {
         fields
     }
+}
+
+fn render_deployment_command_sections(
+    command_catalog: &CommandCatalog,
+    settings: &DeploymentSettings,
+    resolved_states: &[ResolvedCommandState],
+    module_id: &str,
+) -> String {
+    let commands = command_catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.command.module_id == module_id)
+        .map(|entry| {
+            let current = settings
+                .commands
+                .get(&entry.command.id)
+                .cloned()
+                .unwrap_or_default();
+            let resolved = resolved_states
+                .iter()
+                .find(|state| state.command.id == entry.command.id);
+            let structured_fields = render_command_structured_fields(entry, &current.configuration);
+            let advanced_form = render_deployment_command_json_form(
+                &entry.command.id,
+                &pretty_configuration(&current.configuration),
+            );
+
+            format!(
+                "<article style=\"margin:12px 0 0 16px; padding:12px; border:1px solid #ddd\"><h3>{name}</h3><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentCommand(event, '{command_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
+                name = escape_html(&entry.command.display_name),
+                status = resolved
+                    .map(render_deployment_command_status)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                command_id = escape_html(&entry.command.id),
+                command_key = status_key(&entry.command.id),
+                installed = if current.installed { "checked" } else { "" },
+                enabled = if current.enabled { "checked" } else { "" },
+                structured_fields = structured_fields,
+                advanced_form = advanced_form,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if commands.is_empty() {
+        String::new()
+    } else {
+        format!("<details><summary>Command Settings</summary>{commands}</details>")
+    }
+}
+
+fn render_guild_command_sections(
+    command_catalog: &CommandCatalog,
+    settings: &dynamo_core::GuildSettings,
+    resolved_states: &[ResolvedCommandState],
+    guild_id: u64,
+    module_id: &str,
+) -> String {
+    let commands = command_catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.command.module_id == module_id)
+        .map(|entry| {
+            let current = settings
+                .commands
+                .get(&entry.command.id)
+                .cloned()
+                .unwrap_or_default();
+            let resolved = resolved_states
+                .iter()
+                .find(|state| state.command.id == entry.command.id);
+            let structured_fields = render_command_structured_fields(entry, &current.configuration);
+            let advanced_form = render_guild_command_json_form(
+                guild_id,
+                &entry.command.id,
+                &pretty_configuration(&current.configuration),
+            );
+
+            format!(
+                "<article style=\"margin:12px 0 0 16px; padding:12px; border:1px solid #ddd\"><h3>{name}</h3><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildCommand(event, {guild_id}, '{command_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
+                name = escape_html(&entry.command.display_name),
+                status = resolved
+                    .map(render_guild_command_status)
+                    .unwrap_or_else(|| "unknown".to_string()),
+                guild_id = guild_id,
+                command_id = escape_html(&entry.command.id),
+                command_key = status_key(&entry.command.id),
+                enabled = if current.enabled { "checked" } else { "" },
+                structured_fields = structured_fields,
+                advanced_form = advanced_form,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if commands.is_empty() {
+        String::new()
+    } else {
+        format!("<details><summary>Command Settings</summary>{commands}</details>")
+    }
+}
+
+fn render_command_structured_fields(entry: &CommandCatalogEntry, configuration: &Value) -> String {
+    render_settings_sections(
+        &entry.settings,
+        configuration,
+        "<p>No structured settings for this command. Use the advanced JSON editor below.</p>",
+    )
 }
 
 fn render_field(field: &SettingsField, configuration: &Value) -> String {
@@ -350,6 +507,29 @@ fn render_advanced_json_form(guild_id: u64, module_id: &str, configuration_prett
     )
 }
 
+fn render_deployment_command_json_form(command_id: &str, configuration_pretty: &str) -> String {
+    format!(
+        "<details><summary>Advanced JSON</summary><form onsubmit=\"return patchDeploymentCommandJson(event, '{command_id}')\"><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save JSON</button><span id=\"deployment-command-json-status-{command_key}\" style=\"margin-left:8px\"></span></form></details>",
+        command_id = escape_html(command_id),
+        command_key = status_key(command_id),
+        configuration = escape_html(configuration_pretty),
+    )
+}
+
+fn render_guild_command_json_form(
+    guild_id: u64,
+    command_id: &str,
+    configuration_pretty: &str,
+) -> String {
+    format!(
+        "<details><summary>Advanced JSON</summary><form onsubmit=\"return patchGuildCommandJson(event, {guild_id}, '{command_id}')\"><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save JSON</button><span id=\"guild-command-json-status-{command_key}\" style=\"margin-left:8px\"></span></form></details>",
+        guild_id = guild_id,
+        command_id = escape_html(command_id),
+        command_key = status_key(command_id),
+        configuration = escape_html(configuration_pretty),
+    )
+}
+
 fn render_effective_badge(state: &ResolvedModuleState) -> String {
     if state.effective_enabled {
         "<span style=\"color:#0a7f40\">enabled</span>".to_string()
@@ -370,6 +550,27 @@ fn render_deployment_status(state: &ResolvedModuleState) -> String {
 fn render_guild_status(state: &ResolvedModuleState) -> String {
     format!(
         "installed: {} | deployment: {} | guild: {} | effective: {}",
+        yes_no(state.installed),
+        yes_no(state.deployment_enabled),
+        yes_no(state.guild_enabled),
+        yes_no(state.effective_enabled),
+    )
+}
+
+fn render_deployment_command_status(state: &ResolvedCommandState) -> String {
+    format!(
+        "module: {} | installed: {} | deployment: {} | effective: {}",
+        yes_no(state.module_effective_enabled),
+        yes_no(state.installed),
+        yes_no(state.deployment_enabled),
+        yes_no(state.effective_enabled),
+    )
+}
+
+fn render_guild_command_status(state: &ResolvedCommandState) -> String {
+    format!(
+        "module: {} | installed: {} | deployment: {} | guild: {} | effective: {}",
+        yes_no(state.module_effective_enabled),
         yes_no(state.installed),
         yes_no(state.deployment_enabled),
         yes_no(state.guild_enabled),
@@ -410,6 +611,10 @@ fn pretty_configuration(configuration: &Value) -> String {
     } else {
         serde_json::to_string_pretty(configuration).unwrap_or_else(|_| "{}".to_string())
     }
+}
+
+fn status_key(value: &str) -> String {
+    value.replace(':', "-")
 }
 
 fn escape_html(input: &str) -> String {
@@ -474,7 +679,20 @@ struct DeploymentModuleSettingsPatch {
 }
 
 #[derive(Debug, Deserialize)]
+struct DeploymentCommandSettingsPatch {
+    installed: Option<bool>,
+    enabled: Option<bool>,
+    configuration: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
 struct GuildModuleSettingsPatch {
+    enabled: Option<bool>,
+    configuration: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuildCommandSettingsPatch {
     enabled: Option<bool>,
     configuration: Option<serde_json::Value>,
 }
@@ -547,6 +765,70 @@ async fn patch_deployment_module_settings(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_payload(format!(
                 "failed to persist deployment settings: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn patch_deployment_command_settings(
+    State(state): State<Arc<DashboardState>>,
+    Path(command_id): Path<String>,
+    Json(patch): Json<DeploymentCommandSettingsPatch>,
+) -> impl IntoResponse {
+    if !command_exists(&state.command_catalog, &command_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(error_payload(format!("unknown command id: {command_id}"))),
+        )
+            .into_response();
+    }
+
+    let Some(repo) = state.persistence.deployment_settings.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_payload(
+                "deployment settings repository is not configured".to_string(),
+            )),
+        )
+            .into_response();
+    };
+
+    let current_settings = match repo.get().await {
+        Ok(settings) => settings,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_payload(format!(
+                    "failed to load deployment settings: {error}"
+                ))),
+            )
+                .into_response();
+        }
+    };
+
+    let mut next = current_settings
+        .commands
+        .get(&command_id)
+        .cloned()
+        .unwrap_or_default();
+
+    if let Some(installed) = patch.installed {
+        next.installed = installed;
+    }
+    if let Some(enabled) = patch.enabled {
+        next.enabled = enabled;
+    }
+    if let Some(configuration) = patch.configuration {
+        next.configuration = configuration;
+    }
+
+    match repo.upsert_command_settings(&command_id, next).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to persist deployment command settings: {error}"
             ))),
         )
             .into_response(),
@@ -633,11 +915,79 @@ async fn patch_guild_module_settings(
     }
 }
 
+async fn patch_guild_command_settings(
+    State(state): State<Arc<DashboardState>>,
+    Path((guild_id, command_id)): Path<(u64, String)>,
+    Json(patch): Json<GuildCommandSettingsPatch>,
+) -> impl IntoResponse {
+    if !command_exists(&state.command_catalog, &command_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(error_payload(format!("unknown command id: {command_id}"))),
+        )
+            .into_response();
+    }
+
+    let Some(repo) = state.persistence.guild_settings.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_payload(
+                "guild settings repository is not configured".to_string(),
+            )),
+        )
+            .into_response();
+    };
+
+    let current_settings = match repo.get_or_create(guild_id).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_payload(format!(
+                    "failed to load guild settings: {error}"
+                ))),
+            )
+                .into_response();
+        }
+    };
+
+    let mut next = current_settings
+        .commands
+        .get(&command_id)
+        .cloned()
+        .unwrap_or_default();
+
+    if let Some(enabled) = patch.enabled {
+        next.enabled = enabled;
+    }
+    if let Some(configuration) = patch.configuration {
+        next.configuration = configuration;
+    }
+
+    match repo
+        .upsert_command_settings(guild_id, &command_id, next)
+        .await
+    {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to persist guild command settings: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
 fn module_exists(catalog: &ModuleCatalog, module_id: &str) -> bool {
     catalog
         .entries
         .iter()
         .any(|entry| entry.module.id == module_id)
+}
+
+fn command_exists(catalog: &CommandCatalog, command_id: &str) -> bool {
+    catalog.find_by_id(command_id).is_some()
 }
 
 fn error_payload(message: String) -> serde_json::Value {
@@ -663,6 +1013,31 @@ async function patchDeploymentModule(event, moduleId) {
   });
   const output = await response.json();
   document.getElementById(`deployment-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
+
+async function patchDeploymentCommand(event, commandId) {
+  event.preventDefault();
+  const form = event.target;
+  let configuration;
+  try {
+    configuration = collectConfiguration(form);
+  } catch (error) {
+    document.getElementById(`deployment-command-status-${statusKey(commandId)}`).textContent = `Error: ${error.message}`;
+    return false;
+  }
+
+  const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      installed: form.installed.checked,
+      enabled: form.enabled.checked,
+      configuration,
+    }),
+  });
+  const output = await response.json();
+  document.getElementById(`deployment-command-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
   return false;
 }
 
@@ -715,6 +1090,10 @@ function setPath(target, key, value) {
   cursor[segments[segments.length - 1]] = value;
 }
 
+function statusKey(value) {
+  return value.replaceAll(':', '-');
+}
+
 async function patchGuildModule(event, guildId, moduleId) {
   event.preventDefault();
   const form = event.target;
@@ -740,6 +1119,30 @@ async function patchGuildModule(event, guildId, moduleId) {
   return false;
 }
 
+async function patchGuildCommand(event, guildId, commandId) {
+  event.preventDefault();
+  const form = event.target;
+  let configuration;
+  try {
+    configuration = collectConfiguration(form);
+  } catch (error) {
+    document.getElementById(`guild-command-status-${statusKey(commandId)}`).textContent = `Error: ${error.message}`;
+    return false;
+  }
+
+  const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      enabled: form.enabled.checked,
+      configuration,
+    }),
+  });
+  const output = await response.json();
+  document.getElementById(`guild-command-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
+
 async function patchGuildModuleJson(event, guildId, moduleId) {
   event.preventDefault();
   const form = event.target;
@@ -758,6 +1161,48 @@ async function patchGuildModuleJson(event, guildId, moduleId) {
   });
   const output = await response.json();
   document.getElementById(`guild-json-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
+
+async function patchDeploymentCommandJson(event, commandId) {
+  event.preventDefault();
+  const form = event.target;
+  let configuration;
+  try {
+    configuration = JSON.parse(form.configuration.value || '{}');
+  } catch (error) {
+    document.getElementById(`deployment-command-json-status-${statusKey(commandId)}`).textContent = 'Error: invalid JSON';
+    return false;
+  }
+
+  const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configuration }),
+  });
+  const output = await response.json();
+  document.getElementById(`deployment-command-json-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
+
+async function patchGuildCommandJson(event, guildId, commandId) {
+  event.preventDefault();
+  const form = event.target;
+  let configuration;
+  try {
+    configuration = JSON.parse(form.configuration.value || '{}');
+  } catch (error) {
+    document.getElementById(`guild-command-json-status-${statusKey(commandId)}`).textContent = 'Error: invalid JSON';
+    return false;
+  }
+
+  const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configuration }),
+  });
+  const output = await response.json();
+  document.getElementById(`guild-command-json-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
   return false;
 }
 "#

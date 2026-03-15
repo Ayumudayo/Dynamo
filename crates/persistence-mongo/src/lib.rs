@@ -2,12 +2,12 @@ use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
 use dynamo_core::{
-    DeploymentModuleSettings, DeploymentSettings, DeploymentSettingsRepository, Error,
-    GuildModuleSettings, GuildSettings, GuildSettingsRepository, InviteCounters,
-    InviteLeaderboardEntry, InviteMemberRecord, InviteRepository, MemberStatsRecord,
-    MemberStatsRepository, ProviderStateRepository, SuggestionRecord, SuggestionStats,
-    SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository, WarningLogRecord,
-    WarningLogRepository,
+    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
+    DeploymentSettingsRepository, Error, GuildCommandSettings, GuildModuleSettings, GuildSettings,
+    GuildSettingsRepository, InviteCounters, InviteLeaderboardEntry, InviteMemberRecord,
+    InviteRepository, MemberStatsRecord, MemberStatsRepository, ProviderStateRepository,
+    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
+    SuggestionsRepository, WarningLogRecord, WarningLogRepository,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -214,6 +214,8 @@ struct GuildSettingsDocument {
     id: String,
     #[serde(default)]
     modules: BTreeMap<String, GuildModuleSettings>,
+    #[serde(default)]
+    commands: BTreeMap<String, GuildCommandSettings>,
 }
 
 impl GuildSettingsDocument {
@@ -221,6 +223,7 @@ impl GuildSettingsDocument {
         Self {
             id: MongoPersistence::guild_document_id(settings.guild_id),
             modules: settings.modules,
+            commands: settings.commands,
         }
     }
 
@@ -230,6 +233,7 @@ impl GuildSettingsDocument {
                 anyhow::anyhow!("Stored guild settings id is not a valid u64: {error}")
             })?,
             modules: self.modules,
+            commands: self.commands,
         })
     }
 }
@@ -240,6 +244,8 @@ struct DeploymentSettingsDocument {
     id: String,
     #[serde(default)]
     modules: BTreeMap<String, DeploymentModuleSettings>,
+    #[serde(default)]
+    commands: BTreeMap<String, DeploymentCommandSettings>,
 }
 
 impl DeploymentSettingsDocument {
@@ -247,12 +253,14 @@ impl DeploymentSettingsDocument {
         Self {
             id: DEPLOYMENT_SETTINGS_ID.to_string(),
             modules: BTreeMap::new(),
+            commands: BTreeMap::new(),
         }
     }
 
     fn into_domain(self) -> DeploymentSettings {
         DeploymentSettings {
             modules: self.modules,
+            commands: self.commands,
         }
     }
 }
@@ -480,6 +488,7 @@ impl GuildSettingsRepository for MongoPersistence {
         let settings = GuildSettings {
             guild_id,
             modules: BTreeMap::new(),
+            commands: BTreeMap::new(),
         };
         self.guild_settings
             .insert_one(GuildSettingsDocument::from_domain(settings.clone()))
@@ -504,6 +513,30 @@ impl GuildSettingsRepository for MongoPersistence {
                 doc! {
                     "$setOnInsert": { "_id": &id },
                     "$set": { module_path: module_settings },
+                },
+            )
+            .upsert(true)
+            .await?;
+
+        GuildSettingsRepository::get_or_create(self, guild_id).await
+    }
+
+    async fn upsert_command_settings(
+        &self,
+        guild_id: u64,
+        command_id: &str,
+        settings: GuildCommandSettings,
+    ) -> Result<GuildSettings, Error> {
+        let id = Self::guild_document_id(guild_id);
+        let command_path = format!("commands.{command_id}");
+        let command_settings = to_bson(&settings)?;
+
+        self.guild_settings
+            .update_one(
+                doc! { "_id": &id },
+                doc! {
+                    "$setOnInsert": { "_id": &id },
+                    "$set": { command_path: command_settings },
                 },
             )
             .upsert(true)
@@ -540,6 +573,28 @@ impl DeploymentSettingsRepository for MongoPersistence {
                 doc! {
                     "$setOnInsert": { "_id": DEPLOYMENT_SETTINGS_ID },
                     "$set": { module_path: module_settings },
+                },
+            )
+            .upsert(true)
+            .await?;
+
+        self.get().await
+    }
+
+    async fn upsert_command_settings(
+        &self,
+        command_id: &str,
+        settings: DeploymentCommandSettings,
+    ) -> Result<DeploymentSettings, Error> {
+        let command_path = format!("commands.{command_id}");
+        let command_settings = to_bson(&settings)?;
+
+        self.deployment_settings
+            .update_one(
+                doc! { "_id": DEPLOYMENT_SETTINGS_ID },
+                doc! {
+                    "$setOnInsert": { "_id": DEPLOYMENT_SETTINGS_ID },
+                    "$set": { command_path: command_settings },
                 },
             )
             .upsert(true)

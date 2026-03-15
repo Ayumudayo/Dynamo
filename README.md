@@ -37,6 +37,7 @@ These are part of the migration plan but are not registered by default in the pu
 
 - Slash-first command model. Prefix parity is not a goal for the public template.
 - Shared module enablement guard across bot runtime and dashboard state rendering.
+- Command-level enablement and per-command configuration storage for leaf slash commands.
 - Deployment-level install/enable state plus guild-level enable/config overrides.
 - MongoDB is the default persistence layer and defaults to the `dynamo-rs` database name.
 - Dashboard and bot are separate processes.
@@ -56,6 +57,7 @@ Common optional variables:
 - `MONGODB_DATABASE` default: `dynamo-rs`
 - `DASHBOARD_HOST` default: `127.0.0.1`
 - `DASHBOARD_PORT` default: `3000`
+- `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG`
 
 ## Discord Intents
@@ -116,8 +118,16 @@ The companion dashboard exposes:
 
 - deployment-level module install/enable toggles
 - guild-level module enablement and structured settings forms
+- deployment-level and guild-level command toggles for individual leaf slash commands
 - advanced JSON editor fallback for module configuration
+- advanced JSON editor fallback for command configuration
 - effective module state rendering shared with the runtime guard layer
+
+Command sync behavior:
+
+- Guild command sets are re-synchronized from dashboard settings on a polling loop.
+- Deployment and command toggle changes are reflected in runtime checks immediately after the next sync cycle.
+- Global commands still depend on Discord propagation behavior; guild command sync is the immediate path.
 
 Open:
 

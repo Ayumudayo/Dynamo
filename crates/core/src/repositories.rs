@@ -7,7 +7,10 @@ use crate::{
     Error,
     invite::{InviteLeaderboardEntry, InviteMemberRecord},
     member_stats::MemberStatsRecord,
-    settings::{DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings},
+    settings::{
+        DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
+        GuildCommandSettings, GuildModuleSettings, GuildSettings,
+    },
     suggestions::SuggestionRecord,
     warnings::WarningLogRecord,
 };
@@ -21,6 +24,12 @@ pub trait GuildSettingsRepository: Send + Sync {
         module_id: &str,
         settings: GuildModuleSettings,
     ) -> Result<GuildSettings, Error>;
+    async fn upsert_command_settings(
+        &self,
+        guild_id: u64,
+        command_id: &str,
+        settings: GuildCommandSettings,
+    ) -> Result<GuildSettings, Error>;
 }
 
 #[async_trait]
@@ -30,6 +39,11 @@ pub trait DeploymentSettingsRepository: Send + Sync {
         &self,
         module_id: &str,
         settings: DeploymentModuleSettings,
+    ) -> Result<DeploymentSettings, Error>;
+    async fn upsert_command_settings(
+        &self,
+        command_id: &str,
+        settings: DeploymentCommandSettings,
     ) -> Result<DeploymentSettings, Error>;
 }
 
@@ -134,6 +148,7 @@ impl Persistence {
             None => Ok(GuildSettings {
                 guild_id,
                 modules: Default::default(),
+                commands: Default::default(),
             }),
         }
     }

@@ -29,6 +29,8 @@ Run this checklist after major module, persistence, or dashboard changes.
 3. Open `/guild/<guild_id>`.
 4. Change one structured field and confirm it persists after reload.
 5. Save one module configuration through the advanced JSON editor.
+6. Disable one leaf command in deployment settings and confirm it disappears or becomes unavailable after the next sync cycle.
+7. Disable one leaf command in guild settings and confirm the guild-specific command set updates after the next sync cycle.
 
 ## Core Commands
 

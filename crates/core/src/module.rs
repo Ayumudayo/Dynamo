@@ -83,6 +83,43 @@ pub struct ModuleCatalogEntry {
 }
 
 #[derive(Debug, Clone, Serialize, Default)]
+pub struct CommandCatalog {
+    pub entries: Vec<CommandCatalogEntry>,
+}
+
+impl CommandCatalog {
+    pub fn find_by_id(&self, command_id: &str) -> Option<&CommandCatalogEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.command.id == command_id)
+    }
+
+    pub fn find_by_qualified_name(&self, qualified_name: &str) -> Option<&CommandCatalogEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.command.qualified_name == qualified_name)
+    }
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandCatalogEntry {
+    pub command: CommandDescriptor,
+    pub settings: SettingsSchema,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct CommandDescriptor {
+    pub id: String,
+    pub module_id: &'static str,
+    pub module_display_name: &'static str,
+    pub top_level_name: String,
+    pub display_name: String,
+    pub qualified_name: String,
+    pub category: Option<String>,
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Default)]
 pub struct SettingsSchema {
     pub sections: Vec<SettingsSection>,
 }
@@ -130,6 +167,10 @@ pub trait Module: Send + Sync {
     fn commands(&self) -> Vec<DiscordCommand>;
 
     fn settings_schema(&self) -> SettingsSchema {
+        SettingsSchema::empty()
+    }
+
+    fn command_settings_schema(&self, _command_id: &str) -> SettingsSchema {
         SettingsSchema::empty()
     }
 }

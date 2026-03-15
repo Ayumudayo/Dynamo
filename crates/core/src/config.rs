@@ -5,6 +5,7 @@ use crate::Error;
 #[derive(Debug, Clone)]
 pub struct AppConfig {
     pub discord: DiscordConfig,
+    pub commands: CommandSyncConfig,
 }
 
 impl AppConfig {
@@ -34,6 +35,9 @@ impl AppConfig {
                 register_globally,
                 dev_guild_id,
             },
+            commands: CommandSyncConfig {
+                sync_interval_seconds: parse_u64_env("DISCORD_COMMAND_SYNC_INTERVAL_SECONDS", 15)?,
+            },
         })
     }
 }
@@ -45,6 +49,11 @@ pub struct DiscordConfig {
     pub dev_guild_id: Option<u64>,
 }
 
+#[derive(Debug, Clone)]
+pub struct CommandSyncConfig {
+    pub sync_interval_seconds: u64,
+}
+
 fn parse_bool_env(key: &str, default: bool) -> Result<bool, Error> {
     match env::var(key) {
         Ok(value) => match value.trim().to_ascii_lowercase().as_str() {
@@ -52,6 +61,17 @@ fn parse_bool_env(key: &str, default: bool) -> Result<bool, Error> {
             "0" | "false" | "no" | "off" => Ok(false),
             _ => anyhow::bail!("{key} must be one of true/false/1/0/yes/no/on/off"),
         },
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(anyhow::anyhow!("{key} could not be read: {error}")),
+    }
+}
+
+fn parse_u64_env(key: &str, default: u64) -> Result<u64, Error> {
+    match env::var(key) {
+        Ok(value) => value
+            .trim()
+            .parse::<u64>()
+            .map_err(|error| anyhow::anyhow!("{key} must be a valid u64: {error}")),
         Err(env::VarError::NotPresent) => Ok(default),
         Err(error) => Err(anyhow::anyhow!("{key} could not be read: {error}")),
     }

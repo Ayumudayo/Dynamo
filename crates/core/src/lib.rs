@@ -11,18 +11,24 @@ mod settings;
 mod suggestions;
 mod warnings;
 
-pub use config::{AppConfig, DiscordConfig};
-pub use enablement::{ResolvedModuleState, resolve_module_state, resolve_module_states};
+pub use config::{AppConfig, CommandSyncConfig, DiscordConfig};
+pub use enablement::{
+    ResolvedCommandState, ResolvedModuleState, resolve_command_state, resolve_command_states,
+    resolve_module_state, resolve_module_states,
+};
 pub use guard::{
-    ModuleAccess, module_access_for_app, module_access_for_context, module_access_for_state,
+    CommandAccess, ModuleAccess, command_access_for_app, command_access_for_context,
+    command_access_for_state, module_access_for_app, module_access_for_context,
+    module_access_for_state,
 };
 pub use invite::{InviteCounters, InviteLeaderboardEntry, InviteMemberRecord};
 pub use member_stats::{
     CommandUsageStats, MemberStatsRecord, MessageContextUsageStats, VoiceStatsRecord,
 };
 pub use module::{
-    Module, ModuleCatalog, ModuleCatalogEntry, ModuleCategory, ModuleDescriptor, ModuleManifest,
-    SettingOption, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
+    CommandCatalog, CommandCatalogEntry, CommandDescriptor, Module, ModuleCatalog,
+    ModuleCatalogEntry, ModuleCategory, ModuleDescriptor, ModuleManifest, SettingOption,
+    SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
 pub use registry::{AppState, ModuleRegistry, aggregate_intents};
 pub use repositories::{
@@ -31,7 +37,8 @@ pub use repositories::{
 };
 pub use services::{ServiceRegistry, StockQuote, StockQuoteService};
 pub use settings::{
-    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
+    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
+    GuildModuleSettings, GuildSettings,
 };
 pub use suggestions::{
     SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,

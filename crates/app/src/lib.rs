@@ -1,12 +1,13 @@
 use std::sync::Arc;
 
 use dynamo_core::{
-    AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, InviteRepository,
-    MemberStatsRepository, ModuleRegistry, Persistence, ProviderStateRepository, ServiceRegistry,
-    StockQuoteService, SuggestionsRepository, WarningLogRepository,
+    AppState, CommandCatalog, DeploymentSettings, DeploymentSettingsRepository, DiscordCommand,
+    Error, GuildSettings, GuildSettingsRepository, InviteRepository, MemberStatsRepository,
+    ModuleCatalog, ModuleRegistry, Persistence, ProviderStateRepository, ServiceRegistry,
+    StockQuoteService, SuggestionsRepository, WarningLogRepository, resolve_command_state,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
-use poise::serenity_prelude::{Context, FullEvent};
+use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
 use tracing::info;
 
 pub fn module_registry() -> ModuleRegistry {
@@ -65,6 +66,21 @@ pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<Se
         dynamo_provider_yahoo::YahooFinanceClient::new(persistence.provider_state.clone())?,
     );
     Ok(ServiceRegistry::new(Some(stock_quotes)))
+}
+
+pub fn create_application_commands_for_scope(
+    deployment: &DeploymentSettings,
+    guild: Option<&GuildSettings>,
+) -> Vec<CreateCommand> {
+    let registry = module_registry();
+    let filtered_commands = filter_commands_for_scope(
+        registry.commands(),
+        registry.catalog(),
+        registry.command_catalog(),
+        deployment,
+        guild,
+    );
+    poise::builtins::create_application_commands(&filtered_commands)
 }
 
 pub async fn handle_framework_event(
@@ -130,4 +146,74 @@ pub async fn handle_framework_event(
     }
 
     Ok(())
+}
+
+fn filter_commands_for_scope(
+    commands: Vec<DiscordCommand>,
+    module_catalog: &ModuleCatalog,
+    command_catalog: &CommandCatalog,
+    deployment: &DeploymentSettings,
+    guild: Option<&GuildSettings>,
+) -> Vec<DiscordCommand> {
+    commands
+        .into_iter()
+        .filter_map(|command| {
+            filter_command_recursive(
+                command,
+                &mut Vec::new(),
+                module_catalog,
+                command_catalog,
+                deployment,
+                guild,
+            )
+        })
+        .collect()
+}
+
+fn filter_command_recursive(
+    mut command: DiscordCommand,
+    path: &mut Vec<String>,
+    module_catalog: &ModuleCatalog,
+    command_catalog: &CommandCatalog,
+    deployment: &DeploymentSettings,
+    guild: Option<&GuildSettings>,
+) -> Option<DiscordCommand> {
+    path.push(command.name.clone());
+
+    if command.subcommands.is_empty() {
+        let command_id = path.join("::");
+        let enabled = resolve_command_state(
+            module_catalog,
+            command_catalog,
+            deployment,
+            guild,
+            &command_id,
+        )
+        .map(|state| state.effective_enabled)
+        .unwrap_or(true);
+        path.pop();
+        return enabled.then_some(command);
+    }
+
+    let mut filtered_subcommands = Vec::new();
+    for subcommand in command.subcommands.into_iter() {
+        if let Some(filtered) = filter_command_recursive(
+            subcommand,
+            path,
+            module_catalog,
+            command_catalog,
+            deployment,
+            guild,
+        ) {
+            filtered_subcommands.push(filtered);
+        }
+    }
+
+    path.pop();
+    if filtered_subcommands.is_empty() {
+        return None;
+    }
+
+    command.subcommands = filtered_subcommands;
+    Some(command)
 }
