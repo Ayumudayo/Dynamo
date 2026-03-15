@@ -12,6 +12,7 @@ dynamo-module-gameinfo = { path = "../modules/gameinfo" }
 dynamo-module-greeting = { path = "../modules/greeting" }
 dynamo-module-info = { path = "../modules/info" }
 dynamo-module-invite = { path = "../modules/invite" }
+dynamo-module-moderation = { path = "../modules/moderation" }
 dynamo-module-suggestion = { path = "../modules/suggestion" }
 dynamo-module-stats = { path = "../modules/stats" }
 dynamo-module-ticket = { path = "../modules/ticket" }

@@ -1,7 +1,6 @@
 use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
-use futures_util::TryStreamExt;
 use dynamo_core::{
     DeploymentModuleSettings, DeploymentSettings, DeploymentSettingsRepository, Error,
     GuildModuleSettings, GuildSettings, GuildSettingsRepository, InviteCounters,
@@ -10,6 +9,7 @@ use dynamo_core::{
     SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository, WarningLogRecord,
     WarningLogRepository,
 };
+use futures_util::TryStreamExt;
 use mongodb::{
     Client, Collection, Database,
     bson::{DateTime as BsonDateTime, doc, from_bson, to_bson},
@@ -135,7 +135,10 @@ impl MongoPersistence {
             self.database.create_collection("members").await?;
         }
 
-        if !existing_collections.iter().any(|name| name == "member-stats") {
+        if !existing_collections
+            .iter()
+            .any(|name| name == "member-stats")
+        {
             self.database.create_collection("member-stats").await?;
         }
 
@@ -686,7 +689,11 @@ impl InviteRepository for MongoPersistence {
 
 #[async_trait]
 impl MemberStatsRepository for MongoPersistence {
-    async fn get_or_create(&self, guild_id: u64, member_id: u64) -> Result<MemberStatsRecord, Error> {
+    async fn get_or_create(
+        &self,
+        guild_id: u64,
+        member_id: u64,
+    ) -> Result<MemberStatsRecord, Error> {
         let document = self
             .member_stats
             .find_one(doc! {

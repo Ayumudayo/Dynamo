@@ -142,7 +142,10 @@ async fn stock(
     ctx: Context<'_>,
     #[description = "Symbol of the stock"] symbol: Option<String>,
 ) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.say(reason).await?;
         return Ok(());
     }
@@ -193,7 +196,10 @@ async fn stock(
 
 #[poise::command(slash_command, guild_only, category = "Stock")]
 async fn etf(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.say(reason).await?;
         return Ok(());
     }

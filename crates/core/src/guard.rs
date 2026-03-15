@@ -1,6 +1,6 @@
 use crate::{
-    AppState, Context, DeploymentSettings, Error, GuildSettings, ModuleCatalog, ResolvedModuleState,
-    resolve_module_state,
+    AppState, Context, DeploymentSettings, Error, GuildSettings, ModuleCatalog,
+    ResolvedModuleState, resolve_module_state,
 };
 
 #[derive(Debug, Clone)]
@@ -54,12 +54,26 @@ pub async fn module_access_for_context(
     module_id: &str,
 ) -> Result<ModuleAccess, Error> {
     let guild_id = ctx.guild_id().map(|id| id.get());
-    let deployment = ctx.data().persistence.deployment_settings_or_default().await?;
+    let deployment = ctx
+        .data()
+        .persistence
+        .deployment_settings_or_default()
+        .await?;
     let guild = match guild_id {
-        Some(guild_id) => Some(ctx.data().persistence.guild_settings_or_default(guild_id).await?),
+        Some(guild_id) => Some(
+            ctx.data()
+                .persistence
+                .guild_settings_or_default(guild_id)
+                .await?,
+        ),
         None => None,
     };
-    module_access_for_state(&ctx.data().module_catalog, &deployment, guild.as_ref(), module_id)
+    module_access_for_state(
+        &ctx.data().module_catalog,
+        &deployment,
+        guild.as_ref(),
+        module_id,
+    )
 }
 
 pub async fn module_access_for_app(

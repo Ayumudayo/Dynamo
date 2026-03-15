@@ -1,9 +1,12 @@
 use dynamo_core::{
-    AppState, Context, DiscordCommand, Error, GatewayIntents, Module, ModuleCategory,
-    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
-    module_access_for_app, module_access_for_context, InviteMemberRecord,
+    AppState, Context, DiscordCommand, Error, GatewayIntents, InviteMemberRecord, Module,
+    ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
+    SettingsSection, module_access_for_app, module_access_for_context,
 };
-use poise::serenity_prelude::{ChannelId, CreateEmbed, CreateEmbedFooter, CreateMessage, GuildId, Member, Mentionable, User, UserId};
+use poise::serenity_prelude::{
+    ChannelId, CreateEmbed, CreateEmbedFooter, CreateMessage, GuildId, Member, Mentionable, User,
+    UserId,
+};
 use serde::{Deserialize, Serialize};
 
 const MODULE_ID: &str = "greeting";
@@ -170,7 +173,10 @@ async fn greeting_preview(
     #[description = "Which greeting to preview"] kind: GreetingKind,
     #[description = "Optional member to preview with"] user: Option<User>,
 ) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.send(
             poise::CreateReply::default()
                 .content(reason)
@@ -192,12 +198,21 @@ async fn greeting_preview(
         GreetingKind::Farewell => &settings.farewell,
     };
     let inviter_data = if let Some(repo) = ctx.data().persistence.invites.as_ref() {
-        Some(repo.get_or_create(guild_id.get(), &user.id.get().to_string()).await?)
+        Some(
+            repo.get_or_create(guild_id.get(), &user.id.get().to_string())
+                .await?,
+        )
     } else {
         None
     };
 
-    let message = build_greeting_message(ctx.serenity_context(), &subject, config, inviter_data.as_ref()).await?;
+    let message = build_greeting_message(
+        ctx.serenity_context(),
+        &subject,
+        config,
+        inviter_data.as_ref(),
+    )
+    .await?;
     let mut reply = poise::CreateReply::default().ephemeral(true);
     if let Some(content) = message.content {
         reply = reply.content(content);
@@ -287,7 +302,9 @@ async fn dispatch_greeting(
         builder = builder.embed(embed);
     }
 
-    ChannelId::new(channel_id).send_message(ctx, builder).await?;
+    ChannelId::new(channel_id)
+        .send_message(ctx, builder)
+        .await?;
     Ok(())
 }
 
@@ -336,18 +353,20 @@ async fn build_greeting_message(
     }
     if let Some(footer) = &config.embed.footer {
         embed = embed.footer(CreateEmbedFooter::new(render_template(
-            footer,
-            subject,
-            &inviter,
+            footer, subject, &inviter,
         )));
     }
     if let Some(image) = &config.embed.image {
         embed = embed.image(render_template(image, subject, &inviter));
     }
     if let Some(icon) = &subject.guild_icon_url {
-        embed = embed.author(poise::serenity_prelude::CreateEmbedAuthor::new(&subject.guild_name).icon_url(icon));
+        embed = embed.author(
+            poise::serenity_prelude::CreateEmbedAuthor::new(&subject.guild_name).icon_url(icon),
+        );
     } else {
-        embed = embed.author(poise::serenity_prelude::CreateEmbedAuthor::new(&subject.guild_name));
+        embed = embed.author(poise::serenity_prelude::CreateEmbedAuthor::new(
+            &subject.guild_name,
+        ));
     }
 
     Ok(BuiltGreetingMessage {
@@ -409,7 +428,11 @@ async fn resolve_inviter(
     })
 }
 
-fn render_template(template: &str, subject: &GreetingSubject, inviter: &InviterRenderData) -> String {
+fn render_template(
+    template: &str,
+    subject: &GreetingSubject,
+    inviter: &InviterRenderData,
+) -> String {
     template
         .replace("\\n", "\n")
         .replace("{server}", &subject.guild_name)

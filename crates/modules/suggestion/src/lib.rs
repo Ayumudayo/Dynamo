@@ -116,7 +116,10 @@ async fn suggest(
     ctx: Context<'_>,
     #[description = "Suggestion text"] suggestion: String,
 ) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.send(
             poise::CreateReply::default()
                 .content(reason)

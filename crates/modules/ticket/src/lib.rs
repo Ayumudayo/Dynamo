@@ -171,7 +171,10 @@ async fn ticket_setup(
     #[description = "Optional embed description"] description: Option<String>,
     #[description = "Optional embed footer"] footer: Option<String>,
 ) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.send(
             poise::CreateReply::default()
                 .content(reason)

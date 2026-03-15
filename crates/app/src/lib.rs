@@ -1,8 +1,8 @@
 use std::sync::Arc;
 
 use dynamo_core::{
-    AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, ModuleRegistry,
-    InviteRepository, MemberStatsRepository, Persistence, ProviderStateRepository, ServiceRegistry,
+    AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, InviteRepository,
+    MemberStatsRepository, ModuleRegistry, Persistence, ProviderStateRepository, ServiceRegistry,
     StockQuoteService, SuggestionsRepository, WarningLogRepository,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
@@ -15,6 +15,7 @@ pub fn module_registry() -> ModuleRegistry {
         Box::new(dynamo_module_gameinfo::GameInfoModule),
         Box::new(dynamo_module_greeting::GreetingModule),
         Box::new(dynamo_module_invite::InviteModule),
+        Box::new(dynamo_module_moderation::ModerationModule),
         Box::new(dynamo_module_suggestion::SuggestionModule),
         Box::new(dynamo_module_stats::StatsModule),
         Box::new(dynamo_module_ticket::TicketModule),
@@ -78,15 +79,10 @@ pub async fn handle_framework_event(
             }
         }
         FullEvent::GuildMemberAddition { new_member } => {
-            let inviter_data = dynamo_module_invite::track_joined_member(ctx, data, new_member)
+            let inviter_data =
+                dynamo_module_invite::track_joined_member(ctx, data, new_member).await?;
+            dynamo_module_greeting::send_welcome(ctx, data, new_member, inviter_data.as_ref())
                 .await?;
-            dynamo_module_greeting::send_welcome(
-                ctx,
-                data,
-                new_member,
-                inviter_data.as_ref(),
-            )
-            .await?;
         }
         FullEvent::GuildMemberRemoval {
             guild_id,

@@ -147,7 +147,10 @@ struct MaintenanceItem {
 
 #[poise::command(slash_command, guild_only, category = "Game Info")]
 async fn wtinv(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.say(reason).await?;
         return Ok(());
     }
@@ -176,7 +179,10 @@ async fn wtinv(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, category = "Game Info")]
 async fn maint(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.say(reason).await?;
         return Ok(());
     }
@@ -189,7 +195,10 @@ async fn maint(ctx: Context<'_>) -> Result<(), Error> {
 
 #[poise::command(slash_command, category = "Game Info")]
 async fn pll(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
         ctx.say(reason).await?;
         return Ok(());
     }

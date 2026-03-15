@@ -26,8 +26,8 @@ pub use module::{
 };
 pub use registry::{AppState, ModuleRegistry, aggregate_intents};
 pub use repositories::{
-    DeploymentSettingsRepository, GuildSettingsRepository, Persistence, ProviderStateRepository,
-    SuggestionsRepository, InviteRepository, MemberStatsRepository, WarningLogRepository,
+    DeploymentSettingsRepository, GuildSettingsRepository, InviteRepository, MemberStatsRepository,
+    Persistence, ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
 };
 pub use services::{ServiceRegistry, StockQuote, StockQuoteService};
 pub use settings::{

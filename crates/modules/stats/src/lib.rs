@@ -5,11 +5,13 @@ use std::{
 };
 
 use dynamo_core::{
-    AppState, DiscordCommand, Error, GatewayIntents, MemberStatsRecord, Module,
-    ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
-    SettingsSection, module_access_for_app,
+    AppState, DiscordCommand, Error, GatewayIntents, MemberStatsRecord, Module, ModuleCategory,
+    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
+    module_access_for_app,
 };
-use poise::serenity_prelude::{ChannelId, CreateMessage, GuildId, Interaction, Message, UserId, VoiceState};
+use poise::serenity_prelude::{
+    ChannelId, CreateMessage, GuildId, Interaction, Message, UserId, VoiceState,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 
@@ -144,7 +146,9 @@ pub async fn handle_message(
         return Ok(());
     };
 
-    let mut record = repo.get_or_create(guild_id.get(), message.author.id.get()).await?;
+    let mut record = repo
+        .get_or_create(guild_id.get(), message.author.id.get())
+        .await?;
     record.messages += 1;
 
     if should_award_xp(guild_id.get(), message.author.id.get()).await {
@@ -235,7 +239,10 @@ pub async fn handle_voice_state_update(
     old: Option<&VoiceState>,
     new: &VoiceState,
 ) -> Result<(), Error> {
-    let Some(guild_id) = new.guild_id.or_else(|| old.and_then(|state| state.guild_id)) else {
+    let Some(guild_id) = new
+        .guild_id
+        .or_else(|| old.and_then(|state| state.guild_id))
+    else {
         return Ok(());
     };
 

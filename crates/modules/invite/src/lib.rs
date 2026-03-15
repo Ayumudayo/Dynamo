@@ -9,7 +9,9 @@ use dynamo_core::{
     ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
     module_access_for_app,
 };
-use poise::serenity_prelude::{GuildId, InviteCreateEvent, InviteDeleteEvent, RichInvite, RoleId, User, UserId};
+use poise::serenity_prelude::{
+    GuildId, InviteCreateEvent, InviteDeleteEvent, RichInvite, RoleId, User, UserId,
+};
 use serde::{Deserialize, Serialize};
 use tokio::sync::RwLock;
 
@@ -38,9 +40,7 @@ impl Module for InviteModule {
             "Tracks inviter attribution and reward roles for member joins and leaves.",
             ModuleCategory::Utility,
             true,
-            GatewayIntents::GUILDS
-                | GatewayIntents::GUILD_MEMBERS
-                | GatewayIntents::GUILD_INVITES,
+            GatewayIntents::GUILDS | GatewayIntents::GUILD_MEMBERS | GatewayIntents::GUILD_INVITES,
         )
     }
 
@@ -65,7 +65,9 @@ impl Module for InviteModule {
                     SettingsField {
                         key: "ranks",
                         label: "Reward ranks",
-                        help_text: Some("Array of rank objects with `invites` and role `_id`/`role_id`."),
+                        help_text: Some(
+                            "Array of rank objects with `invites` and role `_id`/`role_id`.",
+                        ),
                         required: false,
                         kind: SettingsFieldKind::Text,
                     },
@@ -224,7 +226,9 @@ pub async fn track_joined_member(
         return Ok(None);
     };
 
-    let mut inviter_record = repo.get_or_create(member.guild_id.get(), inviter_id).await?;
+    let mut inviter_record = repo
+        .get_or_create(member.guild_id.get(), inviter_id)
+        .await?;
     inviter_record.invite_data.tracked += 1;
     inviter_record.updated_at = chrono::Utc::now();
     let inviter_record = repo.save(inviter_record).await?;
@@ -327,7 +331,9 @@ fn find_used_invite(
     let mut deleted = cached.values().cloned().collect::<Vec<_>>();
     deleted.sort_by_key(|invite| std::cmp::Reverse(invite.deleted_timestamp.unwrap_or_default()));
     deleted.into_iter().find(|invite| {
-        !fresh.contains_key(&invite.code) && invite.max_uses > 0 && invite.uses == invite.max_uses as u64 - 1
+        !fresh.contains_key(&invite.code)
+            && invite.max_uses > 0
+            && invite.uses == invite.max_uses as u64 - 1
     })
 }
 

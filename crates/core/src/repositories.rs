@@ -67,7 +67,11 @@ pub trait InviteRepository: Send + Sync {
 
 #[async_trait]
 pub trait MemberStatsRepository: Send + Sync {
-    async fn get_or_create(&self, guild_id: u64, member_id: u64) -> Result<MemberStatsRecord, Error>;
+    async fn get_or_create(
+        &self,
+        guild_id: u64,
+        member_id: u64,
+    ) -> Result<MemberStatsRecord, Error>;
     async fn save(&self, record: MemberStatsRecord) -> Result<MemberStatsRecord, Error>;
 }
 
