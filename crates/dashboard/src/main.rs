@@ -441,10 +441,13 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
+                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
+                section_id = module_anchor_id("deployment", entry.module.id),
+                module_name = escape_html(entry.module.display_name),
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
                 status = render_deployment_status(resolved),
+                status_badge = render_enabled_badge(resolved.effective_enabled),
                 runtime_notice = runtime_notice,
                 module_id = escape_html(entry.module.id),
                 installed = if current.installed { "checked" } else { "" },
@@ -455,13 +458,52 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
         .collect::<Vec<_>>()
         .join("\n");
 
+    let module_cards = render_module_summary_cards(
+        "deployment",
+        &state.module_catalog,
+        &state.command_catalog,
+        &resolved_states,
+    );
+    let command_cards = render_command_summary_cards(
+        "deployment",
+        &state.command_catalog,
+        &resolved_command_states,
+    );
+    let overview = render_overview_section(
+        "Deployment Control",
+        "Global install state and command availability across every guild.",
+        &[
+            (
+                "Modules Enabled",
+                count_enabled_modules(&resolved_states).to_string(),
+            ),
+            (
+                "Commands Enabled",
+                count_enabled_commands(&resolved_command_states).to_string(),
+            ),
+            (
+                "Runtime Notes",
+                count_runtime_notices(&state.module_catalog).to_string(),
+            ),
+        ],
+    );
+    let content = format!(
+        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Activity</p><h2>Runtime Notes</h2></div></div>{runtime_notices}</section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Deployment Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
+        overview = overview,
+        runtime_notices = render_runtime_notices(&state.module_catalog),
+        module_cards = module_cards,
+        command_cards = command_cards,
+        sections = sections,
+        script = dashboard_script(),
+    );
+
     Html(render_document(
         &state,
         Some(&session),
         "Deployment Settings",
         "Global module installation, enablement, and command controls.",
         Some("/deployment"),
-        &format!("{sections}<script>{}</script>", dashboard_script()),
+        &content,
     ))
     .into_response()
 }
@@ -540,11 +582,14 @@ async fn guild_page(
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
+                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
+                section_id = module_anchor_id("guild", entry.module.id),
+                module_name = escape_html(entry.module.display_name),
                 guild_id = guild_id,
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
                 status = render_guild_status(resolved),
+                status_badge = render_enabled_badge(resolved.effective_enabled),
                 runtime_notice = runtime_notice,
                 module_id = escape_html(entry.module.id),
                 enabled = if current.enabled { "checked" } else { "" },
@@ -556,13 +601,46 @@ async fn guild_page(
         .collect::<Vec<_>>()
         .join("\n");
 
+    let module_cards = render_module_summary_cards(
+        "guild",
+        &state.module_catalog,
+        &state.command_catalog,
+        &resolved_states,
+    );
+    let command_cards =
+        render_command_summary_cards("guild", &state.command_catalog, &resolved_command_states);
+    let content = format!(
+        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two\"><article class=\"panel info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Guild Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
+        overview = render_overview_section(
+            &card.name,
+            "Guild-scoped module and command controls for this server.",
+            &[
+                (
+                    "Modules Enabled",
+                    count_enabled_modules(&resolved_states).to_string()
+                ),
+                (
+                    "Commands Enabled",
+                    count_enabled_commands(&resolved_command_states).to_string()
+                ),
+                ("Guild ID", guild_id.to_string()),
+            ],
+        ),
+        guild_id = guild_id,
+        runtime_notices = render_runtime_notices(&state.module_catalog),
+        module_cards = module_cards,
+        command_cards = command_cards,
+        sections = sections,
+        script = dashboard_script(),
+    );
+
     Html(render_document(
         &state,
         Some(&session),
         &format!("Guild Settings: {}", card.name),
         "Guild-scoped module and command controls for this server.",
         Some(&format!("/guild/{guild_id}")),
-        &format!("{sections}<script>{}</script>", dashboard_script()),
+        &content,
     ))
     .into_response()
 }
@@ -1165,6 +1243,13 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .toolbar-search { max-width: 320px; margin: 0; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
 .module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
+.command-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.summary-card-head, .detail-panel-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
+.detail-panel-status { display: flex; align-items: center; }
+.detail-panel p, .summary-card p, .info-panel p { color: var(--muted); }
+.detail-meta { margin: 8px 0 0; }
+.detail-stack { display: grid; gap: 18px; }
+.command-detail-card { border: 1px solid rgba(255,255,255,0.06); background: var(--panel-strong); border-radius: 14px; padding: 16px; }
 .guild-card-meta { display: flex; align-items: center; gap: 10px; margin: 14px 0 16px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
 .guild-card-meta code { color: var(--text); background: rgba(255,255,255,0.04); padding: 4px 8px; border-radius: 8px; }
 .empty-state { min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
@@ -1188,7 +1273,7 @@ a { color: #ff6b87; }
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; }
-  .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid { grid-template-columns: 1fr; }
+  .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid { grid-template-columns: 1fr; }
   .toolbar { flex-direction: column; align-items: stretch; }
   .content-shell { padding: 20px; }
 }
@@ -1206,6 +1291,24 @@ function filterGuildCards(query) {
   for (const card of cards) {
     const guildName = card.getAttribute('data-guild-name') || '';
     card.style.display = guildName.includes(value) ? '' : 'none';
+  }
+}
+
+function filterModuleCards(query) {
+  const value = (query || '').trim().toLowerCase();
+  const cards = document.querySelectorAll('[data-module-name]');
+  for (const card of cards) {
+    const moduleName = card.getAttribute('data-module-name') || '';
+    card.style.display = moduleName.includes(value) ? '' : 'none';
+  }
+}
+
+function filterCommandCards(query) {
+  const value = (query || '').trim().toLowerCase();
+  const cards = document.querySelectorAll('[data-command-name]');
+  for (const card of cards) {
+    const commandName = card.getAttribute('data-command-name') || '';
+    card.style.display = commandName.includes(value) ? '' : 'none';
   }
 }
 "#
@@ -1319,6 +1422,114 @@ fn render_runtime_notices(catalog: &ModuleCatalog) -> String {
     }
 }
 
+fn render_overview_section(title: &str, subtitle: &str, stats: &[(&str, String)]) -> String {
+    let stat_markup = stats
+        .iter()
+        .map(|(label, value)| {
+            format!(
+                "<div class=\"stat\"><span>{}</span><strong>{}</strong></div>",
+                escape_html(label),
+                escape_html(value)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("");
+
+    format!(
+        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Dashboard</p><h1>{}</h1><p class=\"lede\">{}</p></div><div class=\"hero-card\"><dl>{}</dl></div></section>",
+        escape_html(title),
+        escape_html(subtitle),
+        stat_markup
+    )
+}
+
+fn render_module_summary_cards(
+    scope: &str,
+    catalog: &ModuleCatalog,
+    command_catalog: &CommandCatalog,
+    resolved_states: &[ResolvedModuleState],
+) -> String {
+    catalog
+        .entries
+        .iter()
+        .zip(resolved_states.iter())
+        .map(|(entry, resolved)| {
+            format!(
+                "<article class=\"panel summary-card\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p>{description}</p><div class=\"summary-card-meta\"><span>Commands</span><code>{command_count}</code></div><div class=\"actions\"><a class=\"button button-secondary\" href=\"#{anchor}\">Settings</a></div></article>",
+                data_name = escape_html(&entry.module.display_name.to_ascii_lowercase()),
+                name = escape_html(entry.module.display_name),
+                badge = render_enabled_badge(resolved.effective_enabled),
+                description = escape_html(entry.module.description),
+                command_count = catalog_command_count_for_module(command_catalog, entry.module.id),
+                anchor = module_anchor_id(scope, entry.module.id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_command_summary_cards(
+    scope: &str,
+    catalog: &CommandCatalog,
+    resolved_states: &[ResolvedCommandState],
+) -> String {
+    catalog
+        .entries
+        .iter()
+        .zip(resolved_states.iter())
+        .map(|(entry, resolved)| {
+            format!(
+                "<article class=\"panel summary-card command-card\" data-command-name=\"{command_name}\"><div class=\"summary-card-head\"><h3>{display_name}</h3>{badge}</div><p>{description}</p><div class=\"summary-card-meta\"><span>Module</span><code>{module_name}</code></div><div class=\"actions\"><a class=\"button button-secondary\" href=\"#{anchor}\">Settings</a></div></article>",
+                command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
+                display_name = escape_html(&entry.command.display_name),
+                badge = render_enabled_badge(resolved.effective_enabled),
+                description = escape_html(entry.command.description.as_deref().unwrap_or("No description provided.")),
+                module_name = escape_html(entry.command.module_display_name),
+                anchor = command_anchor_id(scope, &entry.command.id),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn catalog_command_count_for_module(catalog: &CommandCatalog, module_id: &str) -> usize {
+    catalog
+        .entries
+        .iter()
+        .filter(|entry| entry.command.module_id == module_id)
+        .count()
+}
+
+fn render_enabled_badge(enabled: bool) -> String {
+    if enabled {
+        "<span class=\"pill pill-success\">Enabled</span>".to_string()
+    } else {
+        "<span class=\"pill pill-warn\">Disabled</span>".to_string()
+    }
+}
+
+fn module_anchor_id(scope: &str, module_id: &str) -> String {
+    format!("{scope}-module-{}", status_key(module_id))
+}
+
+fn command_anchor_id(scope: &str, command_id: &str) -> String {
+    format!("{scope}-command-{}", status_key(command_id))
+}
+
+fn count_enabled_modules(states: &[ResolvedModuleState]) -> usize {
+    states
+        .iter()
+        .filter(|state| state.effective_enabled)
+        .count()
+}
+
+fn count_enabled_commands(states: &[ResolvedCommandState]) -> usize {
+    states
+        .iter()
+        .filter(|state| state.effective_enabled)
+        .count()
+}
+
 fn render_module_runtime_notice(module_id: &str) -> String {
     runtime_notice_text(module_id)
         .map(|note| {
@@ -1411,8 +1622,11 @@ fn render_deployment_command_sections(
             );
 
             format!(
-                "<article style=\"margin:12px 0 0 16px; padding:12px; border:1px solid #ddd\"><h3>{name}</h3><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentCommand(event, '{command_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
+                "<article id=\"{article_id}\" class=\"command-detail-card\" data-command-name=\"{command_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentCommand(event, '{command_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
+                article_id = command_anchor_id("deployment", &entry.command.id),
+                command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
                 name = escape_html(&entry.command.display_name),
+                badge = render_enabled_badge(resolved.map(|s| s.effective_enabled).unwrap_or(false)),
                 status = resolved
                     .map(render_deployment_command_status)
                     .unwrap_or_else(|| "unknown".to_string()),
@@ -1462,8 +1676,11 @@ fn render_guild_command_sections(
             );
 
             format!(
-                "<article style=\"margin:12px 0 0 16px; padding:12px; border:1px solid #ddd\"><h3>{name}</h3><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildCommand(event, {guild_id}, '{command_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
+                "<article id=\"{article_id}\" class=\"command-detail-card\" data-command-name=\"{command_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildCommand(event, {guild_id}, '{command_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
+                article_id = command_anchor_id("guild", &entry.command.id),
+                command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
                 name = escape_html(&entry.command.display_name),
+                badge = render_enabled_badge(resolved.map(|s| s.effective_enabled).unwrap_or(false)),
                 status = resolved
                     .map(render_guild_command_status)
                     .unwrap_or_else(|| "unknown".to_string()),
