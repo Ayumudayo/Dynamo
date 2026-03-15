@@ -41,6 +41,17 @@ pub fn resolve_module_states(
         .collect()
 }
 
+pub fn resolve_module_state(
+    catalog: &ModuleCatalog,
+    deployment: &DeploymentSettings,
+    guild: Option<&GuildSettings>,
+    module_id: &str,
+) -> Option<ResolvedModuleState> {
+    resolve_module_states(catalog, deployment, guild)
+        .into_iter()
+        .find(|state| state.module.id == module_id)
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeMap;

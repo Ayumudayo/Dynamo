@@ -1,11 +1,14 @@
 use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
 use dynamo_core::{
     DeploymentModuleSettings, DeploymentSettings, DeploymentSettingsRepository, Error,
-    GuildModuleSettings, GuildSettings, GuildSettingsRepository, ProviderStateRepository,
-    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
-    SuggestionsRepository,
+    GuildModuleSettings, GuildSettings, GuildSettingsRepository, InviteCounters,
+    InviteLeaderboardEntry, InviteMemberRecord, InviteRepository, MemberStatsRecord,
+    MemberStatsRepository, ProviderStateRepository, SuggestionRecord, SuggestionStats,
+    SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository, WarningLogRecord,
+    WarningLogRepository,
 };
 use mongodb::{
     Client, Collection, Database,
@@ -65,6 +68,9 @@ pub struct MongoPersistence {
     deployment_settings: Collection<DeploymentSettingsDocument>,
     provider_state: Collection<ProviderStateDocument>,
     suggestions: Collection<SuggestionDocument>,
+    invite_members: Collection<InviteMemberDocument>,
+    member_stats: Collection<MemberStatsDocument>,
+    warning_logs: Collection<WarningLogDocument>,
 }
 
 impl MongoPersistence {
@@ -76,6 +82,9 @@ impl MongoPersistence {
             database.collection::<DeploymentSettingsDocument>("deployment_settings");
         let provider_state = database.collection::<ProviderStateDocument>("provider_state");
         let suggestions = database.collection::<SuggestionDocument>("suggestions");
+        let invite_members = database.collection::<InviteMemberDocument>("members");
+        let member_stats = database.collection::<MemberStatsDocument>("member-stats");
+        let warning_logs = database.collection::<WarningLogDocument>("mod-logs");
 
         Ok(Self {
             database,
@@ -83,6 +92,9 @@ impl MongoPersistence {
             deployment_settings,
             provider_state,
             suggestions,
+            invite_members,
+            member_stats,
+            warning_logs,
         })
     }
 
@@ -117,6 +129,18 @@ impl MongoPersistence {
             .any(|name| name == "suggestions")
         {
             self.database.create_collection("suggestions").await?;
+        }
+
+        if !existing_collections.iter().any(|name| name == "members") {
+            self.database.create_collection("members").await?;
+        }
+
+        if !existing_collections.iter().any(|name| name == "member-stats") {
+            self.database.create_collection("member-stats").await?;
+        }
+
+        if !existing_collections.iter().any(|name| name == "mod-logs") {
+            self.database.create_collection("mod-logs").await?;
         }
 
         self.deployment_settings
@@ -263,6 +287,40 @@ struct SuggestionStatusUpdateDocument {
     timestamp: BsonDateTime,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct InviteMemberDocument {
+    guild_id: String,
+    member_id: String,
+    #[serde(default)]
+    invite_data: InviteCounters,
+    created_at: BsonDateTime,
+    updated_at: BsonDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct MemberStatsDocument {
+    guild_id: String,
+    member_id: String,
+    messages: u64,
+    voice: dynamo_core::VoiceStatsRecord,
+    commands: dynamo_core::CommandUsageStats,
+    contexts: dynamo_core::MessageContextUsageStats,
+    xp: u64,
+    level: u32,
+    created_at: BsonDateTime,
+    updated_at: BsonDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct WarningLogDocument {
+    guild_id: String,
+    member_id: String,
+    reason: Option<String>,
+    admin_id: String,
+    admin_tag: String,
+    created_at: BsonDateTime,
+}
+
 impl SuggestionDocument {
     fn from_domain(value: SuggestionRecord) -> Self {
         Self {
@@ -323,6 +381,84 @@ impl SuggestionStatusUpdateDocument {
     }
 }
 
+impl InviteMemberDocument {
+    fn from_domain(value: InviteMemberRecord) -> Self {
+        Self {
+            guild_id: value.guild_id.to_string(),
+            member_id: value.member_id,
+            invite_data: value.invite_data,
+            created_at: BsonDateTime::from_millis(value.created_at.timestamp_millis()),
+            updated_at: BsonDateTime::from_millis(value.updated_at.timestamp_millis()),
+        }
+    }
+
+    fn into_domain(self) -> Result<InviteMemberRecord, Error> {
+        Ok(InviteMemberRecord {
+            guild_id: parse_snowflake(&self.guild_id, "invite member guild id")?,
+            member_id: self.member_id,
+            invite_data: self.invite_data,
+            created_at: self.created_at.to_system_time().into(),
+            updated_at: self.updated_at.to_system_time().into(),
+        })
+    }
+}
+
+impl MemberStatsDocument {
+    fn from_domain(value: MemberStatsRecord) -> Self {
+        Self {
+            guild_id: value.guild_id.to_string(),
+            member_id: value.member_id.to_string(),
+            messages: value.messages,
+            voice: value.voice,
+            commands: value.commands,
+            contexts: value.contexts,
+            xp: value.xp,
+            level: value.level,
+            created_at: BsonDateTime::from_millis(value.created_at.timestamp_millis()),
+            updated_at: BsonDateTime::from_millis(value.updated_at.timestamp_millis()),
+        }
+    }
+
+    fn into_domain(self) -> Result<MemberStatsRecord, Error> {
+        Ok(MemberStatsRecord {
+            guild_id: parse_snowflake(&self.guild_id, "member stats guild id")?,
+            member_id: parse_snowflake(&self.member_id, "member stats member id")?,
+            messages: self.messages,
+            voice: self.voice,
+            commands: self.commands,
+            contexts: self.contexts,
+            xp: self.xp,
+            level: self.level,
+            created_at: self.created_at.to_system_time().into(),
+            updated_at: self.updated_at.to_system_time().into(),
+        })
+    }
+}
+
+impl WarningLogDocument {
+    fn from_domain(value: WarningLogRecord) -> Self {
+        Self {
+            guild_id: value.guild_id.to_string(),
+            member_id: value.member_id.to_string(),
+            reason: value.reason,
+            admin_id: value.admin_id.to_string(),
+            admin_tag: value.admin_tag,
+            created_at: BsonDateTime::from_millis(value.created_at.timestamp_millis()),
+        }
+    }
+
+    fn into_domain(self) -> Result<WarningLogRecord, Error> {
+        Ok(WarningLogRecord {
+            guild_id: parse_snowflake(&self.guild_id, "warning log guild id")?,
+            member_id: parse_snowflake(&self.member_id, "warning log member id")?,
+            reason: self.reason,
+            admin_id: parse_snowflake(&self.admin_id, "warning log admin id")?,
+            admin_tag: self.admin_tag,
+            created_at: self.created_at.to_system_time().into(),
+        })
+    }
+}
+
 fn parse_snowflake(value: &str, field_name: &str) -> Result<u64, Error> {
     value
         .parse()
@@ -370,7 +506,7 @@ impl GuildSettingsRepository for MongoPersistence {
             .upsert(true)
             .await?;
 
-        self.get_or_create(guild_id).await
+        GuildSettingsRepository::get_or_create(self, guild_id).await
     }
 }
 
@@ -459,5 +595,180 @@ impl SuggestionsRepository for MongoPersistence {
             .await?;
 
         document.into_domain()
+    }
+}
+
+#[async_trait]
+impl InviteRepository for MongoPersistence {
+    async fn get_or_create(
+        &self,
+        guild_id: u64,
+        member_id: &str,
+    ) -> Result<InviteMemberRecord, Error> {
+        let document = self
+            .invite_members
+            .find_one(doc! {
+                "guild_id": guild_id.to_string(),
+                "member_id": member_id,
+            })
+            .await?;
+
+        if let Some(document) = document {
+            return document.into_domain();
+        }
+
+        let now = chrono::Utc::now();
+        let record = InviteMemberRecord {
+            guild_id,
+            member_id: member_id.to_string(),
+            invite_data: Default::default(),
+            created_at: now,
+            updated_at: now,
+        };
+        let document = InviteMemberDocument::from_domain(record);
+        self.invite_members.insert_one(document.clone()).await?;
+        document.into_domain()
+    }
+
+    async fn save(&self, record: InviteMemberRecord) -> Result<InviteMemberRecord, Error> {
+        let document = InviteMemberDocument::from_domain(record);
+        self.invite_members
+            .replace_one(
+                doc! {
+                    "guild_id": &document.guild_id,
+                    "member_id": &document.member_id,
+                },
+                document.clone(),
+            )
+            .upsert(true)
+            .await?;
+        document.into_domain()
+    }
+
+    async fn leaderboard(
+        &self,
+        guild_id: u64,
+        limit: u32,
+    ) -> Result<Vec<InviteLeaderboardEntry>, Error> {
+        let pipeline = vec![
+            doc! { "$match": { "guild_id": guild_id.to_string() } },
+            doc! {
+                "$project": {
+                    "member_id": "$member_id",
+                    "invites": {
+                        "$subtract": [
+                            { "$add": ["$invite_data.tracked", "$invite_data.added"] },
+                            { "$add": ["$invite_data.left", "$invite_data.fake"] }
+                        ]
+                    }
+                }
+            },
+            doc! { "$match": { "invites": { "$gt": 0 } } },
+            doc! { "$sort": { "invites": -1 } },
+            doc! { "$limit": limit as i64 },
+        ];
+
+        let mut cursor = self.invite_members.aggregate(pipeline).await?;
+        let mut entries = Vec::new();
+        while let Some(document) = cursor.try_next().await? {
+            let member_id = document
+                .get_str("member_id")
+                .map_err(|error| anyhow::anyhow!("invite leaderboard member_id missing: {error}"))?
+                .to_string();
+            let invites = document
+                .get_i64("invites")
+                .map_err(|error| anyhow::anyhow!("invite leaderboard invites missing: {error}"))?;
+            entries.push(InviteLeaderboardEntry { member_id, invites });
+        }
+        Ok(entries)
+    }
+}
+
+#[async_trait]
+impl MemberStatsRepository for MongoPersistence {
+    async fn get_or_create(&self, guild_id: u64, member_id: u64) -> Result<MemberStatsRecord, Error> {
+        let document = self
+            .member_stats
+            .find_one(doc! {
+                "guild_id": guild_id.to_string(),
+                "member_id": member_id.to_string(),
+            })
+            .await?;
+
+        if let Some(document) = document {
+            return document.into_domain();
+        }
+
+        let now = chrono::Utc::now();
+        let record = MemberStatsRecord {
+            guild_id,
+            member_id,
+            messages: 0,
+            voice: Default::default(),
+            commands: Default::default(),
+            contexts: Default::default(),
+            xp: 0,
+            level: 1,
+            created_at: now,
+            updated_at: now,
+        };
+        let document = MemberStatsDocument::from_domain(record);
+        self.member_stats.insert_one(document.clone()).await?;
+        document.into_domain()
+    }
+
+    async fn save(&self, record: MemberStatsRecord) -> Result<MemberStatsRecord, Error> {
+        let document = MemberStatsDocument::from_domain(record);
+        self.member_stats
+            .replace_one(
+                doc! {
+                    "guild_id": &document.guild_id,
+                    "member_id": &document.member_id,
+                },
+                document.clone(),
+            )
+            .upsert(true)
+            .await?;
+        document.into_domain()
+    }
+}
+
+#[async_trait]
+impl WarningLogRepository for MongoPersistence {
+    async fn add(&self, record: WarningLogRecord) -> Result<WarningLogRecord, Error> {
+        let document = WarningLogDocument::from_domain(record);
+        self.warning_logs.insert_one(document.clone()).await?;
+        document.into_domain()
+    }
+
+    async fn list_for_member(
+        &self,
+        guild_id: u64,
+        member_id: u64,
+    ) -> Result<Vec<WarningLogRecord>, Error> {
+        let mut cursor = self
+            .warning_logs
+            .find(doc! {
+                "guild_id": guild_id.to_string(),
+                "member_id": member_id.to_string(),
+            })
+            .await?;
+
+        let mut records = Vec::new();
+        while let Some(document) = cursor.try_next().await? {
+            records.push(document.into_domain()?);
+        }
+        Ok(records)
+    }
+
+    async fn clear_for_member(&self, guild_id: u64, member_id: u64) -> Result<u64, Error> {
+        let deleted = self
+            .warning_logs
+            .delete_many(doc! {
+                "guild_id": guild_id.to_string(),
+                "member_id": member_id.to_string(),
+            })
+            .await?;
+        Ok(deleted.deleted_count)
     }
 }

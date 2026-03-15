@@ -5,8 +5,11 @@ use serde_json::Value;
 
 use crate::{
     Error,
+    invite::{InviteLeaderboardEntry, InviteMemberRecord},
+    member_stats::MemberStatsRecord,
     settings::{DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings},
     suggestions::SuggestionRecord,
+    warnings::WarningLogRecord,
 };
 
 #[async_trait]
@@ -47,6 +50,38 @@ pub trait SuggestionsRepository: Send + Sync {
     async fn save(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error>;
 }
 
+#[async_trait]
+pub trait InviteRepository: Send + Sync {
+    async fn get_or_create(
+        &self,
+        guild_id: u64,
+        member_id: &str,
+    ) -> Result<InviteMemberRecord, Error>;
+    async fn save(&self, record: InviteMemberRecord) -> Result<InviteMemberRecord, Error>;
+    async fn leaderboard(
+        &self,
+        guild_id: u64,
+        limit: u32,
+    ) -> Result<Vec<InviteLeaderboardEntry>, Error>;
+}
+
+#[async_trait]
+pub trait MemberStatsRepository: Send + Sync {
+    async fn get_or_create(&self, guild_id: u64, member_id: u64) -> Result<MemberStatsRecord, Error>;
+    async fn save(&self, record: MemberStatsRecord) -> Result<MemberStatsRecord, Error>;
+}
+
+#[async_trait]
+pub trait WarningLogRepository: Send + Sync {
+    async fn add(&self, record: WarningLogRecord) -> Result<WarningLogRecord, Error>;
+    async fn list_for_member(
+        &self,
+        guild_id: u64,
+        member_id: u64,
+    ) -> Result<Vec<WarningLogRecord>, Error>;
+    async fn clear_for_member(&self, guild_id: u64, member_id: u64) -> Result<u64, Error>;
+}
+
 #[derive(Clone, Default)]
 pub struct Persistence {
     pub database_name: Option<String>,
@@ -54,6 +89,9 @@ pub struct Persistence {
     pub deployment_settings: Option<Arc<dyn DeploymentSettingsRepository>>,
     pub provider_state: Option<Arc<dyn ProviderStateRepository>>,
     pub suggestions: Option<Arc<dyn SuggestionsRepository>>,
+    pub invites: Option<Arc<dyn InviteRepository>>,
+    pub member_stats: Option<Arc<dyn MemberStatsRepository>>,
+    pub warning_logs: Option<Arc<dyn WarningLogRepository>>,
 }
 
 impl Persistence {
@@ -63,6 +101,9 @@ impl Persistence {
         deployment_settings: Option<Arc<dyn DeploymentSettingsRepository>>,
         provider_state: Option<Arc<dyn ProviderStateRepository>>,
         suggestions: Option<Arc<dyn SuggestionsRepository>>,
+        invites: Option<Arc<dyn InviteRepository>>,
+        member_stats: Option<Arc<dyn MemberStatsRepository>>,
+        warning_logs: Option<Arc<dyn WarningLogRepository>>,
     ) -> Self {
         Self {
             database_name,
@@ -70,6 +111,9 @@ impl Persistence {
             deployment_settings,
             provider_state,
             suggestions,
+            invites,
+            member_stats,
+            warning_logs,
         }
     }
 
@@ -112,6 +156,45 @@ impl Persistence {
         match &self.suggestions {
             Some(repo) => repo.get_by_message(guild_id, message_id).await,
             None => Ok(None),
+        }
+    }
+
+    pub async fn invite_record_or_default(
+        &self,
+        guild_id: u64,
+        member_id: &str,
+    ) -> Result<InviteMemberRecord, Error> {
+        match &self.invites {
+            Some(repo) => repo.get_or_create(guild_id, member_id).await,
+            None => Ok(InviteMemberRecord {
+                guild_id,
+                member_id: member_id.to_string(),
+                invite_data: Default::default(),
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }),
+        }
+    }
+
+    pub async fn member_stats_or_default(
+        &self,
+        guild_id: u64,
+        member_id: u64,
+    ) -> Result<MemberStatsRecord, Error> {
+        match &self.member_stats {
+            Some(repo) => repo.get_or_create(guild_id, member_id).await,
+            None => Ok(MemberStatsRecord {
+                guild_id,
+                member_id,
+                messages: 0,
+                voice: Default::default(),
+                commands: Default::default(),
+                contexts: Default::default(),
+                xp: 0,
+                level: 1,
+                created_at: chrono::Utc::now(),
+                updated_at: chrono::Utc::now(),
+            }),
         }
     }
 }

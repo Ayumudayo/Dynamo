@@ -7,7 +7,7 @@ use std::{
 use dynamo_core::{
     Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module, ModuleCategory,
     ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, StockQuote,
-    StockQuoteService,
+    StockQuoteService, module_access_for_context,
 };
 use poise::serenity_prelude::{
     ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
@@ -142,7 +142,7 @@ async fn stock(
     ctx: Context<'_>,
     #[description = "Symbol of the stock"] symbol: Option<String>,
 ) -> Result<(), Error> {
-    if let Some(reason) = module_disable_reason(ctx).await? {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
         ctx.say(reason).await?;
         return Ok(());
     }
@@ -193,7 +193,7 @@ async fn stock(
 
 #[poise::command(slash_command, guild_only, category = "Stock")]
 async fn etf(ctx: Context<'_>) -> Result<(), Error> {
-    if let Some(reason) = module_disable_reason(ctx).await? {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
         ctx.say(reason).await?;
         return Ok(());
     }
@@ -275,45 +275,6 @@ fn parse_stock_settings(module: &GuildModuleSettings) -> Result<StockSettings, E
     Ok(serde_json::from_value::<StockSettings>(
         module.configuration.clone(),
     )?)
-}
-
-async fn module_disable_reason(ctx: Context<'_>) -> Result<Option<String>, Error> {
-    let deployment = ctx
-        .data()
-        .persistence
-        .deployment_settings_or_default()
-        .await?;
-    if let Some(module) = deployment.modules.get(MODULE_ID) {
-        if !module.installed {
-            return Ok(Some(
-                "The `stock` module is not installed for this deployment.".to_string(),
-            ));
-        }
-        if !module.enabled {
-            return Ok(Some(
-                "The `stock` module is disabled for this deployment.".to_string(),
-            ));
-        }
-    }
-
-    let Some(guild_id) = ctx.guild_id() else {
-        return Ok(None);
-    };
-
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
-    if let Some(module) = guild_settings.modules.get(MODULE_ID) {
-        if !module.enabled {
-            return Ok(Some(
-                "The `stock` module is disabled for this guild.".to_string(),
-            ));
-        }
-    }
-
-    Ok(None)
 }
 
 fn normalize_symbol(symbol: String) -> String {

@@ -3,6 +3,7 @@ use dynamo_core::{
     AppState, Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module,
     ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
     SettingsSection, SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
+    module_access_for_context,
 };
 use poise::serenity_prelude::{
     ActionRowComponent, ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow,
@@ -115,7 +116,7 @@ async fn suggest(
     ctx: Context<'_>,
     #[description = "Suggestion text"] suggestion: String,
 ) -> Result<(), Error> {
-    if let Some(reason) = module_disable_reason(ctx).await? {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID).await?.denial_reason {
         ctx.send(
             poise::CreateReply::default()
                 .content(reason)
@@ -197,45 +198,6 @@ async fn suggest(
     )
     .await?;
     Ok(())
-}
-
-async fn module_disable_reason(ctx: Context<'_>) -> Result<Option<String>, Error> {
-    let deployment = ctx
-        .data()
-        .persistence
-        .deployment_settings_or_default()
-        .await?;
-    if let Some(module) = deployment.modules.get(MODULE_ID) {
-        if !module.installed {
-            return Ok(Some(
-                "The `suggestion` module is not installed for this deployment.".to_string(),
-            ));
-        }
-        if !module.enabled {
-            return Ok(Some(
-                "The `suggestion` module is disabled for this deployment.".to_string(),
-            ));
-        }
-    }
-
-    let Some(guild_id) = ctx.guild_id() else {
-        return Ok(None);
-    };
-
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
-    if let Some(module) = guild_settings.modules.get(MODULE_ID) {
-        if !module.enabled {
-            return Ok(Some(
-                "The `suggestion` module is disabled for this guild.".to_string(),
-            ));
-        }
-    }
-
-    Ok(None)
 }
 
 async fn load_settings(

@@ -816,7 +816,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "dynamo-core",
+ "futures-util",
  "mongodb",
  "serde",
  "serde_json",

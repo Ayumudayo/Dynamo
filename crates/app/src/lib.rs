@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use dynamo_core::{
     AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, ModuleRegistry,
-    Persistence, ProviderStateRepository, ServiceRegistry, StockQuoteService,
-    SuggestionsRepository,
+    InviteRepository, MemberStatsRepository, Persistence, ProviderStateRepository, ServiceRegistry,
+    StockQuoteService, SuggestionsRepository, WarningLogRepository,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, FullEvent};
@@ -39,6 +39,9 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
     let guild_settings: Arc<dyn GuildSettingsRepository> = store.clone();
     let deployment_settings: Arc<dyn DeploymentSettingsRepository> = store.clone();
     let suggestions: Arc<dyn SuggestionsRepository> = store.clone();
+    let invites: Arc<dyn InviteRepository> = store.clone();
+    let member_stats: Arc<dyn MemberStatsRepository> = store.clone();
+    let warning_logs: Arc<dyn WarningLogRepository> = store.clone();
     let provider_state: Arc<dyn ProviderStateRepository> = store;
 
     Ok(Persistence::new(
@@ -47,6 +50,9 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
         Some(deployment_settings),
         Some(provider_state),
         Some(suggestions),
+        Some(invites),
+        Some(member_stats),
+        Some(warning_logs),
     ))
 }
 
