@@ -1,14 +1,28 @@
-use dynamo_core::{Context, DiscordCommand, Error, GatewayIntents, Module, ModuleManifest};
+use dynamo_core::{
+    Context, DiscordCommand, Error, GatewayIntents, Module, ModuleCategory, ModuleManifest,
+    SettingsSchema,
+};
 
 pub struct InfoModule;
 
 impl Module for InfoModule {
     fn manifest(&self) -> ModuleManifest {
-        ModuleManifest::new("info", "Info", true, GatewayIntents::GUILDS)
+        ModuleManifest::new(
+            "info",
+            "Info",
+            "Read-only commands that describe the bot and runtime.",
+            ModuleCategory::Info,
+            true,
+            GatewayIntents::GUILDS,
+        )
     }
 
     fn commands(&self) -> Vec<DiscordCommand> {
         vec![ping(), about()]
+    }
+
+    fn settings_schema(&self) -> SettingsSchema {
+        SettingsSchema::empty()
     }
 }
 
@@ -23,9 +37,10 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
     let data = ctx.data();
     let uptime = data.started_at.elapsed().as_secs();
     let module_names = data
-        .modules
+        .module_catalog
+        .entries
         .iter()
-        .map(|module| module.display_name)
+        .map(|entry| entry.module.display_name)
         .collect::<Vec<_>>()
         .join(", ");
 

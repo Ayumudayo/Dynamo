@@ -1,4 +1,4 @@
-use dynamo_core::{AppConfig, AppState, Error, Module, ModuleManifest, aggregate_intents};
+use dynamo_core::{AppConfig, AppState, Error, aggregate_intents};
 use poise::serenity_prelude as serenity;
 use tracing::info;
 
@@ -7,14 +7,11 @@ async fn main() -> Result<(), Error> {
     init_tracing();
 
     let config = AppConfig::from_env()?;
-    let modules = builtin_modules();
-    let manifests: Vec<ModuleManifest> = modules.iter().map(|module| module.manifest()).collect();
-    let commands = modules
-        .iter()
-        .flat_map(|module| module.commands())
-        .collect::<Vec<_>>();
+    let registry = dynamo_app::module_registry();
+    let manifests = registry.manifests();
+    let commands = registry.commands();
     let intents = aggregate_intents(manifests.iter().copied());
-    let setup_manifests = manifests.clone();
+    let setup_catalog = registry.catalog().clone();
     let discord_config = config.discord.clone();
 
     let framework = poise::Framework::builder()
@@ -24,12 +21,12 @@ async fn main() -> Result<(), Error> {
         })
         .setup(move |ctx, ready, framework| {
             let discord_config = discord_config.clone();
-            let setup_manifests = setup_manifests.clone();
+            let setup_catalog = setup_catalog.clone();
 
             Box::pin(async move {
                 info!(
                     user = %ready.user.name,
-                    modules = setup_manifests.len(),
+                    modules = setup_catalog.entries.len(),
                     "Connected to Discord"
                 );
 
@@ -49,7 +46,7 @@ async fn main() -> Result<(), Error> {
                     );
                 }
 
-                Ok(AppState::new(setup_manifests))
+                Ok(AppState::new(setup_catalog))
             })
         })
         .build();
@@ -60,10 +57,6 @@ async fn main() -> Result<(), Error> {
 
     client.start().await?;
     Ok(())
-}
-
-fn builtin_modules() -> Vec<Box<dyn Module>> {
-    vec![Box::new(dynamo_module_info::InfoModule)]
 }
 
 fn init_tracing() {

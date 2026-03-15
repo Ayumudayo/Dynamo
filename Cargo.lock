@@ -321,12 +321,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-app"
+version = "0.1.0"
+dependencies = [
+ "dynamo-core",
+ "dynamo-module-info",
+]
+
+[[package]]
 name = "dynamo-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dynamo-app",
  "dynamo-core",
- "dynamo-module-info",
  "poise",
  "tokio",
  "tracing",
@@ -338,7 +346,10 @@ name = "dynamo-core"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "poise",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
