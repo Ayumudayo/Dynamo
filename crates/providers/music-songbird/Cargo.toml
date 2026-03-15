@@ -1,5 +1,5 @@
 [package]
-name = "dynamo-bot"
+name = "dynamo-provider-music-songbird"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,12 +7,10 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-dynamo-app = { path = "../app" }
-dynamo-core = { path = "../core" }
-dynamo-module-giveaway = { path = "../modules/giveaway" }
-dotenvy.workspace = true
+async-trait.workspace = true
+dynamo-core = { path = "../../core" }
 poise.workspace = true
+reqwest.workspace = true
 songbird.workspace = true
 tokio.workspace = true
 tracing.workspace = true
-tracing-subscriber.workspace = true

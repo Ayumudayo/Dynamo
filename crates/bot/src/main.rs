@@ -2,6 +2,7 @@ use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use dynamo_core::{AppConfig, AppState, DiscordConfig, Error, aggregate_intents};
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
+use songbird::SerenityInit;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
@@ -79,9 +80,12 @@ async fn main() -> Result<(), Error> {
         })
         .build();
 
-    let mut client = serenity::ClientBuilder::new(config.discord.token, intents)
-        .framework(framework)
-        .await?;
+    let mut client_builder = serenity::ClientBuilder::new(config.discord.token, intents);
+    if config.optional_modules.music_enabled {
+        client_builder = client_builder.register_songbird();
+    }
+
+    let mut client = client_builder.framework(framework).await?;
 
     client.start().await?;
     Ok(())

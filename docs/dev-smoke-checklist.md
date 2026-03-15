@@ -74,8 +74,10 @@ Run this checklist after major module, persistence, or dashboard changes.
 
 1. Enable `DYNAMO_ENABLE_MUSIC=true`.
 2. Set the backend to `songbird` or `lavalink` in guild settings.
-3. If using `lavalink`, configure host, port, password, secure, and resume key.
-4. Run `/music status` and confirm the configured backend and transport settings render correctly.
+3. Ensure `yt-dlp` is available on the host path when using `songbird`.
+4. If using `lavalink`, configure host, port, password, secure, and resume key.
+5. Run `/music status` and confirm the configured backend and transport settings render correctly.
+6. For `songbird`, run `/music join`, `/music play`, `/music pause`, `/music resume`, `/music skip`, `/music stop`, `/music leave`, and `/music queue`.
 
 ## Ticket
 

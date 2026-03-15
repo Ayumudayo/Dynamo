@@ -61,9 +61,103 @@ pub struct MusicBackendStatus {
     pub summary: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MusicBackendConfig {
+    pub backend: MusicBackendKind,
+    pub default_source: String,
+    pub auto_leave_seconds: u64,
+    pub songbird_ytdlp_program: Option<String>,
+    pub lavalink_host: Option<String>,
+    pub lavalink_port: Option<u16>,
+    pub lavalink_password: Option<String>,
+    pub lavalink_secure: bool,
+    pub lavalink_resume_key: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MusicTrack {
+    pub title: String,
+    pub url: Option<String>,
+    pub duration_seconds: Option<u64>,
+    pub requested_by: String,
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct MusicQueueSnapshot {
+    pub backend: MusicBackendKind,
+    pub connected: bool,
+    pub voice_channel_id: Option<u64>,
+    pub text_channel_id: Option<u64>,
+    pub paused: bool,
+    pub current: Option<MusicTrack>,
+    pub upcoming: Vec<MusicTrack>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct MusicEnqueueResult {
+    pub started_immediately: bool,
+    pub track: MusicTrack,
+    pub snapshot: MusicQueueSnapshot,
+}
+
 #[async_trait]
 pub trait MusicService: Send + Sync {
-    async fn status(&self) -> Result<MusicBackendStatus, Error>;
+    async fn status(&self, config: &MusicBackendConfig) -> Result<MusicBackendStatus, Error>;
+    async fn join(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        voice_channel_id: u64,
+        text_channel_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicQueueSnapshot, Error>;
+    async fn leave(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<(), Error>;
+    async fn play(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        voice_channel_id: u64,
+        text_channel_id: u64,
+        query: &str,
+        requested_by: &str,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicEnqueueResult, Error>;
+    async fn pause(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicQueueSnapshot, Error>;
+    async fn resume(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicQueueSnapshot, Error>;
+    async fn skip(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicQueueSnapshot, Error>;
+    async fn stop(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicQueueSnapshot, Error>;
+    async fn queue(
+        &self,
+        ctx: &poise::serenity_prelude::Context,
+        guild_id: u64,
+        config: &MusicBackendConfig,
+    ) -> Result<MusicQueueSnapshot, Error>;
 }
 
 #[derive(Clone, Default)]

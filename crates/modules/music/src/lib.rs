@@ -1,8 +1,9 @@
 use dynamo_core::{
     Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module, ModuleCategory,
-    ModuleManifest, MusicBackendKind, SettingsField, SettingsFieldKind, SettingsSchema,
-    SettingsSection, module_access_for_context,
+    ModuleManifest, MusicBackendConfig, MusicBackendKind, MusicQueueSnapshot, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection, module_access_for_context,
 };
+use poise::serenity_prelude::CreateEmbed;
 use serde::{Deserialize, Serialize};
 
 const MODULE_ID: &str = "music";
@@ -197,7 +198,17 @@ enum MusicSourceKind {
     slash_command,
     guild_only,
     category = "Music",
-    subcommands("music_status")
+    subcommands(
+        "music_status",
+        "music_join",
+        "music_leave",
+        "music_play",
+        "music_pause",
+        "music_resume",
+        "music_skip",
+        "music_stop",
+        "music_queue"
+    )
 )]
 async fn music(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
@@ -219,9 +230,10 @@ async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let settings = load_settings(ctx).await?;
+    let config = settings.to_backend_config();
     let runtime_status = match &ctx.data().services.music {
         Some(service) => {
-            let status = service.status().await?;
+            let status = service.status(&config).await?;
             format!(
                 "runtime backend: `{:?}`\nhealth: `{}`\nsummary: {}",
                 status.backend, status.healthy, status.summary
@@ -286,6 +298,170 @@ async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+#[poise::command(slash_command, guild_only, rename = "join")]
+async fn music_join(ctx: Context<'_>) -> Result<(), Error> {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let config = load_settings(ctx).await?.to_backend_config();
+    let Some(service) = ctx.data().services.music.as_ref() else {
+        ctx.say("Music runtime service is not configured in this build.")
+            .await?;
+        return Ok(());
+    };
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let Some(voice_channel_id) = author_voice_channel_id(ctx) else {
+        ctx.say("You need to join a voice channel first.").await?;
+        return Ok(());
+    };
+
+    service
+        .join(
+            ctx.serenity_context(),
+            guild_id.get(),
+            voice_channel_id,
+            ctx.channel_id().get(),
+            &config,
+        )
+        .await?;
+    ctx.say(format!("Joined <#{}>.", voice_channel_id)).await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, guild_only, rename = "leave")]
+async fn music_leave(ctx: Context<'_>) -> Result<(), Error> {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let config = load_settings(ctx).await?.to_backend_config();
+    let Some(service) = ctx.data().services.music.as_ref() else {
+        ctx.say("Music runtime service is not configured in this build.")
+            .await?;
+        return Ok(());
+    };
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+
+    service
+        .leave(ctx.serenity_context(), guild_id.get(), &config)
+        .await?;
+    ctx.say("Disconnected from voice.").await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, guild_only, rename = "play")]
+async fn music_play(
+    ctx: Context<'_>,
+    #[description = "YouTube URL or search query"] query: String,
+) -> Result<(), Error> {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let config = load_settings(ctx).await?.to_backend_config();
+    let Some(service) = ctx.data().services.music.as_ref() else {
+        ctx.say("Music runtime service is not configured in this build.")
+            .await?;
+        return Ok(());
+    };
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+    let Some(voice_channel_id) = author_voice_channel_id(ctx) else {
+        ctx.say("You need to join a voice channel first.").await?;
+        return Ok(());
+    };
+
+    let result = service
+        .play(
+            ctx.serenity_context(),
+            guild_id.get(),
+            voice_channel_id,
+            ctx.channel_id().get(),
+            &query,
+            &ctx.author().name,
+            &config,
+        )
+        .await?;
+
+    let embed = CreateEmbed::new()
+        .title(if result.started_immediately {
+            "Now Playing"
+        } else {
+            "Added To Queue"
+        })
+        .description(result.track.title.clone())
+        .field("Source", result.track.source.clone(), true)
+        .field(
+            "Duration",
+            result
+                .track
+                .duration_seconds
+                .map(|value| format!("{}s", value))
+                .unwrap_or_else(|| "unknown".to_string()),
+            true,
+        );
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+#[poise::command(slash_command, guild_only, rename = "pause")]
+async fn music_pause(ctx: Context<'_>) -> Result<(), Error> {
+    run_queue_action(ctx, QueueAction::Pause).await
+}
+
+#[poise::command(slash_command, guild_only, rename = "resume")]
+async fn music_resume(ctx: Context<'_>) -> Result<(), Error> {
+    run_queue_action(ctx, QueueAction::Resume).await
+}
+
+#[poise::command(slash_command, guild_only, rename = "skip")]
+async fn music_skip(ctx: Context<'_>) -> Result<(), Error> {
+    run_queue_action(ctx, QueueAction::Skip).await
+}
+
+#[poise::command(slash_command, guild_only, rename = "stop")]
+async fn music_stop(ctx: Context<'_>) -> Result<(), Error> {
+    run_queue_action(ctx, QueueAction::Stop).await
+}
+
+#[poise::command(slash_command, guild_only, rename = "queue")]
+async fn music_queue(ctx: Context<'_>) -> Result<(), Error> {
+    run_queue_action(ctx, QueueAction::Queue).await
+}
+
 async fn load_settings(ctx: Context<'_>) -> Result<MusicSettings, Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(MusicSettings::default());
@@ -310,6 +486,133 @@ fn parse_music_settings(module: &GuildModuleSettings) -> Result<MusicSettings, E
     Ok(serde_json::from_value::<MusicSettings>(
         module.configuration.clone(),
     )?)
+}
+
+impl MusicSettings {
+    fn to_backend_config(&self) -> MusicBackendConfig {
+        MusicBackendConfig {
+            backend: self.backend,
+            default_source: format!("{:?}", self.default_source).to_ascii_lowercase(),
+            auto_leave_seconds: self.auto_leave_seconds,
+            songbird_ytdlp_program: self.songbird.ytdlp_program.clone(),
+            lavalink_host: self.lavalink.host.clone(),
+            lavalink_port: self.lavalink.port,
+            lavalink_password: self.lavalink.password.clone(),
+            lavalink_secure: self.lavalink.secure,
+            lavalink_resume_key: self.lavalink.resume_key.clone(),
+        }
+    }
+}
+
+fn author_voice_channel_id(ctx: Context<'_>) -> Option<u64> {
+    let guild_id = ctx.guild_id()?;
+    let guild = ctx.serenity_context().cache.guild(guild_id)?;
+    guild
+        .voice_states
+        .get(&ctx.author().id)
+        .and_then(|voice_state| voice_state.channel_id)
+        .map(|channel_id| channel_id.get())
+}
+
+enum QueueAction {
+    Pause,
+    Resume,
+    Skip,
+    Stop,
+    Queue,
+}
+
+async fn run_queue_action(ctx: Context<'_>, action: QueueAction) -> Result<(), Error> {
+    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
+        .await?
+        .denial_reason
+    {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let config = load_settings(ctx).await?.to_backend_config();
+    let Some(service) = ctx.data().services.music.as_ref() else {
+        ctx.say("Music runtime service is not configured in this build.")
+            .await?;
+        return Ok(());
+    };
+    let Some(guild_id) = ctx.guild_id() else {
+        return Ok(());
+    };
+
+    let snapshot = match action {
+        QueueAction::Pause => {
+            service
+                .pause(ctx.serenity_context(), guild_id.get(), &config)
+                .await?
+        }
+        QueueAction::Resume => {
+            service
+                .resume(ctx.serenity_context(), guild_id.get(), &config)
+                .await?
+        }
+        QueueAction::Skip => {
+            service
+                .skip(ctx.serenity_context(), guild_id.get(), &config)
+                .await?
+        }
+        QueueAction::Stop => {
+            service
+                .stop(ctx.serenity_context(), guild_id.get(), &config)
+                .await?
+        }
+        QueueAction::Queue => {
+            service
+                .queue(ctx.serenity_context(), guild_id.get(), &config)
+                .await?
+        }
+    };
+    let embed = render_queue_snapshot("Music Queue", &snapshot);
+    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    Ok(())
+}
+
+fn render_queue_snapshot(title: &str, snapshot: &MusicQueueSnapshot) -> CreateEmbed {
+    let mut embed = CreateEmbed::new()
+        .title(title)
+        .field("Backend", format!("`{:?}`", snapshot.backend), true)
+        .field("Connected", snapshot.connected.to_string(), true)
+        .field("Paused", snapshot.paused.to_string(), true);
+
+    if let Some(current) = &snapshot.current {
+        embed = embed.field(
+            "Current",
+            format!(
+                "{}\nrequested by `{}`",
+                current.title, current.requested_by
+            ),
+            false,
+        );
+    } else {
+        embed = embed.field("Current", "Nothing playing", false);
+    }
+
+    if snapshot.upcoming.is_empty() {
+        embed = embed.field("Up Next", "Queue is empty", false);
+    } else {
+        let queue_text = snapshot
+            .upcoming
+            .iter()
+            .take(5)
+            .enumerate()
+            .map(|(index, track)| format!("{}. {} (`{}`)", index + 1, track.title, track.requested_by))
+            .collect::<Vec<_>>()
+            .join("\n");
+        embed = embed.field("Up Next", queue_text, false);
+    }
+
+    embed
 }
 
 #[cfg(test)]

@@ -41,7 +41,7 @@ Enable them explicitly with environment flags:
 Current optional-module status:
 
 - `giveaway`: implemented as an opt-in persisted slash workflow with entry buttons and timed completion polling
-- `music`: dual-backend configuration layer is implemented; `Songbird` default and `Lavalink` settings are configurable, while playback runtime wiring is the next phase
+- `music`: `Songbird` default backend is implemented with queue-oriented slash commands, and `Lavalink` settings are configurable as the next backend path
 
 ## Runtime Model
 
@@ -69,6 +69,12 @@ Common optional variables:
 - `DASHBOARD_PORT` default: `3000`
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG`
+
+Music runtime notes:
+
+- `Songbird` is the implemented default backend.
+- `yt-dlp` must be available on the host path for YouTube URL/search playback.
+- `Lavalink` fields are configurable now, but the external-node runtime path is still the next implementation step.
 
 ## Discord Intents
 

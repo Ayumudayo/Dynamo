@@ -39,8 +39,8 @@ pub use repositories::{
     WarningLogRepository,
 };
 pub use services::{
-    MusicBackendKind, MusicBackendStatus, MusicService, ServiceRegistry, StockQuote,
-    StockQuoteService,
+    MusicBackendConfig, MusicBackendKind, MusicBackendStatus, MusicEnqueueResult,
+    MusicQueueSnapshot, MusicService, MusicTrack, ServiceRegistry, StockQuote, StockQuoteService,
 };
 pub use settings::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
