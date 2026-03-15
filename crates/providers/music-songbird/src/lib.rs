@@ -11,6 +11,7 @@ use dynamo_core::{
 };
 use poise::serenity_prelude::{ChannelId, Context, GuildId};
 use songbird::{
+    error::JoinError,
     input::{Compose, YoutubeDl},
     serenity::get as get_songbird,
     tracks::{PlayMode, Track},
@@ -134,6 +135,35 @@ impl SongbirdMusicService {
         }
         .user_args(vec!["--no-playlist".to_string()])
     }
+
+    async fn join_call(
+        &self,
+        manager: &Arc<songbird::Songbird>,
+        guild_id: u64,
+        voice_channel_id: u64,
+    ) -> Result<Arc<Mutex<songbird::Call>>, Error> {
+        match tokio::time::timeout(
+            Duration::from_secs(15),
+            manager.join(GuildId::new(guild_id), ChannelId::new(voice_channel_id)),
+        )
+        .await
+        {
+            Ok(Ok(call)) => Ok(call),
+            Ok(Err(error)) => {
+                let detail = describe_join_error(&error);
+                let _ = manager.remove(GuildId::new(guild_id)).await;
+                Err(anyhow::anyhow!(
+                    "Failed to join the voice channel. Discord may show the bot as connected, but the voice transport did not finish establishing: {detail}"
+                ))
+            }
+            Err(_) => {
+                let _ = manager.remove(GuildId::new(guild_id)).await;
+                Err(anyhow::anyhow!(
+                    "Timed out while joining the voice channel. Discord may show the bot as connected, but the voice transport did not finish establishing."
+                ))
+            }
+        }
+    }
 }
 
 impl Default for SongbirdMusicService {
@@ -169,21 +199,7 @@ impl MusicService for SongbirdMusicService {
         config: &MusicBackendConfig,
     ) -> Result<MusicQueueSnapshot, Error> {
         let manager = self.manager(ctx, config).await?;
-        tokio::time::timeout(
-            Duration::from_secs(15),
-            manager.join(GuildId::new(guild_id), ChannelId::new(voice_channel_id)),
-        )
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Timed out while joining the voice channel. Check that the bot can view, connect, and speak in the target channel."
-            )
-        })?
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "Failed to join the voice channel. Check that the bot can view, connect, and speak in the target channel: {error}"
-            )
-        })?;
+        self.join_call(&manager, guild_id, voice_channel_id).await?;
 
         guild_contexts().lock().await.insert(
             guild_id,
@@ -219,21 +235,7 @@ impl MusicService for SongbirdMusicService {
         config: &MusicBackendConfig,
     ) -> Result<MusicEnqueueResult, Error> {
         let manager = self.manager(ctx, config).await?;
-        let call = tokio::time::timeout(
-            Duration::from_secs(15),
-            manager.join(GuildId::new(guild_id), ChannelId::new(voice_channel_id)),
-        )
-        .await
-        .map_err(|_| {
-            anyhow::anyhow!(
-                "Timed out while joining the voice channel. Check that the bot can view, connect, and speak in the target channel."
-            )
-        })?
-        .map_err(|error| {
-            anyhow::anyhow!(
-                "Failed to join the voice channel. Check that the bot can view, connect, and speak in the target channel: {error}"
-            )
-        })?;
+        let call = self.join_call(&manager, guild_id, voice_channel_id).await?;
 
         guild_contexts().lock().await.insert(
             guild_id,
@@ -348,4 +350,14 @@ impl MusicService for SongbirdMusicService {
     ) -> Result<MusicQueueSnapshot, Error> {
         self.snapshot_for_guild(ctx, guild_id, config).await
     }
+}
+
+fn describe_join_error(error: &JoinError) -> String {
+    let mut parts = vec![error.to_string()];
+    let mut source = std::error::Error::source(error);
+    while let Some(current) = source {
+        parts.push(current.to_string());
+        source = current.source();
+    }
+    parts.join(" | caused by: ")
 }
