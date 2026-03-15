@@ -11,6 +11,7 @@ dynamo-core = { path = "../core" }
 dynamo-module-gameinfo = { path = "../modules/gameinfo" }
 dynamo-module-info = { path = "../modules/info" }
 dynamo-module-suggestion = { path = "../modules/suggestion" }
+dynamo-module-ticket = { path = "../modules/ticket" }
 dynamo-module-stock = { path = "../modules/stock" }
 dynamo-persistence-mongo = { path = "../persistence-mongo" }
 dynamo-provider-yahoo = { path = "../providers/yahoo" }

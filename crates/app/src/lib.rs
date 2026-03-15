@@ -14,6 +14,7 @@ pub fn module_registry() -> ModuleRegistry {
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
         Box::new(dynamo_module_suggestion::SuggestionModule),
+        Box::new(dynamo_module_ticket::TicketModule),
         Box::new(dynamo_module_stock::StockModule),
     ])
 }
@@ -66,6 +67,9 @@ pub async fn handle_framework_event(
             return Ok(());
         }
         if dynamo_module_suggestion::handle_interaction(ctx, interaction, data).await? {
+            return Ok(());
+        }
+        if dynamo_module_ticket::handle_interaction(ctx, interaction, data).await? {
             return Ok(());
         }
     }
