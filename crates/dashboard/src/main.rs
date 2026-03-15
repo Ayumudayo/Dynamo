@@ -9,7 +9,7 @@ use axum::{
 use dynamo_core::{
     DeploymentSettings, DeploymentSettingsRepository, ModuleCatalog, resolve_module_states,
 };
-use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
+use dynamo_persistence_mongo::MongoPersistence;
 use tracing::info;
 
 #[tokio::main]
@@ -19,7 +19,7 @@ async fn main() -> anyhow::Result<()> {
 
     let config = DashboardConfig::from_env()?;
     let registry = dynamo_app::module_registry();
-    let deployment_store = connect_deployment_store().await?;
+    let deployment_store = dynamo_app::optional_mongo_from_env().await?;
     let state = Arc::new(DashboardState {
         module_catalog: registry.catalog().clone(),
         deployment_store,
@@ -123,7 +123,7 @@ async fn list_default_module_states(State(state): State<Arc<DashboardState>>) ->
 
 async fn list_live_module_states(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
     let deployment_settings = match &state.deployment_store {
-        Some(store) => match store.get().await {
+        Some(store) => match DeploymentSettingsRepository::get(store.as_ref()).await {
             Ok(settings) => settings,
             Err(error) => {
                 return Json(serde_json::json!({
@@ -150,17 +150,4 @@ fn init_tracing() {
                 .unwrap_or_else(|_| "dynamo_dashboard=info,dynamo_app=info".into()),
         )
         .try_init();
-}
-
-async fn connect_deployment_store() -> anyhow::Result<Option<Arc<MongoPersistence>>> {
-    let Some(config) = MongoPersistenceConfig::try_from_env()? else {
-        info!(
-            "MongoDB configuration not found; dashboard live module state endpoint will use defaults"
-        );
-        return Ok(None);
-    };
-
-    let store = MongoPersistence::connect(config).await?;
-    store.ensure_initialized().await?;
-    Ok(Some(Arc::new(store)))
 }

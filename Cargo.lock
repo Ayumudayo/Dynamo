@@ -560,8 +560,11 @@ checksum = "1aaf95b3e5c8f23aa320147307562d361db0ae0d51242340f558153b4eb2439b"
 name = "dynamo-app"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "dynamo-core",
  "dynamo-module-info",
+ "dynamo-persistence-mongo",
+ "tracing",
 ]
 
 [[package]]

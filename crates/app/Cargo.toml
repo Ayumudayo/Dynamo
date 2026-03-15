@@ -6,5 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+anyhow.workspace = true
 dynamo-core = { path = "../core" }
 dynamo-module-info = { path = "../modules/info" }
+dynamo-persistence-mongo = { path = "../persistence-mongo" }
+tracing.workspace = true

@@ -9,11 +9,16 @@ async fn main() -> Result<(), Error> {
 
     let config = AppConfig::from_env()?;
     let registry = dynamo_app::module_registry();
+    let mongo_store = dynamo_app::optional_mongo_from_env().await?;
     let manifests = registry.manifests();
     let commands = registry.commands();
     let intents = aggregate_intents(manifests.iter().copied());
     let setup_catalog = registry.catalog().clone();
     let discord_config = config.discord.clone();
+
+    if let Some(store) = mongo_store.as_ref() {
+        info!(database = %store.database().name(), "MongoDB persistence initialized");
+    }
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
