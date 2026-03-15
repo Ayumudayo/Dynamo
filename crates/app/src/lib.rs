@@ -10,6 +10,7 @@ pub fn module_registry() -> ModuleRegistry {
     ModuleRegistry::new(vec![
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
+        Box::new(dynamo_module_stock::StockModule),
     ])
 }
 

@@ -8,6 +8,7 @@ members = [
   "crates/persistence-mongo",
   "crates/modules/gameinfo",
   "crates/modules/info",
+  "crates/modules/stock",
 ]
 resolver = "3"
 
