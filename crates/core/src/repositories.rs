@@ -6,6 +6,7 @@ use serde_json::Value;
 use crate::{
     Error,
     settings::{DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings},
+    suggestions::SuggestionRecord,
 };
 
 #[async_trait]
@@ -35,12 +36,24 @@ pub trait ProviderStateRepository: Send + Sync {
     async fn save_json(&self, provider_id: &str, value: Value) -> Result<(), Error>;
 }
 
+#[async_trait]
+pub trait SuggestionsRepository: Send + Sync {
+    async fn create(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error>;
+    async fn get_by_message(
+        &self,
+        guild_id: u64,
+        message_id: u64,
+    ) -> Result<Option<SuggestionRecord>, Error>;
+    async fn save(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error>;
+}
+
 #[derive(Clone, Default)]
 pub struct Persistence {
     pub database_name: Option<String>,
     pub guild_settings: Option<Arc<dyn GuildSettingsRepository>>,
     pub deployment_settings: Option<Arc<dyn DeploymentSettingsRepository>>,
     pub provider_state: Option<Arc<dyn ProviderStateRepository>>,
+    pub suggestions: Option<Arc<dyn SuggestionsRepository>>,
 }
 
 impl Persistence {
@@ -49,12 +62,14 @@ impl Persistence {
         guild_settings: Option<Arc<dyn GuildSettingsRepository>>,
         deployment_settings: Option<Arc<dyn DeploymentSettingsRepository>>,
         provider_state: Option<Arc<dyn ProviderStateRepository>>,
+        suggestions: Option<Arc<dyn SuggestionsRepository>>,
     ) -> Self {
         Self {
             database_name,
             guild_settings,
             deployment_settings,
             provider_state,
+            suggestions,
         }
     }
 
@@ -86,6 +101,17 @@ impl Persistence {
         match &self.provider_state {
             Some(repo) => repo.save_json(provider_id, value).await,
             None => Ok(()),
+        }
+    }
+
+    pub async fn get_suggestion_by_message(
+        &self,
+        guild_id: u64,
+        message_id: u64,
+    ) -> Result<Option<SuggestionRecord>, Error> {
+        match &self.suggestions {
+            Some(repo) => repo.get_by_message(guild_id, message_id).await,
+            None => Ok(None),
         }
     }
 }

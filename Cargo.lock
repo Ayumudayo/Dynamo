@@ -688,6 +688,7 @@ dependencies = [
  "dynamo-module-gameinfo",
  "dynamo-module-info",
  "dynamo-module-stock",
+ "dynamo-module-suggestion",
  "dynamo-persistence-mongo",
  "dynamo-provider-yahoo",
  "poise",
@@ -726,6 +727,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "chrono",
  "poise",
  "serde",
  "serde_json",
@@ -783,6 +785,17 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "dynamo-module-suggestion"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dynamo-core",
+ "poise",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

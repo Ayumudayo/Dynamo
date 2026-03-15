@@ -9,6 +9,7 @@ members = [
   "crates/providers/yahoo",
   "crates/modules/gameinfo",
   "crates/modules/info",
+  "crates/modules/suggestion",
   "crates/modules/stock",
 ]
 resolver = "3"

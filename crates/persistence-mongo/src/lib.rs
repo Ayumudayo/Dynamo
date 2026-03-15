@@ -4,6 +4,8 @@ use async_trait::async_trait;
 use dynamo_core::{
     DeploymentModuleSettings, DeploymentSettings, DeploymentSettingsRepository, Error,
     GuildModuleSettings, GuildSettings, GuildSettingsRepository, ProviderStateRepository,
+    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
+    SuggestionsRepository,
 };
 use mongodb::{
     Client, Collection, Database,
@@ -62,6 +64,7 @@ pub struct MongoPersistence {
     guild_settings: Collection<GuildSettingsDocument>,
     deployment_settings: Collection<DeploymentSettingsDocument>,
     provider_state: Collection<ProviderStateDocument>,
+    suggestions: Collection<SuggestionDocument>,
 }
 
 impl MongoPersistence {
@@ -72,12 +75,14 @@ impl MongoPersistence {
         let deployment_settings =
             database.collection::<DeploymentSettingsDocument>("deployment_settings");
         let provider_state = database.collection::<ProviderStateDocument>("provider_state");
+        let suggestions = database.collection::<SuggestionDocument>("suggestions");
 
         Ok(Self {
             database,
             guild_settings,
             deployment_settings,
             provider_state,
+            suggestions,
         })
     }
 
@@ -105,6 +110,13 @@ impl MongoPersistence {
             .any(|name| name == "provider_state")
         {
             self.database.create_collection("provider_state").await?;
+        }
+
+        if !existing_collections
+            .iter()
+            .any(|name| name == "suggestions")
+        {
+            self.database.create_collection("suggestions").await?;
         }
 
         self.deployment_settings
@@ -227,6 +239,96 @@ struct ProviderStateDocument {
     updated_at: Option<BsonDateTime>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SuggestionDocument {
+    guild_id: String,
+    channel_id: String,
+    message_id: String,
+    user_id: String,
+    suggestion: String,
+    status: SuggestionStatus,
+    stats: SuggestionStats,
+    #[serde(default)]
+    status_updates: Vec<SuggestionStatusUpdateDocument>,
+    created_at: BsonDateTime,
+    updated_at: BsonDateTime,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct SuggestionStatusUpdateDocument {
+    user_id: String,
+    status: SuggestionStatus,
+    #[serde(default)]
+    reason: Option<String>,
+    timestamp: BsonDateTime,
+}
+
+impl SuggestionDocument {
+    fn from_domain(value: SuggestionRecord) -> Self {
+        Self {
+            guild_id: value.guild_id.to_string(),
+            channel_id: value.channel_id.to_string(),
+            message_id: value.message_id.to_string(),
+            user_id: value.user_id.to_string(),
+            suggestion: value.suggestion,
+            status: value.status,
+            stats: value.stats,
+            status_updates: value
+                .status_updates
+                .into_iter()
+                .map(SuggestionStatusUpdateDocument::from_domain)
+                .collect(),
+            created_at: BsonDateTime::from_millis(value.created_at.timestamp_millis()),
+            updated_at: BsonDateTime::from_millis(value.updated_at.timestamp_millis()),
+        }
+    }
+
+    fn into_domain(self) -> Result<SuggestionRecord, Error> {
+        Ok(SuggestionRecord {
+            guild_id: parse_snowflake(&self.guild_id, "suggestion guild id")?,
+            channel_id: parse_snowflake(&self.channel_id, "suggestion channel id")?,
+            message_id: parse_snowflake(&self.message_id, "suggestion message id")?,
+            user_id: parse_snowflake(&self.user_id, "suggestion user id")?,
+            suggestion: self.suggestion,
+            status: self.status,
+            stats: self.stats,
+            status_updates: self
+                .status_updates
+                .into_iter()
+                .map(SuggestionStatusUpdateDocument::into_domain)
+                .collect::<Result<Vec<_>, _>>()?,
+            created_at: self.created_at.to_system_time().into(),
+            updated_at: self.updated_at.to_system_time().into(),
+        })
+    }
+}
+
+impl SuggestionStatusUpdateDocument {
+    fn from_domain(value: SuggestionStatusUpdate) -> Self {
+        Self {
+            user_id: value.user_id.to_string(),
+            status: value.status,
+            reason: value.reason,
+            timestamp: BsonDateTime::from_millis(value.timestamp.timestamp_millis()),
+        }
+    }
+
+    fn into_domain(self) -> Result<SuggestionStatusUpdate, Error> {
+        Ok(SuggestionStatusUpdate {
+            user_id: parse_snowflake(&self.user_id, "suggestion status update user id")?,
+            status: self.status,
+            reason: self.reason,
+            timestamp: self.timestamp.to_system_time().into(),
+        })
+    }
+}
+
+fn parse_snowflake(value: &str, field_name: &str) -> Result<u64, Error> {
+    value
+        .parse()
+        .map_err(|error| anyhow::anyhow!("Stored {field_name} is not a valid u64: {error}"))
+}
+
 #[async_trait]
 impl GuildSettingsRepository for MongoPersistence {
     async fn get_or_create(&self, guild_id: u64) -> Result<GuildSettings, Error> {
@@ -316,5 +418,46 @@ impl ProviderStateRepository for MongoPersistence {
 
     async fn save_json(&self, provider_id: &str, value: serde_json::Value) -> Result<(), Error> {
         self.save_provider_state(provider_id, value).await
+    }
+}
+
+#[async_trait]
+impl SuggestionsRepository for MongoPersistence {
+    async fn create(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error> {
+        let document = SuggestionDocument::from_domain(record);
+        self.suggestions.insert_one(document.clone()).await?;
+        document.into_domain()
+    }
+
+    async fn get_by_message(
+        &self,
+        guild_id: u64,
+        message_id: u64,
+    ) -> Result<Option<SuggestionRecord>, Error> {
+        let document = self
+            .suggestions
+            .find_one(doc! {
+                "guild_id": guild_id.to_string(),
+                "message_id": message_id.to_string(),
+            })
+            .await?;
+
+        document.map(SuggestionDocument::into_domain).transpose()
+    }
+
+    async fn save(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error> {
+        let document = SuggestionDocument::from_domain(record);
+        self.suggestions
+            .replace_one(
+                doc! {
+                    "guild_id": &document.guild_id,
+                    "message_id": &document.message_id,
+                },
+                document.clone(),
+            )
+            .upsert(true)
+            .await?;
+
+        document.into_domain()
     }
 }

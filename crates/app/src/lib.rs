@@ -3,6 +3,7 @@ use std::sync::Arc;
 use dynamo_core::{
     AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, ModuleRegistry,
     Persistence, ProviderStateRepository, ServiceRegistry, StockQuoteService,
+    SuggestionsRepository,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, FullEvent};
@@ -12,6 +13,7 @@ pub fn module_registry() -> ModuleRegistry {
     ModuleRegistry::new(vec![
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
+        Box::new(dynamo_module_suggestion::SuggestionModule),
         Box::new(dynamo_module_stock::StockModule),
     ])
 }
@@ -35,6 +37,7 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
     let database_name = Some(store.database().name().to_string());
     let guild_settings: Arc<dyn GuildSettingsRepository> = store.clone();
     let deployment_settings: Arc<dyn DeploymentSettingsRepository> = store.clone();
+    let suggestions: Arc<dyn SuggestionsRepository> = store.clone();
     let provider_state: Arc<dyn ProviderStateRepository> = store;
 
     Ok(Persistence::new(
@@ -42,6 +45,7 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
         Some(guild_settings),
         Some(deployment_settings),
         Some(provider_state),
+        Some(suggestions),
     ))
 }
 
@@ -55,10 +59,13 @@ pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<Se
 pub async fn handle_framework_event(
     ctx: &Context,
     event: &FullEvent,
-    _data: &AppState,
+    data: &AppState,
 ) -> Result<(), Error> {
     if let FullEvent::InteractionCreate { interaction } = event {
         if dynamo_module_stock::handle_component_interaction(ctx, interaction).await? {
+            return Ok(());
+        }
+        if dynamo_module_suggestion::handle_interaction(ctx, interaction, data).await? {
             return Ok(());
         }
     }

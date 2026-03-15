@@ -5,6 +5,7 @@ mod registry;
 mod repositories;
 mod services;
 mod settings;
+mod suggestions;
 
 pub use config::{AppConfig, DiscordConfig};
 pub use enablement::{ResolvedModuleState, resolve_module_states};
@@ -15,10 +16,14 @@ pub use module::{
 pub use registry::{AppState, ModuleRegistry, aggregate_intents};
 pub use repositories::{
     DeploymentSettingsRepository, GuildSettingsRepository, Persistence, ProviderStateRepository,
+    SuggestionsRepository,
 };
 pub use services::{ServiceRegistry, StockQuote, StockQuoteService};
 pub use settings::{
     DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
+};
+pub use suggestions::{
+    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
 };
 
 pub type Error = anyhow::Error;
