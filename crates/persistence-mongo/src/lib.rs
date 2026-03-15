@@ -12,6 +12,7 @@ use mongodb::{
 use serde::{Deserialize, Serialize};
 
 const DEPLOYMENT_SETTINGS_ID: &str = "global";
+pub const DEFAULT_DATABASE_NAME: &str = "dynamo-rs";
 
 #[derive(Debug, Clone)]
 pub struct MongoPersistenceConfig {
@@ -32,7 +33,7 @@ impl MongoPersistenceConfig {
             .or_else(|_| env::var("MONGO_CONNECTION"))
             .map_err(|_| anyhow::anyhow!("MONGODB_URI or MONGO_CONNECTION must be set"))?;
         let database_name =
-            env::var("MONGODB_DATABASE").unwrap_or_else(|_| "dynamo_rust".to_string());
+            env::var("MONGODB_DATABASE").unwrap_or_else(|_| DEFAULT_DATABASE_NAME.to_string());
 
         Ok(Self::new(connection_string, database_name))
     }
@@ -49,7 +50,7 @@ impl MongoPersistenceConfig {
                 }
             };
         let database_name =
-            env::var("MONGODB_DATABASE").unwrap_or_else(|_| "dynamo_rust".to_string());
+            env::var("MONGODB_DATABASE").unwrap_or_else(|_| DEFAULT_DATABASE_NAME.to_string());
 
         Ok(Some(Self::new(connection_string, database_name)))
     }
@@ -75,6 +76,41 @@ impl MongoPersistence {
             guild_settings,
             deployment_settings,
         })
+    }
+
+    pub async fn ensure_initialized(&self) -> Result<(), Error> {
+        let existing_collections = self.database.list_collection_names().await?;
+
+        if !existing_collections
+            .iter()
+            .any(|name| name == "guild_settings")
+        {
+            self.database.create_collection("guild_settings").await?;
+        }
+
+        if !existing_collections
+            .iter()
+            .any(|name| name == "deployment_settings")
+        {
+            self.database
+                .create_collection("deployment_settings")
+                .await?;
+        }
+
+        self.deployment_settings
+            .update_one(
+                doc! { "_id": DEPLOYMENT_SETTINGS_ID },
+                doc! {
+                    "$setOnInsert": {
+                        "_id": DEPLOYMENT_SETTINGS_ID,
+                        "modules": {}
+                    }
+                },
+            )
+            .upsert(true)
+            .await?;
+
+        Ok(())
     }
 
     pub fn database(&self) -> &Database {

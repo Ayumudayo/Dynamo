@@ -160,5 +160,6 @@ async fn connect_deployment_store() -> anyhow::Result<Option<Arc<MongoPersistenc
     };
 
     let store = MongoPersistence::connect(config).await?;
+    store.ensure_initialized().await?;
     Ok(Some(Arc::new(store)))
 }
