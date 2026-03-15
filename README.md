@@ -16,6 +16,7 @@ The repository still contains the legacy JavaScript bot while the Rust migration
 
 ## Included Core Modules
 
+- `currency`: ExchangeRate-API backed `/exchange` and `/rate` commands
 - `info`: basic bot diagnostics
 - `gameinfo`: FFXIV world transfer, maintenance, and PLL lookups with fallback cache
 - `stock`: Yahoo-backed quote lookups, ETF summaries, refresh sessions
@@ -64,6 +65,7 @@ If `DISCORD_REGISTER_GLOBALLY` is omitted and `DISCORD_DEV_GUILD_ID` or `GUILD_I
 
 Common optional variables:
 
+- `EXCHANGE_API_KEY` required for the currency module
 - `MONGODB_DATABASE` default: `dynamo-rs`
 - `DASHBOARD_HOST` default: `127.0.0.1`
 - `DASHBOARD_PORT` default: `3000`

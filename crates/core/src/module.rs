@@ -7,6 +7,7 @@ use crate::{DiscordCommand, GatewayIntents};
 pub enum ModuleCategory {
     Core,
     Info,
+    Currency,
     Utility,
     Moderation,
     Ticket,

@@ -18,6 +18,7 @@ pub fn module_registry() -> ModuleRegistry {
 
 pub fn module_registry_with_optional(optional_modules: &OptionalModulesConfig) -> ModuleRegistry {
     let mut modules: Vec<Box<dyn dynamo_core::Module>> = vec![
+        Box::new(dynamo_module_currency::CurrencyModule),
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
         Box::new(dynamo_module_greeting::GreetingModule),

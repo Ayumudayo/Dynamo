@@ -9,7 +9,9 @@ use dynamo_core::{
     Context, DiscordCommand, Error, GatewayIntents, Module, ModuleCategory, ModuleManifest,
     SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, module_access_for_context,
 };
-use poise::serenity_prelude::CreateEmbed;
+use poise::serenity_prelude::{
+    CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, Timestamp,
+};
 use regex::Regex;
 use reqwest::Client;
 use rss::Channel;
@@ -22,9 +24,13 @@ const DEFAULT_WT_LINK: &str = "http://warthunder.com/en/registration?r=userinvit
 const DEFAULT_WOT_LINK: &str =
     "https://worldoftanks.asia/referral/9ed8df012d204670b04c1cc1c88d98d5";
 const DEFAULT_THUMBNAIL_URL: &str = "https://media.discordapp.net/attachments/1138398345065414657/1329005700730585118/png-clipart-war-thunder-playstation-4-aircraft-airplane-macchi-c-202-thunder-game-video-game-removebg-preview.png?ex=6788c482&is=67877302&hm=31b9ed755040306ea8d1c9db258ffaa590df7e3bfa6139d875c62915d46c1b73&=&format=webp&quality=lossless";
+const GAMEINFO_THUMBNAIL_URL: &str =
+    "https://cdn.discordapp.com/attachments/1138398345065414657/1138398369929244713/0001061.png";
 const MAINTENANCE_URL: &str = "https://lodestonenews.com/news/maintenance/current";
 const TOPICS_RSS_URL: &str = "https://jp.finalfantasyxiv.com/lodestone/news/topics.xml";
 const PLL_CACHE_DURATION_SECONDS: i64 = 12 * 60 * 60;
+const SUCCESS_EMBED_COLOR: u32 = 0x00A56A;
+const ERROR_EMBED_COLOR: u32 = 0xD61A3C;
 
 pub struct GameInfoModule;
 
@@ -156,24 +162,35 @@ async fn wtinv(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let settings = load_settings(ctx).await?;
-    let mut embed = CreateEmbed::new()
+    let embed = CreateEmbed::new()
         .title(settings.title)
-        .field(
-            "War Thunder",
-            format!("[Open referral link]({})", settings.wt_link),
-            false,
-        )
-        .field(
-            "World of Tanks",
-            format!("[Open referral link]({})", settings.wot_link),
-            false,
-        );
+        .color(SUCCESS_EMBED_COLOR)
+        .timestamp(Timestamp::now());
 
-    if !settings.thumbnail_url.trim().is_empty() {
-        embed = embed.thumbnail(settings.thumbnail_url);
+    let embed = if settings.thumbnail_url.trim().is_empty() {
+        embed
+    } else {
+        embed.thumbnail(settings.thumbnail_url)
+    };
+
+    let mut buttons = Vec::new();
+    if let Some(url) = to_valid_url(&settings.wt_link) {
+        buttons.push(CreateButton::new_link(url).label("War Thunder"));
+    }
+    if let Some(url) = to_valid_url(&settings.wot_link) {
+        buttons.push(CreateButton::new_link(url).label("World of Tanks"));
     }
 
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let reply = if buttons.is_empty() {
+        poise::CreateReply::default()
+            .embed(embed.description("No invite links are currently configured."))
+    } else {
+        poise::CreateReply::default()
+            .embed(embed)
+            .components(vec![CreateActionRow::Buttons(buttons)])
+    };
+
+    ctx.send(reply).await?;
     Ok(())
 }
 
@@ -236,13 +253,13 @@ async fn get_maintenance_embed() -> Result<Option<CreateEmbed>, Error> {
         CreateEmbed::new()
             .title(info.title_kr)
             .url(info.url)
+            .color(SUCCESS_EMBED_COLOR)
+            .thumbnail(GAMEINFO_THUMBNAIL_URL)
+            .timestamp(Timestamp::now())
             .field("Start time", format!("<t:{}:F>", info.start_stamp), false)
             .field("End time", format!("<t:{}:F>", info.end_stamp), false)
             .field("Time remaining", format!("<t:{}:R>", info.end_stamp), false)
-            .footer(poise::serenity_prelude::CreateEmbedFooter::new(
-                "From Lodestone News",
-            ))
-            .timestamp(timestamp_from_unix(info.end_stamp))
+            .footer(CreateEmbedFooter::new("From Lodestone News"))
     }))
 }
 
@@ -298,33 +315,27 @@ async fn fetch_maintenance_info() -> Result<Option<MaintInfo>, Error> {
 async fn get_pll_embed() -> Result<Option<CreateEmbed>, Error> {
     let info = fetch_pll_info().await?;
     Ok(info.map(|info| {
-        let mut embed = CreateEmbed::new()
+        CreateEmbed::new()
             .title(info.fixed_title)
             .url(info.url)
-            .footer(poise::serenity_prelude::CreateEmbedFooter::new(
-                "From Lodestone News",
-            ));
-
-        let time_value = info
-            .start_stamp
-            .map(|stamp| format!("<t:{stamp}:F>"))
-            .unwrap_or_else(|| "Unavailable".to_string());
-        let relative = info
-            .start_stamp
-            .map(|stamp| format!("<t:{stamp}:R>"))
-            .unwrap_or_else(|| "Unavailable".to_string());
-
-        embed = embed.field("Broadcast start", time_value, false).field(
-            "Time remaining",
-            relative,
-            false,
-        );
-
-        if let Some(stamp) = info.start_stamp {
-            embed = embed.timestamp(timestamp_from_unix(stamp));
-        }
-
-        embed
+            .color(SUCCESS_EMBED_COLOR)
+            .thumbnail(GAMEINFO_THUMBNAIL_URL)
+            .timestamp(Timestamp::now())
+            .field(
+                "Broadcast start",
+                info.start_stamp
+                    .map(|stamp| format!("<t:{stamp}:F>"))
+                    .unwrap_or_else(|| "Unavailable".to_string()),
+                false,
+            )
+            .field(
+                "Time remaining",
+                info.start_stamp
+                    .map(|stamp| format!("<t:{stamp}:R>"))
+                    .unwrap_or_else(|| "Unavailable".to_string()),
+                false,
+            )
+            .footer(CreateEmbedFooter::new("From Lodestone News"))
     }))
 }
 
@@ -541,19 +552,14 @@ fn parse_iso_timestamp(input: &str) -> Result<i64, Error> {
     Ok(DateTime::parse_from_rfc3339(input)?.timestamp())
 }
 
-fn timestamp_from_unix(unix: i64) -> poise::serenity_prelude::Timestamp {
-    poise::serenity_prelude::Timestamp::from_unix_timestamp(unix)
-        .unwrap_or_else(|_| poise::serenity_prelude::Timestamp::now())
-}
-
 fn create_maintenance_error_embed() -> CreateEmbed {
     CreateEmbed::new()
         .title("Cannot load maintenance data")
         .description("No maintenance information is currently available.")
         .url("https://jp.finalfantasyxiv.com/lodestone")
-        .footer(poise::serenity_prelude::CreateEmbedFooter::new(
-            "From Lodestone News",
-        ))
+        .color(ERROR_EMBED_COLOR)
+        .thumbnail(GAMEINFO_THUMBNAIL_URL)
+        .footer(CreateEmbedFooter::new("From Lodestone News"))
 }
 
 fn create_pll_error_embed() -> CreateEmbed {
@@ -561,9 +567,17 @@ fn create_pll_error_embed() -> CreateEmbed {
         .title("No PLL Info")
         .description("No producer letter schedule found.")
         .url("https://jp.finalfantasyxiv.com/lodestone")
-        .footer(poise::serenity_prelude::CreateEmbedFooter::new(
-            "From Lodestone News",
-        ))
+        .color(ERROR_EMBED_COLOR)
+        .thumbnail(GAMEINFO_THUMBNAIL_URL)
+}
+
+fn to_valid_url(input: &str) -> Option<String> {
+    let trimmed = input.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    url::Url::parse(trimmed).ok().map(|value| value.to_string())
 }
 
 struct GameInfoCacheStore {

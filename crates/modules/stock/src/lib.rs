@@ -24,8 +24,12 @@ const MODULE_ID: &str = "stock";
 const DEFAULT_SYMBOL: &str = "NVDA";
 const DEFAULT_ETF_TICKERS: [&str; 3] = ["SOXL", "TQQQ", "VOO"];
 const DEFAULT_EMBED_COLOR: u32 = 0x4F545C;
+const BOT_EMBED_COLOR: u32 = 0x068ADD;
 const UPWARD_EMBED_COLOR: u32 = 0x43B581;
 const DOWNWARD_EMBED_COLOR: u32 = 0xF04747;
+const STOCK_THUMBNAIL_URL: &str = "https://icons.iconarchive.com/icons/oxygen-icons.org/oxygen/256/Actions-office-chart-line-stacked-icon.png";
+const UP_EMOJI: &str = "<:yangbonghoro:1162456430360662018>";
+const DOWN_EMOJI: &str = "<:sale:1162457546532073623>";
 const REFRESH_INTERVAL_MS: u32 = 5_000;
 const MAX_REFRESH_TIME_MS: u32 = 60_000;
 const MAX_MANUAL_REFRESHES: u32 = 5;
@@ -334,7 +338,7 @@ async fn build_etf_response(
 
     let phase = representative_phase(&snapshots);
     Ok(Some(StockResponse {
-        embed: build_etf_embed(&snapshots, &phase, update_count, total_updates),
+        embed: build_etf_embed(tickers, &snapshots, &phase, update_count, total_updates),
         stop_reason: stop_reason_for_phase(&phase),
     }))
 }
@@ -384,10 +388,12 @@ fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u3
             "https://finance.yahoo.com/quote/{}",
             snapshot.symbol
         ))
+        .thumbnail(STOCK_THUMBNAIL_URL)
         .color(embed_color(current.change))
         .footer(CreateEmbedFooter::new(format!(
             "Data from Yahoo Finance. Update {update_count}/{total_updates}."
         )))
+        .timestamp(poise::serenity_prelude::Timestamp::now())
         .field(
             "Market State",
             format!(
@@ -395,7 +401,7 @@ fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u3
                 snapshot.phase,
                 market_status_emoji(&snapshot.phase)
             ),
-            true,
+            false,
         )
         .field(
             "Price",
@@ -407,6 +413,43 @@ fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u3
             format_change(current.change, current.change_percent),
             true,
         )
+        .field(" ", " ", false);
+
+    if snapshot.phase == "Pre Market" && snapshot.pre_market_price.is_some() {
+        embed = embed
+            .field(
+                "Pre - Price",
+                format_money(&snapshot.currency_label, snapshot.pre_market_price),
+                true,
+            )
+            .field(
+                "Pre - Change",
+                format_change(
+                    snapshot.pre_market_change,
+                    snapshot.pre_market_change_percent,
+                ),
+                true,
+            )
+            .field(" ", " ", false);
+    } else if snapshot.phase == "Post Market" && snapshot.post_market_price.is_some() {
+        embed = embed
+            .field(
+                "Post - Price",
+                format_money(&snapshot.currency_label, snapshot.post_market_price),
+                true,
+            )
+            .field(
+                "Post - Change",
+                format_change(
+                    snapshot.post_market_change,
+                    snapshot.post_market_change_percent,
+                ),
+                true,
+            )
+            .field(" ", " ", false);
+    }
+
+    embed
         .field(
             "Day High",
             format_money(&snapshot.currency_label, snapshot.regular_market_day_high),
@@ -421,92 +464,11 @@ fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u3
             "Volume",
             format_volume(snapshot.regular_market_volume),
             true,
-        );
-
-    if snapshot.pre_market_price.is_some() {
-        embed = embed
-            .field(
-                "Pre - Price",
-                format_money(&snapshot.currency_label, snapshot.pre_market_price),
-                true,
-            )
-            .field(
-                "Pre - Change",
-                format_change(
-                    snapshot.pre_market_change,
-                    snapshot.pre_market_change_percent,
-                ),
-                true,
-            );
-    }
-
-    if snapshot.post_market_price.is_some() {
-        embed = embed
-            .field(
-                "Post - Price",
-                format_money(&snapshot.currency_label, snapshot.post_market_price),
-                true,
-            )
-            .field(
-                "Post - Change",
-                format_change(
-                    snapshot.post_market_change,
-                    snapshot.post_market_change_percent,
-                ),
-                true,
-            );
-    }
-
-    if let Some(value) = snapshot.quote_type.as_deref() {
-        embed = embed.field("Quote Type", value, true);
-    }
-    if let Some(value) = snapshot.exchange_name.as_deref() {
-        embed = embed.field("Exchange", value, true);
-    }
-    if let Some(value) = snapshot.market_cap {
-        embed = embed.field("Market Cap", format_compact_number(value), true);
-    }
-    if let Some(value) = snapshot.trailing_pe {
-        embed = embed.field("Trailing P/E", format!("{value:.2}"), true);
-    }
-    if let Some(value) = snapshot.forward_pe {
-        embed = embed.field("Forward P/E", format!("{value:.2}"), true);
-    }
-    if let Some(value) = snapshot.trailing_eps {
-        embed = embed.field(
-            "EPS",
-            format_money(&snapshot.currency_label, Some(value)),
-            true,
-        );
-    }
-    if let Some(value) = snapshot.dividend_yield {
-        embed = embed.field("Dividend Yield", format!("{:.2}%", value * 100.0), true);
-    }
-    if let Some(value) = snapshot.fifty_two_week_high {
-        embed = embed.field(
-            "52W High",
-            format_money(&snapshot.currency_label, Some(value)),
-            true,
-        );
-    }
-    if let Some(value) = snapshot.fifty_two_week_low {
-        embed = embed.field(
-            "52W Low",
-            format_money(&snapshot.currency_label, Some(value)),
-            true,
-        );
-    }
-    if let Some(value) = snapshot.sector.as_deref() {
-        embed = embed.field("Sector", value, true);
-    }
-    if let Some(value) = snapshot.industry.as_deref() {
-        embed = embed.field("Industry", value, true);
-    }
-
-    embed
+        )
 }
 
 fn build_etf_embed(
+    tickers: &[String],
     snapshots: &[Result<StockQuote, String>],
     phase: &str,
     update_count: u32,
@@ -514,33 +476,40 @@ fn build_etf_embed(
 ) -> CreateEmbed {
     let mut embed = CreateEmbed::new()
         .title("ETFs")
-        .color(DEFAULT_EMBED_COLOR)
+        .thumbnail(STOCK_THUMBNAIL_URL)
+        .color(BOT_EMBED_COLOR)
         .footer(CreateEmbedFooter::new(format!(
             "Data from Yahoo Finance. Update {update_count}/{total_updates}."
         )))
+        .timestamp(poise::serenity_prelude::Timestamp::now())
         .field(
             "Market State",
             format!("{phase} {}", market_status_emoji(phase)),
             false,
         );
 
-    for snapshot in snapshots {
+    for (index, snapshot) in snapshots.iter().enumerate() {
         match snapshot {
             Ok(snapshot) => {
                 let current = current_market_data(snapshot, phase);
                 embed = embed.field(
                     snapshot.symbol.clone(),
-                    format!(
-                        "{}\n{}\nVolume: {}",
-                        format_money(&snapshot.currency_label, current.price),
-                        format_change(current.change, current.change_percent),
-                        format_volume(snapshot.regular_market_volume),
-                    ),
+                    format_money(&snapshot.currency_label, current.price),
                     true,
                 );
+                embed = embed.field(
+                    "Change",
+                    format_change(current.change, current.change_percent),
+                    true,
+                );
+                embed = embed.field(" ", " ", false);
             }
             Err(error) => {
-                embed = embed.field("Ticker", error.clone(), false);
+                let name = tickers
+                    .get(index)
+                    .cloned()
+                    .unwrap_or_else(|| "Ticker".to_string());
+                embed = embed.field(name, error.clone(), false);
             }
         }
     }
@@ -593,8 +562,11 @@ fn market_status_emoji(phase: &str) -> &'static str {
 
 fn format_money(label: &str, value: Option<f64>) -> String {
     match value {
-        Some(value) if !label.is_empty() => format!("{label} {value:.2}"),
-        Some(value) => format!("{value:.2}"),
+        Some(value) if label.is_empty() => format!("{value:.2}"),
+        Some(value) if label.len() == 3 && label.chars().all(|ch| ch.is_ascii_uppercase()) => {
+            format!("{label} {value:.2}")
+        }
+        Some(value) => format!("{label}{value:.2}"),
         None => "N/A".to_string(),
     }
 }
@@ -605,11 +577,11 @@ fn format_change(change: Option<f64>, change_percent: Option<f64>) -> String {
             "{change:.2} ({:.2}%){}",
             percent * 100.0,
             if change > 0.0 {
-                " 📈"
+                format!(" {UP_EMOJI}")
             } else if change < 0.0 {
-                " 📉"
+                format!(" {DOWN_EMOJI}")
             } else {
-                ""
+                String::new()
             }
         ),
         _ => "N/A".to_string(),
@@ -618,26 +590,26 @@ fn format_change(change: Option<f64>, change_percent: Option<f64>) -> String {
 
 fn format_volume(volume: Option<f64>) -> String {
     volume
-        .map(format_compact_number)
+        .map(|value| format_grouped_integer(value.round() as i64))
         .unwrap_or_else(|| "N/A".to_string())
 }
 
-fn format_compact_number(value: f64) -> String {
-    let abs = value.abs();
-    if abs >= 1_000_000_000_000.0 {
-        return format!("{:.2}T", value / 1_000_000_000_000.0);
-    }
-    if abs >= 1_000_000_000.0 {
-        return format!("{:.2}B", value / 1_000_000_000.0);
-    }
-    if abs >= 1_000_000.0 {
-        return format!("{:.2}M", value / 1_000_000.0);
-    }
-    if abs >= 1_000.0 {
-        return format!("{:.2}K", value / 1_000.0);
+fn format_grouped_integer(value: i64) -> String {
+    let sign = if value < 0 { "-" } else { "" };
+    let digits = value.abs().to_string();
+    let mut output = String::new();
+    let mut count = 0usize;
+
+    for ch in digits.chars().rev() {
+        if count == 3 {
+            output.push(',');
+            count = 0;
+        }
+        output.push(ch);
+        count += 1;
     }
 
-    format!("{:.0}", value)
+    format!("{sign}{}", output.chars().rev().collect::<String>())
 }
 
 fn refresh_components() -> Vec<CreateActionRow> {

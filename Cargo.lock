@@ -909,6 +909,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dynamo-core",
+ "dynamo-module-currency",
  "dynamo-module-gameinfo",
  "dynamo-module-giveaway",
  "dynamo-module-greeting",
@@ -985,6 +986,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-module-currency"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dynamo-core",
+ "futures-util",
+ "poise",
+ "reqwest",
+ "serde",
+]
+
+[[package]]
 name = "dynamo-module-gameinfo"
 version = "0.1.0"
 dependencies = [
@@ -1000,6 +1013,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tokio",
+ "url",
 ]
 
 [[package]]

@@ -9,6 +9,7 @@ members = [
   "crates/providers/music-songbird",
   "crates/providers/yahoo",
   "crates/modules/gameinfo",
+  "crates/modules/currency",
   "crates/modules/giveaway",
   "crates/modules/greeting",
   "crates/modules/info",

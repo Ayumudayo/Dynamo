@@ -1,5 +1,5 @@
 [package]
-name = "dynamo-module-gameinfo"
+name = "dynamo-module-currency"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,15 +7,8 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
-chrono-tz.workspace = true
 dynamo-core = { path = "../../core" }
+futures-util.workspace = true
 poise.workspace = true
-regex.workspace = true
 reqwest.workspace = true
-rss.workspace = true
-scraper.workspace = true
 serde.workspace = true
-serde_json.workspace = true
-tokio.workspace = true
-url.workspace = true
