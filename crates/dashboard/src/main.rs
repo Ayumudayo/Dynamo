@@ -22,7 +22,7 @@ use dynamo_core::{
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
@@ -231,6 +231,7 @@ struct DashboardUser {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct DashboardGuild {
+    #[serde(deserialize_with = "deserialize_u64_from_discord_id")]
     id: u64,
     name: String,
     icon: Option<String>,
@@ -1182,6 +1183,23 @@ fn parse_u64_list_env(key: &str) -> Result<Vec<u64>, anyhow::Error> {
                 .map_err(|error| anyhow::anyhow!("{key} must contain valid u64 values: {error}"))
         })
         .collect()
+}
+
+fn deserialize_u64_from_discord_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum DiscordId {
+        String(String),
+        Number(u64),
+    }
+
+    match DiscordId::deserialize(deserializer)? {
+        DiscordId::String(value) => value.parse::<u64>().map_err(serde::de::Error::custom),
+        DiscordId::Number(value) => Ok(value),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -2385,5 +2403,18 @@ mod tests {
         assert!(user_can_manage_guild(&manage_guild));
         assert!(user_can_manage_guild(&admin));
         assert!(!user_can_manage_guild(&member));
+    }
+
+    #[test]
+    fn discord_guild_id_deserializes_from_string() {
+        let guild: DashboardGuild = serde_json::from_value(serde_json::json!({
+            "id": "110340875107733504",
+            "name": "Test Guild",
+            "icon": null,
+            "permissions": "32"
+        }))
+        .expect("dashboard guild");
+
+        assert_eq!(guild.id, 110340875107733504);
     }
 }
