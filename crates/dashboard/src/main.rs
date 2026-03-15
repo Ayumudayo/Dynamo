@@ -30,6 +30,8 @@ async fn main() -> anyhow::Result<()> {
 
     let app = Router::new()
         .route("/", get(index))
+        .route("/deployment", get(deployment_page))
+        .route("/guild/:guild_id", get(guild_page))
         .route("/healthz", get(healthz))
         .route("/api/modules", get(list_modules))
         .route(
@@ -112,9 +114,97 @@ async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
         .join("\n");
 
     Html(format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Dynamo Dashboard</title></head><body><h1>Dynamo Dashboard Companion</h1><p>Loaded modules: {}</p><ul>{}</ul></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Dynamo Dashboard</title></head><body><h1>Dynamo Dashboard Companion</h1><p>Loaded modules: {}</p><p><a href=\"/deployment\">Manage deployment settings</a></p><form action=\"/guild/\" method=\"get\" onsubmit=\"event.preventDefault(); window.location='/guild/' + document.getElementById('guild-id').value;\"><label for=\"guild-id\">Guild ID:</label><input id=\"guild-id\" name=\"guild-id\" /><button type=\"submit\">Open guild settings</button></form><ul>{}</ul></body></html>",
         state.module_catalog.entries.len(),
         items
+    ))
+}
+
+async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<String> {
+    let settings = state
+        .persistence
+        .deployment_settings_or_default()
+        .await
+        .unwrap_or_default();
+
+    let sections = state
+        .module_catalog
+        .entries
+        .iter()
+        .map(|entry| {
+            let current = settings
+                .modules
+                .get(entry.module.id)
+                .cloned()
+                .unwrap_or(DeploymentModuleSettings {
+                    installed: true,
+                    enabled: entry.module.enabled_by_default,
+                });
+
+            format!(
+                "<section><h2>{name}</h2><p>{description}</p><form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form></section>",
+                name = entry.module.display_name,
+                description = entry.module.description,
+                module_id = entry.module.id,
+                installed = if current.installed { "checked" } else { "" },
+                enabled = if current.enabled { "checked" } else { "" },
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Html(format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Deployment Settings</title></head><body><h1>Deployment Settings</h1><p><a href=\"/\">Back</a></p>{sections}<script>{script}</script></body></html>",
+        sections = sections,
+        script = dashboard_script()
+    ))
+}
+
+async fn guild_page(
+    State(state): State<Arc<DashboardState>>,
+    Path(guild_id): Path<u64>,
+) -> Html<String> {
+    let settings = state
+        .persistence
+        .guild_settings_or_default(guild_id)
+        .await
+        .unwrap_or_default();
+
+    let sections = state
+        .module_catalog
+        .entries
+        .iter()
+        .map(|entry| {
+            let current = settings
+                .modules
+                .get(entry.module.id)
+                .cloned()
+                .unwrap_or_default();
+            let configuration = if current.configuration.is_null() {
+                "{}".to_string()
+            } else {
+                serde_json::to_string_pretty(&current.configuration)
+                    .unwrap_or_else(|_| "{}".to_string())
+            };
+
+            format!(
+                "<section><h2>{name}</h2><p>{description}</p><form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label><br/><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form></section>",
+                guild_id = guild_id,
+                name = entry.module.display_name,
+                description = entry.module.description,
+                module_id = entry.module.id,
+                enabled = if current.enabled { "checked" } else { "" },
+                configuration = configuration,
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    Html(format!(
+        "<!doctype html><html><head><meta charset=\"utf-8\"><title>Guild Settings</title></head><body><h1>Guild Settings for {guild_id}</h1><p><a href=\"/\">Back</a> | <a href=\"/deployment\">Deployment settings</a></p>{sections}<script>{script}</script></body></html>",
+        guild_id = guild_id,
+        sections = sections,
+        script = dashboard_script()
     ))
 }
 
@@ -343,4 +433,50 @@ fn error_payload(message: String) -> serde_json::Value {
         "status": "error",
         "message": message
     })
+}
+
+fn dashboard_script() -> &'static str {
+    r#"
+async function patchDeploymentModule(event, moduleId) {
+  event.preventDefault();
+  const form = event.target;
+  const body = {
+    installed: form.installed.checked,
+    enabled: form.enabled.checked,
+  };
+  const response = await fetch(`/api/deployment-settings/${moduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const output = await response.json();
+  document.getElementById(`deployment-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
+
+async function patchGuildModule(event, guildId, moduleId) {
+  event.preventDefault();
+  const form = event.target;
+  let configuration;
+  try {
+    configuration = JSON.parse(form.configuration.value || '{}');
+  } catch (error) {
+    document.getElementById(`guild-status-${moduleId}`).textContent = `Error: invalid JSON`;
+    return false;
+  }
+
+  const body = {
+    enabled: form.enabled.checked,
+    configuration,
+  };
+  const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  const output = await response.json();
+  document.getElementById(`guild-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
+"#
 }
