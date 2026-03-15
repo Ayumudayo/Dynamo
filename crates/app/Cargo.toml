@@ -9,8 +9,11 @@ authors.workspace = true
 anyhow.workspace = true
 dynamo-core = { path = "../core" }
 dynamo-module-gameinfo = { path = "../modules/gameinfo" }
+dynamo-module-greeting = { path = "../modules/greeting" }
 dynamo-module-info = { path = "../modules/info" }
+dynamo-module-invite = { path = "../modules/invite" }
 dynamo-module-suggestion = { path = "../modules/suggestion" }
+dynamo-module-stats = { path = "../modules/stats" }
 dynamo-module-ticket = { path = "../modules/ticket" }
 dynamo-module-stock = { path = "../modules/stock" }
 dynamo-persistence-mongo = { path = "../persistence-mongo" }

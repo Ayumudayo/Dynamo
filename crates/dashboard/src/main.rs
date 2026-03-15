@@ -382,11 +382,11 @@ fn yes_no(value: bool) -> &'static str {
 }
 
 fn field_bool_value(configuration: &Value, key: &str) -> Option<bool> {
-    configuration.get(key).and_then(Value::as_bool)
+    value_at_path(configuration, key).and_then(Value::as_bool)
 }
 
 fn field_string_value(configuration: &Value, key: &str) -> Option<String> {
-    let value = configuration.get(key)?;
+    let value = value_at_path(configuration, key)?;
     match value {
         Value::Null => None,
         Value::String(value) => Some(value.clone()),
@@ -394,6 +394,14 @@ fn field_string_value(configuration: &Value, key: &str) -> Option<String> {
         Value::Bool(value) => Some(value.to_string()),
         Value::Array(_) | Value::Object(_) => serde_json::to_string_pretty(value).ok(),
     }
+}
+
+fn value_at_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current.get(segment)?;
+    }
+    Some(current)
 }
 
 fn pretty_configuration(configuration: &Value) -> String {
@@ -667,7 +675,7 @@ function collectConfiguration(form) {
 
     const kind = field.dataset.settingKind;
     if (kind === 'toggle') {
-      config[key] = !!field.checked;
+      setPath(config, key, !!field.checked);
       continue;
     }
 
@@ -679,19 +687,32 @@ function collectConfiguration(form) {
       if (Number.isNaN(parsed)) {
         throw new Error(`Invalid integer for ${key}`);
       }
-      config[key] = parsed;
+      setPath(config, key, parsed);
       continue;
     }
 
     if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
-      config[key] = JSON.parse(raw);
+      setPath(config, key, JSON.parse(raw));
       continue;
     }
 
-    config[key] = raw;
+    setPath(config, key, raw);
   }
 
   return config;
+}
+
+function setPath(target, key, value) {
+  const segments = key.split('.');
+  let cursor = target;
+  for (let i = 0; i < segments.length - 1; i += 1) {
+    const segment = segments[i];
+    if (typeof cursor[segment] !== 'object' || cursor[segment] === null || Array.isArray(cursor[segment])) {
+      cursor[segment] = {};
+    }
+    cursor = cursor[segment];
+  }
+  cursor[segments[segments.length - 1]] = value;
 }
 
 async function patchGuildModule(event, guildId, moduleId) {

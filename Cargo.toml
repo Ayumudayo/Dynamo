@@ -8,8 +8,11 @@ members = [
   "crates/persistence-mongo",
   "crates/providers/yahoo",
   "crates/modules/gameinfo",
+  "crates/modules/greeting",
   "crates/modules/info",
+  "crates/modules/invite",
   "crates/modules/suggestion",
+  "crates/modules/stats",
   "crates/modules/ticket",
   "crates/modules/stock",
 ]

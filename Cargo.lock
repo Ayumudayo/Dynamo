@@ -686,7 +686,10 @@ dependencies = [
  "anyhow",
  "dynamo-core",
  "dynamo-module-gameinfo",
+ "dynamo-module-greeting",
  "dynamo-module-info",
+ "dynamo-module-invite",
+ "dynamo-module-stats",
  "dynamo-module-stock",
  "dynamo-module-suggestion",
  "dynamo-module-ticket",
@@ -770,11 +773,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-module-greeting"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dynamo-core",
+ "poise",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-module-info"
 version = "0.1.0"
 dependencies = [
  "dynamo-core",
  "poise",
+]
+
+[[package]]
+name = "dynamo-module-invite"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dynamo-core",
+ "poise",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dynamo-module-stats"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dynamo-core",
+ "poise",
+ "serde",
+ "serde_json",
+ "tokio",
 ]
 
 [[package]]

@@ -13,7 +13,10 @@ pub fn module_registry() -> ModuleRegistry {
     ModuleRegistry::new(vec![
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
+        Box::new(dynamo_module_greeting::GreetingModule),
+        Box::new(dynamo_module_invite::InviteModule),
         Box::new(dynamo_module_suggestion::SuggestionModule),
+        Box::new(dynamo_module_stats::StatsModule),
         Box::new(dynamo_module_ticket::TicketModule),
         Box::new(dynamo_module_stock::StockModule),
     ])
@@ -68,6 +71,55 @@ pub async fn handle_framework_event(
     event: &FullEvent,
     data: &AppState,
 ) -> Result<(), Error> {
+    match event {
+        FullEvent::CacheReady { guilds } => {
+            for guild_id in guilds {
+                dynamo_module_invite::preload_guild_cache(ctx, data, *guild_id).await?;
+            }
+        }
+        FullEvent::GuildMemberAddition { new_member } => {
+            let inviter_data = dynamo_module_invite::track_joined_member(ctx, data, new_member)
+                .await?;
+            dynamo_module_greeting::send_welcome(
+                ctx,
+                data,
+                new_member,
+                inviter_data.as_ref(),
+            )
+            .await?;
+        }
+        FullEvent::GuildMemberRemoval {
+            guild_id,
+            user,
+            member_data_if_available,
+        } => {
+            let inviter_data =
+                dynamo_module_invite::track_left_member(ctx, data, *guild_id, user).await?;
+            dynamo_module_greeting::send_farewell(
+                ctx,
+                data,
+                *guild_id,
+                user,
+                member_data_if_available.as_ref(),
+                inviter_data.as_ref(),
+            )
+            .await?;
+        }
+        FullEvent::InviteCreate { data: invite } => {
+            dynamo_module_invite::handle_invite_create(ctx, data, invite).await?;
+        }
+        FullEvent::InviteDelete { data: invite } => {
+            dynamo_module_invite::handle_invite_delete(ctx, data, invite).await?;
+        }
+        FullEvent::Message { new_message } => {
+            dynamo_module_stats::handle_message(ctx, data, new_message).await?;
+        }
+        FullEvent::VoiceStateUpdate { old, new } => {
+            dynamo_module_stats::handle_voice_state_update(ctx, data, old.as_ref(), new).await?;
+        }
+        _ => {}
+    }
+
     if let FullEvent::InteractionCreate { interaction } = event {
         if dynamo_module_stock::handle_component_interaction(ctx, interaction).await? {
             return Ok(());
@@ -78,6 +130,7 @@ pub async fn handle_framework_event(
         if dynamo_module_ticket::handle_interaction(ctx, interaction, data).await? {
             return Ok(());
         }
+        dynamo_module_stats::handle_interaction(ctx, data, interaction).await?;
     }
 
     Ok(())

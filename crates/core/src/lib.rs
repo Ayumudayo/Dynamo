@@ -13,7 +13,9 @@ mod warnings;
 
 pub use config::{AppConfig, DiscordConfig};
 pub use enablement::{ResolvedModuleState, resolve_module_state, resolve_module_states};
-pub use guard::{ModuleAccess, module_access_for_context, module_access_for_state};
+pub use guard::{
+    ModuleAccess, module_access_for_app, module_access_for_context, module_access_for_state,
+};
 pub use invite::{InviteCounters, InviteLeaderboardEntry, InviteMemberRecord};
 pub use member_stats::{
     CommandUsageStats, MemberStatsRecord, MessageContextUsageStats, VoiceStatsRecord,
