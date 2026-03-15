@@ -19,6 +19,7 @@ authors = ["MARU"]
 anyhow = "1.0.100"
 async-trait = "0.1.89"
 axum = "0.8.6"
+dotenvy = "0.15.7"
 mongodb = "3.5.0"
 poise = "0.6.1"
 serde = { version = "1.0.228", features = ["derive"] }

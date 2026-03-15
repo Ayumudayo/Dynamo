@@ -4,6 +4,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    let _ = dotenvy::dotenv();
     init_tracing();
 
     let config = AppConfig::from_env()?;

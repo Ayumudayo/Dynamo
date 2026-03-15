@@ -14,6 +14,7 @@ use tracing::info;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    let _ = dotenvy::dotenv();
     init_tracing();
 
     let config = DashboardConfig::from_env()?;
