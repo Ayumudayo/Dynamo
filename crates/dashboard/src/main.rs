@@ -16,9 +16,9 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dynamo_core::{
     CommandCatalog, CommandCatalogEntry, DeploymentModuleSettings, DeploymentSettings,
-    GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence, ResolvedCommandState,
-    ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, resolve_command_states,
-    resolve_module_states,
+    GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, ModuleCategory, Persistence,
+    ResolvedCommandState, ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema,
+    resolve_command_states, resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -441,9 +441,10 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             format!(
-                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
+                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\" data-module-category=\"{module_category}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
                 section_id = module_anchor_id("deployment", entry.module.id),
                 module_name = escape_html(entry.module.display_name),
+                module_category = module_category_key(entry.module.category),
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
                 status = render_deployment_status(resolved),
@@ -488,9 +489,10 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
         ],
     );
     let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Activity</p><h2>Runtime Notes</h2></div></div>{runtime_notices}</section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Deployment Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
+        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Activity</p><h2>Runtime Notes</h2></div></div>{runtime_notices}</section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div>{module_tabs}<div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Deployment Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
         overview = overview,
         runtime_notices = render_runtime_notices(&state.module_catalog),
+        module_tabs = render_module_category_tabs(&state.module_catalog),
         module_cards = module_cards,
         command_cards = command_cards,
         sections = sections,
@@ -582,9 +584,10 @@ async fn guild_page(
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
             format!(
-                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
+                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\" data-module-category=\"{module_category}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
                 section_id = module_anchor_id("guild", entry.module.id),
                 module_name = escape_html(entry.module.display_name),
+                module_category = module_category_key(entry.module.category),
                 guild_id = guild_id,
                 name = escape_html(entry.module.display_name),
                 description = escape_html(entry.module.description),
@@ -610,7 +613,7 @@ async fn guild_page(
     let command_cards =
         render_command_summary_cards("guild", &state.command_catalog, &resolved_command_states);
     let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two\"><article class=\"panel info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Guild Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
+        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two\"><article class=\"panel info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div>{module_tabs}<div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Guild Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
         overview = render_overview_section(
             &card.name,
             "Guild-scoped module and command controls for this server.",
@@ -628,6 +631,7 @@ async fn guild_page(
         ),
         guild_id = guild_id,
         runtime_notices = render_runtime_notices(&state.module_catalog),
+        module_tabs = render_module_category_tabs(&state.module_catalog),
         module_cards = module_cards,
         command_cards = command_cards,
         sections = sections,
@@ -1187,7 +1191,7 @@ body { position: relative; }
 .content-topbar, .panel, section, article, details { border: 1px solid var(--panel-border); background: var(--panel); box-shadow: var(--shadow); }
 .content-topbar {
   display: flex; justify-content: space-between; gap: 18px; align-items: center;
-  padding: 22px 24px; border-radius: 22px; margin-bottom: 24px;
+  padding: 18px 20px; border-radius: 18px; margin-bottom: 20px;
 }
 .content-topbar-right { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; justify-content: end; }
 .sidebar-brand, .session-summary, .guild-card-head { display: flex; align-items: center; gap: 14px; }
@@ -1215,7 +1219,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 }
 .stat span, dt { display: block; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 .stat strong, dd { margin: 8px 0 0; font-size: 24px; font-weight: 700; }
-.hero { display: grid; grid-template-columns: 1.6fr 1fr; gap: 20px; padding: 28px; border-radius: 24px; margin-bottom: 24px; }
+.hero { display: grid; grid-template-columns: 1.6fr 1fr; gap: 16px; padding: 20px; border-radius: 18px; margin-bottom: 18px; }
 .hero.compact { grid-template-columns: 1.4fr 0.8fr; }
 .actions { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 18px; }
 .button {
@@ -1230,7 +1234,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .grid { display: grid; gap: 20px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 24px; }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.panel, section, article, details { padding: 20px; border-radius: 18px; margin-bottom: 20px; }
+.panel, section, article, details { padding: 16px; border-radius: 14px; margin-bottom: 16px; }
 .guild-card p, .panel p { color: var(--muted); line-height: 1.6; }
 .pill {
   display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px;
@@ -1238,22 +1242,32 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 }
 .pill-success { color: #bbf7d0; background: rgba(72, 229, 178, 0.14); }
 .pill-warn { color: #fdba74; background: rgba(249, 115, 22, 0.12); }
-.toolbar-panel, .section-block { margin-bottom: 22px; }
+.toolbar-panel, .section-block { margin-bottom: 18px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
 .toolbar-search { max-width: 320px; margin: 0; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
-.module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 18px; }
-.command-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.command-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .summary-card-head, .detail-panel-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .detail-panel-status { display: flex; align-items: center; }
+.summary-card h3, .detail-panel h2, .command-detail-card h3 { font-size: 0.98rem; line-height: 1.2; }
+.summary-card p, .detail-panel p, .command-detail-card p { font-size: 0.92rem; }
 .detail-panel p, .summary-card p, .info-panel p { color: var(--muted); }
 .detail-meta { margin: 8px 0 0; }
 .detail-stack { display: grid; gap: 18px; }
 .command-detail-card { border: 1px solid rgba(255,255,255,0.06); background: var(--panel-strong); border-radius: 14px; padding: 16px; }
+.summary-card-meta { display: inline-flex; align-items: center; gap: 8px; margin: 6px 10px 0 0; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+.summary-card-meta code { color: var(--text); background: rgba(255,255,255,0.04); padding: 3px 7px; border-radius: 8px; font-size: 12px; }
 .guild-card-meta { display: flex; align-items: center; gap: 10px; margin: 14px 0 16px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
 .guild-card-meta code { color: var(--text); background: rgba(255,255,255,0.04); padding: 4px 8px; border-radius: 8px; }
 .empty-state { min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
 .card-action { margin-top: 10px; }
+.tab-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.tab-button {
+  appearance: none; border: 1px solid rgba(255,255,255,0.06); background: var(--panel-strong); color: var(--muted);
+  padding: 8px 12px; border-radius: 10px; font: inherit; font-weight: 700; cursor: pointer; width: auto; margin: 0;
+}
+.tab-button.active, .tab-button:hover { color: var(--text); background: rgba(221, 46, 83, 0.16); border-color: rgba(221,46,83,0.24); }
 form, .advanced-json-form { margin-top: 14px; }
 label, small, legend { color: var(--text); }
 small { color: var(--muted); }
@@ -1299,7 +1313,9 @@ function filterModuleCards(query) {
   const cards = document.querySelectorAll('[data-module-name]');
   for (const card of cards) {
     const moduleName = card.getAttribute('data-module-name') || '';
-    card.style.display = moduleName.includes(value) ? '' : 'none';
+    const category = window.__activeModuleCategory || 'all';
+    const categoryMatch = category === 'all' || card.getAttribute('data-module-category') === category;
+    card.style.display = moduleName.includes(value) && categoryMatch ? '' : 'none';
   }
 }
 
@@ -1309,6 +1325,22 @@ function filterCommandCards(query) {
   for (const card of cards) {
     const commandName = card.getAttribute('data-command-name') || '';
     card.style.display = commandName.includes(value) ? '' : 'none';
+  }
+}
+
+function setModuleCategory(category, button) {
+  window.__activeModuleCategory = category;
+  document.querySelectorAll('.tab-button').forEach((item) => item.classList.remove('active'));
+  if (button) {
+    button.classList.add('active');
+  }
+  const currentSearch = document.getElementById('module-filter');
+  filterModuleCards(currentSearch ? currentSearch.value : '');
+
+  const detailPanels = document.querySelectorAll('.detail-panel');
+  for (const panel of detailPanels) {
+    const panelCategory = panel.getAttribute('data-module-category');
+    panel.style.display = category === 'all' || panelCategory === category ? '' : 'none';
   }
 }
 "#
@@ -1422,6 +1454,26 @@ fn render_runtime_notices(catalog: &ModuleCatalog) -> String {
     }
 }
 
+fn render_module_category_tabs(catalog: &ModuleCatalog) -> String {
+    let mut seen = HashSet::new();
+    let mut tabs = vec![
+        "<button class=\"tab-button active\" type=\"button\" onclick=\"setModuleCategory('all', this)\">All</button>".to_string(),
+    ];
+
+    for entry in &catalog.entries {
+        let key = module_category_key(entry.module.category);
+        if seen.insert(key) {
+            tabs.push(format!(
+                "<button class=\"tab-button\" type=\"button\" onclick=\"setModuleCategory('{key}', this)\">{label}</button>",
+                key = key,
+                label = module_category_label(entry.module.category),
+            ));
+        }
+    }
+
+    format!("<div class=\"tab-row\">{}</div>", tabs.join(""))
+}
+
 fn render_overview_section(title: &str, subtitle: &str, stats: &[(&str, String)]) -> String {
     let stat_markup = stats
         .iter()
@@ -1455,12 +1507,14 @@ fn render_module_summary_cards(
         .zip(resolved_states.iter())
         .map(|(entry, resolved)| {
             format!(
-                "<article class=\"panel summary-card\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p>{description}</p><div class=\"summary-card-meta\"><span>Commands</span><code>{command_count}</code></div><div class=\"actions\"><a class=\"button button-secondary\" href=\"#{anchor}\">Settings</a></div></article>",
+                "<article class=\"panel summary-card\" data-module-name=\"{data_name}\" data-module-category=\"{category_key}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p>{description}</p><div class=\"summary-card-meta\"><span>Commands</span><code>{command_count}</code></div><div class=\"summary-card-meta\"><span>Category</span><code>{category_label}</code></div><div class=\"actions\"><a class=\"button button-secondary\" href=\"#{anchor}\">Settings</a></div></article>",
                 data_name = escape_html(&entry.module.display_name.to_ascii_lowercase()),
+                category_key = module_category_key(entry.module.category),
                 name = escape_html(entry.module.display_name),
                 badge = render_enabled_badge(resolved.effective_enabled),
                 description = escape_html(entry.module.description),
                 command_count = catalog_command_count_for_module(command_catalog, entry.module.id),
+                category_label = module_category_label(entry.module.category),
                 anchor = module_anchor_id(scope, entry.module.id),
             )
         })
@@ -1505,6 +1559,42 @@ fn render_enabled_badge(enabled: bool) -> String {
         "<span class=\"pill pill-success\">Enabled</span>".to_string()
     } else {
         "<span class=\"pill pill-warn\">Disabled</span>".to_string()
+    }
+}
+
+fn module_category_key(category: ModuleCategory) -> &'static str {
+    match category {
+        ModuleCategory::Core => "core",
+        ModuleCategory::Info => "info",
+        ModuleCategory::Currency => "currency",
+        ModuleCategory::Utility => "utility",
+        ModuleCategory::Moderation => "moderation",
+        ModuleCategory::Ticket => "ticket",
+        ModuleCategory::Suggestion => "suggestion",
+        ModuleCategory::Giveaway => "giveaway",
+        ModuleCategory::GameInfo => "gameinfo",
+        ModuleCategory::Stocks => "stocks",
+        ModuleCategory::Music => "music",
+        ModuleCategory::Dashboard => "dashboard",
+        ModuleCategory::Operations => "operations",
+    }
+}
+
+fn module_category_label(category: ModuleCategory) -> &'static str {
+    match category {
+        ModuleCategory::Core => "Core",
+        ModuleCategory::Info => "Info",
+        ModuleCategory::Currency => "Currency",
+        ModuleCategory::Utility => "Utility",
+        ModuleCategory::Moderation => "Moderation",
+        ModuleCategory::Ticket => "Ticket",
+        ModuleCategory::Suggestion => "Suggestion",
+        ModuleCategory::Giveaway => "Giveaway",
+        ModuleCategory::GameInfo => "Game Info",
+        ModuleCategory::Stocks => "Stocks",
+        ModuleCategory::Music => "Music",
+        ModuleCategory::Dashboard => "Dashboard",
+        ModuleCategory::Operations => "Operations",
     }
 }
 
