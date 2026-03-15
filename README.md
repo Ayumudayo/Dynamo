@@ -38,6 +38,11 @@ Enable them explicitly with environment flags:
 - `DYNAMO_ENABLE_GIVEAWAY=true`
 - `DYNAMO_ENABLE_MUSIC=true`
 
+Current optional-module status:
+
+- `giveaway`: implemented as an opt-in persisted slash workflow with entry buttons and timed completion polling
+- `music`: registry-ready scaffold only, playback backend still pending
+
 ## Runtime Model
 
 - Slash-first command model. Prefix parity is not a goal for the public template.

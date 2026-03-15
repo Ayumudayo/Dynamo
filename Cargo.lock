@@ -722,6 +722,7 @@ dependencies = [
  "dotenvy",
  "dynamo-app",
  "dynamo-core",
+ "dynamo-module-giveaway",
  "poise",
  "tokio",
  "tracing",
@@ -779,7 +780,14 @@ dependencies = [
 name = "dynamo-module-giveaway"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
  "dynamo-core",
+ "humantime",
+ "poise",
+ "rand 0.8.5",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]

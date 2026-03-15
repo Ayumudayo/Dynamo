@@ -9,6 +9,7 @@ authors.workspace = true
 anyhow.workspace = true
 dynamo-app = { path = "../app" }
 dynamo-core = { path = "../core" }
+dynamo-module-giveaway = { path = "../modules/giveaway" }
 dotenvy.workspace = true
 poise.workspace = true
 tokio.workspace = true

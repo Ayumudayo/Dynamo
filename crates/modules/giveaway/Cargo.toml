@@ -6,4 +6,11 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+chrono.workspace = true
 dynamo-core = { path = "../../core" }
+humantime.workspace = true
+poise.workspace = true
+rand.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true

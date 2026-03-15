@@ -5,6 +5,8 @@ use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
+const GIVEAWAY_POLL_INTERVAL_SECONDS: u64 = 15;
+
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let _ = dotenvy::dotenv();
@@ -21,6 +23,7 @@ async fn main() -> Result<(), Error> {
     let setup_command_catalog = registry.command_catalog().clone();
     let discord_config = config.discord.clone();
     let command_sync_config = config.commands.clone();
+    let optional_modules = config.optional_modules.clone();
     let setup_persistence = persistence.clone();
     let setup_services = services.clone();
 
@@ -39,6 +42,7 @@ async fn main() -> Result<(), Error> {
         .setup(move |ctx, ready, framework| {
             let discord_config = discord_config.clone();
             let command_sync_config = command_sync_config.clone();
+            let optional_modules = optional_modules.clone();
             let setup_catalog = setup_catalog.clone();
             let setup_command_catalog = setup_command_catalog.clone();
             let setup_persistence = setup_persistence.clone();
@@ -65,6 +69,9 @@ async fn main() -> Result<(), Error> {
                     command_sync_config.sync_interval_seconds,
                     app_state.clone(),
                 );
+                if optional_modules.giveaway_enabled {
+                    spawn_giveaway_poll_loop(ctx.clone(), app_state.clone());
+                }
 
                 let _ = framework;
                 Ok(app_state)
@@ -243,4 +250,25 @@ fn guild_ids_for_sync(
     }
 
     ctx.cache.guilds().into_iter().collect()
+}
+
+fn giveaway_poll_started() -> &'static OnceLock<()> {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    &STARTED
+}
+
+fn spawn_giveaway_poll_loop(ctx: serenity::Context, data: AppState) {
+    if giveaway_poll_started().set(()).is_err() {
+        return;
+    }
+
+    tokio::spawn(async move {
+        let interval = Duration::from_secs(GIVEAWAY_POLL_INTERVAL_SECONDS);
+        loop {
+            tokio::time::sleep(interval).await;
+            if let Err(error) = dynamo_module_giveaway::poll_due_giveaways(&ctx, &data).await {
+                warn!(?error, "failed to poll due giveaways");
+            }
+        }
+    });
 }

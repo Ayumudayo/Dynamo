@@ -5,6 +5,7 @@ use serde_json::Value;
 
 use crate::{
     Error,
+    giveaways::GiveawayRecord,
     invite::{InviteLeaderboardEntry, InviteMemberRecord},
     member_stats::MemberStatsRecord,
     settings::{
@@ -65,6 +66,20 @@ pub trait SuggestionsRepository: Send + Sync {
 }
 
 #[async_trait]
+pub trait GiveawaysRepository: Send + Sync {
+    async fn create(&self, record: GiveawayRecord) -> Result<GiveawayRecord, Error>;
+    async fn get_by_message(
+        &self,
+        guild_id: u64,
+        message_id: u64,
+    ) -> Result<Option<GiveawayRecord>, Error>;
+    async fn save(&self, record: GiveawayRecord) -> Result<GiveawayRecord, Error>;
+    async fn list_by_guild(&self, guild_id: u64) -> Result<Vec<GiveawayRecord>, Error>;
+    async fn list_due_before(&self, timestamp: chrono::DateTime<chrono::Utc>)
+        -> Result<Vec<GiveawayRecord>, Error>;
+}
+
+#[async_trait]
 pub trait InviteRepository: Send + Sync {
     async fn get_or_create(
         &self,
@@ -107,6 +122,7 @@ pub struct Persistence {
     pub deployment_settings: Option<Arc<dyn DeploymentSettingsRepository>>,
     pub provider_state: Option<Arc<dyn ProviderStateRepository>>,
     pub suggestions: Option<Arc<dyn SuggestionsRepository>>,
+    pub giveaways: Option<Arc<dyn GiveawaysRepository>>,
     pub invites: Option<Arc<dyn InviteRepository>>,
     pub member_stats: Option<Arc<dyn MemberStatsRepository>>,
     pub warning_logs: Option<Arc<dyn WarningLogRepository>>,
@@ -119,6 +135,7 @@ impl Persistence {
         deployment_settings: Option<Arc<dyn DeploymentSettingsRepository>>,
         provider_state: Option<Arc<dyn ProviderStateRepository>>,
         suggestions: Option<Arc<dyn SuggestionsRepository>>,
+        giveaways: Option<Arc<dyn GiveawaysRepository>>,
         invites: Option<Arc<dyn InviteRepository>>,
         member_stats: Option<Arc<dyn MemberStatsRepository>>,
         warning_logs: Option<Arc<dyn WarningLogRepository>>,
@@ -129,6 +146,7 @@ impl Persistence {
             deployment_settings,
             provider_state,
             suggestions,
+            giveaways,
             invites,
             member_stats,
             warning_logs,
@@ -173,6 +191,17 @@ impl Persistence {
         message_id: u64,
     ) -> Result<Option<SuggestionRecord>, Error> {
         match &self.suggestions {
+            Some(repo) => repo.get_by_message(guild_id, message_id).await,
+            None => Ok(None),
+        }
+    }
+
+    pub async fn get_giveaway_by_message(
+        &self,
+        guild_id: u64,
+        message_id: u64,
+    ) -> Result<Option<GiveawayRecord>, Error> {
+        match &self.giveaways {
             Some(repo) => repo.get_by_message(guild_id, message_id).await,
             None => Ok(None),
         }

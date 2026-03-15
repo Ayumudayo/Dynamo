@@ -39,6 +39,7 @@ humantime = "2.3.0"
 mongodb = "3.5.0"
 poise = "0.6.1"
 regex = "1.12.2"
+rand = "0.8.5"
 reqwest = { version = "0.12.28", features = ["json", "rustls-tls"] }
 rss = "2.0.12"
 scraper = "0.24.0"

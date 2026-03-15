@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use dynamo_core::{
     AppState, CommandCatalog, DeploymentSettings, DeploymentSettingsRepository, DiscordCommand,
-    Error, GuildSettings, GuildSettingsRepository, InviteRepository, MemberStatsRepository,
-    ModuleCatalog, ModuleRegistry, OptionalModulesConfig, Persistence, ProviderStateRepository,
-    ServiceRegistry, StockQuoteService, SuggestionsRepository, WarningLogRepository,
-    resolve_command_state,
+    Error, GiveawaysRepository, GuildSettings, GuildSettingsRepository, InviteRepository,
+    MemberStatsRepository, ModuleCatalog, ModuleRegistry, OptionalModulesConfig, Persistence,
+    ProviderStateRepository, ServiceRegistry, StockQuoteService, SuggestionsRepository,
+    WarningLogRepository, resolve_command_state,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
@@ -59,6 +59,7 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
     let guild_settings: Arc<dyn GuildSettingsRepository> = store.clone();
     let deployment_settings: Arc<dyn DeploymentSettingsRepository> = store.clone();
     let suggestions: Arc<dyn SuggestionsRepository> = store.clone();
+    let giveaways: Arc<dyn GiveawaysRepository> = store.clone();
     let invites: Arc<dyn InviteRepository> = store.clone();
     let member_stats: Arc<dyn MemberStatsRepository> = store.clone();
     let warning_logs: Arc<dyn WarningLogRepository> = store.clone();
@@ -70,6 +71,7 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
         Some(deployment_settings),
         Some(provider_state),
         Some(suggestions),
+        Some(giveaways),
         Some(invites),
         Some(member_stats),
         Some(warning_logs),
@@ -155,6 +157,9 @@ pub async fn handle_framework_event(
             return Ok(());
         }
         if dynamo_module_ticket::handle_interaction(ctx, interaction, data).await? {
+            return Ok(());
+        }
+        if dynamo_module_giveaway::handle_interaction(ctx, interaction, data).await? {
             return Ok(());
         }
         dynamo_module_stats::handle_interaction(ctx, data, interaction).await?;

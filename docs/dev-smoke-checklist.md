@@ -11,6 +11,7 @@ Run this checklist after major module, persistence, or dashboard changes.
    - `guild_settings`
    - `provider_state`
    - `suggestions`
+   - `giveaways`
    - `members`
    - `member-stats`
    - `mod-logs`
@@ -58,6 +59,16 @@ Run this checklist after major module, persistence, or dashboard changes.
 2. Run `/suggest`.
 3. Approve, reject, and delete a suggestion with moderator controls.
 4. Verify status updates persist in MongoDB.
+
+## Giveaway
+
+1. Enable `DYNAMO_ENABLE_GIVEAWAY=true`.
+2. Configure the giveaway default channel or pass a channel explicitly.
+3. Run `/giveaway start`.
+4. Use the entry button from multiple users.
+5. Run `/giveaway pause`, `/giveaway resume`, `/giveaway edit`, and `/giveaway list`.
+6. Run `/giveaway end` or wait for the poller to finish it automatically.
+7. Run `/giveaway reroll` after completion.
 
 ## Ticket
 
