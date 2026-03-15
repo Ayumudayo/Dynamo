@@ -65,11 +65,11 @@ function Stop-ManagedProcess {
   Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
 
   $LingeringPids = Get-ManagedProcessIds -Name $Name -Crate $Crate
-  foreach ($Pid in $LingeringPids) {
-    $Process = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+  foreach ($ProcessId in $LingeringPids) {
+    $Process = Get-Process -Id $ProcessId -ErrorAction SilentlyContinue
     if ($Process) {
-      Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
-      Write-Host "Stopped $Name lingering process (pid=$Pid)."
+      Stop-Process -Id $ProcessId -Force -ErrorAction SilentlyContinue
+      Write-Host "Stopped $Name lingering process (pid=$ProcessId)."
       $StoppedAny = $true
     }
   }
