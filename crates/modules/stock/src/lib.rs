@@ -1,10 +1,24 @@
+use std::{
+    collections::HashMap,
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
+
 use dynamo_core::{
     Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module, ModuleCategory,
     ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use poise::serenity_prelude::{CreateEmbed, CreateEmbedFooter};
+use poise::serenity_prelude::{
+    ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
+    CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, EditMessage,
+    Interaction,
+};
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tokio::{
+    sync::{Mutex, RwLock},
+    time::sleep,
+};
 
 const MODULE_ID: &str = "stock";
 const DEFAULT_SYMBOL: &str = "NVDA";
@@ -14,6 +28,9 @@ const UPWARD_EMBED_COLOR: u32 = 0x43B581;
 const DOWNWARD_EMBED_COLOR: u32 = 0xF04747;
 const REFRESH_INTERVAL_MS: u32 = 5_000;
 const MAX_REFRESH_TIME_MS: u32 = 60_000;
+const MAX_MANUAL_REFRESHES: u32 = 5;
+const MAX_STORED_SESSIONS: usize = 200;
+pub const STOCK_REFRESH_BUTTON_ID: &str = "stock_refresh";
 
 #[derive(Debug, Deserialize)]
 struct QuoteEnvelope {
@@ -67,6 +84,46 @@ struct StockSnapshot {
     regular_market_day_high: Option<f64>,
     regular_market_day_low: Option<f64>,
     regular_market_volume: Option<f64>,
+}
+
+#[derive(Debug, Clone)]
+enum SessionKind {
+    Stock { symbol: String },
+    Etf { tickers: Vec<String> },
+}
+
+#[derive(Debug)]
+struct StockSession {
+    kind: SessionKind,
+    active: bool,
+    generation: u64,
+    manual_restart_in_progress: bool,
+    manual_refresh_count: u32,
+    last_stop_reason: Option<&'static str>,
+}
+
+impl StockSession {
+    fn new(kind: SessionKind) -> Self {
+        Self {
+            kind,
+            active: false,
+            generation: 0,
+            manual_restart_in_progress: false,
+            manual_refresh_count: 0,
+            last_stop_reason: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct StockResponse {
+    embed: CreateEmbed,
+    stop_reason: Option<&'static str>,
+}
+
+fn stock_sessions() -> &'static RwLock<HashMap<u64, Arc<Mutex<StockSession>>>> {
+    static SESSIONS: OnceLock<RwLock<HashMap<u64, Arc<Mutex<StockSession>>>>> = OnceLock::new();
+    SESSIONS.get_or_init(|| RwLock::new(HashMap::new()))
 }
 
 pub struct StockModule;
@@ -147,13 +204,34 @@ async fn stock(
     let symbol = normalize_symbol(symbol.unwrap_or(settings.default_symbol));
     let total_updates = total_updates();
     let response = build_stock_response(&symbol, 0, total_updates).await?;
-    let Some(embed) = response else {
+    let Some(response) = response else {
         ctx.say("Failed to fetch stock data. Please try again later.")
             .await?;
         return Ok(());
     };
 
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let session = Arc::new(Mutex::new(StockSession::new(SessionKind::Stock {
+        symbol: symbol.clone(),
+    })));
+
+    let reply = ctx
+        .send(
+            poise::CreateReply::default()
+                .embed(response.embed.clone())
+                .components(refresh_components()),
+        )
+        .await?;
+    let message = reply.message().await?.into_owned();
+
+    register_session(message.id.get(), session.clone()).await;
+    initialize_session_loop(
+        ctx.serenity_context().http.clone(),
+        message.channel_id,
+        message.id.get(),
+        session,
+        response.stop_reason,
+    )
+    .await;
     Ok(())
 }
 
@@ -176,13 +254,34 @@ async fn etf(ctx: Context<'_>) -> Result<(), Error> {
 
     let total_updates = total_updates();
     let response = build_etf_response(&tickers, 0, total_updates).await?;
-    let Some(embed) = response else {
+    let Some(response) = response else {
         ctx.say("Failed to fetch ETF data. Please try again later.")
             .await?;
         return Ok(());
     };
 
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let session = Arc::new(Mutex::new(StockSession::new(SessionKind::Etf {
+        tickers: tickers.clone(),
+    })));
+
+    let reply = ctx
+        .send(
+            poise::CreateReply::default()
+                .embed(response.embed.clone())
+                .components(refresh_components()),
+        )
+        .await?;
+    let message = reply.message().await?.into_owned();
+
+    register_session(message.id.get(), session.clone()).await;
+    initialize_session_loop(
+        ctx.serenity_context().http.clone(),
+        message.channel_id,
+        message.id.get(),
+        session,
+        response.stop_reason,
+    )
+    .await;
     Ok(())
 }
 
@@ -278,36 +377,33 @@ async fn build_stock_response(
     symbol: &str,
     update_count: u32,
     total_updates: u32,
-) -> Result<Option<CreateEmbed>, Error> {
+) -> Result<Option<StockResponse>, Error> {
     let snapshots = fetch_quotes(&[symbol.to_string()]).await?;
     let Some(snapshot) = snapshots.into_iter().next().and_then(|entry| entry.ok()) else {
         return Ok(None);
     };
 
-    Ok(Some(build_stock_embed(
-        &snapshot,
-        update_count,
-        total_updates,
-    )))
+    Ok(Some(StockResponse {
+        embed: build_stock_embed(&snapshot, update_count, total_updates),
+        stop_reason: stop_reason_for_phase(&snapshot.phase),
+    }))
 }
 
 async fn build_etf_response(
     tickers: &[String],
     update_count: u32,
     total_updates: u32,
-) -> Result<Option<CreateEmbed>, Error> {
+) -> Result<Option<StockResponse>, Error> {
     let snapshots = fetch_quotes(tickers).await?;
     if snapshots.is_empty() {
         return Ok(None);
     }
 
     let phase = representative_phase(&snapshots);
-    Ok(Some(build_etf_embed(
-        &snapshots,
-        &phase,
-        update_count,
-        total_updates,
-    )))
+    Ok(Some(StockResponse {
+        embed: build_etf_embed(&snapshots, &phase, update_count, total_updates),
+        stop_reason: stop_reason_for_phase(&phase),
+    }))
 }
 
 async fn fetch_quotes(symbols: &[String]) -> Result<Vec<Result<StockSnapshot, String>>, Error> {
@@ -388,6 +484,15 @@ fn representative_phase(snapshots: &[Result<StockSnapshot, String>]) -> String {
     }
 
     phases.first().copied().unwrap_or("Unknown").to_string()
+}
+
+fn stop_reason_for_phase(phase: &str) -> Option<&'static str> {
+    match phase {
+        "Regular Market" | "Pre Market" => None,
+        "Post Market" => Some("post_market"),
+        "Closed" => Some("market_closed"),
+        _ => Some("market_state_unknown"),
+    }
 }
 
 fn build_stock_embed(
@@ -599,6 +704,319 @@ fn format_volume(volume: Option<f64>) -> String {
     volume
         .map(|value| (value.round() as u64).to_string())
         .unwrap_or_else(|| "N/A".to_string())
+}
+
+fn refresh_components() -> Vec<CreateActionRow> {
+    vec![CreateActionRow::Buttons(vec![
+        CreateButton::new(STOCK_REFRESH_BUTTON_ID)
+            .label("Refresh")
+            .style(ButtonStyle::Secondary),
+    ])]
+}
+
+async fn register_session(message_id: u64, session: Arc<Mutex<StockSession>>) {
+    let mut sessions = stock_sessions().write().await;
+    if sessions.len() >= MAX_STORED_SESSIONS {
+        if let Some(oldest) = sessions.keys().next().copied() {
+            sessions.remove(&oldest);
+        }
+    }
+    sessions.insert(message_id, session);
+}
+
+async fn remove_session(message_id: u64) {
+    stock_sessions().write().await.remove(&message_id);
+}
+
+async fn initialize_session_loop(
+    http: Arc<poise::serenity_prelude::Http>,
+    channel_id: ChannelId,
+    message_id: u64,
+    session: Arc<Mutex<StockSession>>,
+    stop_reason: Option<&'static str>,
+) {
+    let mut state = session.lock().await;
+    state.last_stop_reason = stop_reason;
+    state.manual_restart_in_progress = false;
+
+    if stop_reason.is_some() {
+        state.active = false;
+        return;
+    }
+
+    state.active = true;
+    state.generation += 1;
+    let generation = state.generation;
+    drop(state);
+
+    tokio::spawn(async move {
+        let mut update_count = 0u32;
+        let mut consecutive_failures = 0u32;
+
+        loop {
+            sleep(Duration::from_millis(REFRESH_INTERVAL_MS as u64)).await;
+
+            {
+                let state = session.lock().await;
+                if !state.active || state.generation != generation {
+                    break;
+                }
+            }
+
+            update_count += 1;
+            if update_count >= total_updates() {
+                let mut state = session.lock().await;
+                if state.generation == generation {
+                    state.active = false;
+                    state.last_stop_reason = Some("max_refresh_reached");
+                }
+                break;
+            }
+
+            let kind = {
+                let state = session.lock().await;
+                state.kind.clone()
+            };
+
+            let response = match fetch_response_for_kind(&kind, update_count, total_updates()).await
+            {
+                Ok(value) => value,
+                Err(_) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= 3 {
+                        let mut state = session.lock().await;
+                        if state.generation == generation {
+                            state.active = false;
+                            state.last_stop_reason = Some("fetch_error_threshold");
+                        }
+                        break;
+                    }
+                    continue;
+                }
+            };
+
+            let Some(response) = response else {
+                consecutive_failures += 1;
+                if consecutive_failures >= 3 {
+                    let mut state = session.lock().await;
+                    if state.generation == generation {
+                        state.active = false;
+                        state.last_stop_reason = Some("fetch_error_threshold");
+                    }
+                    break;
+                }
+                continue;
+            };
+
+            consecutive_failures = 0;
+
+            if edit_message(&http, channel_id, message_id, response.embed.clone())
+                .await
+                .is_err()
+            {
+                let mut state = session.lock().await;
+                if state.generation == generation {
+                    state.active = false;
+                    state.last_stop_reason = Some("interaction_edit_failed");
+                }
+                remove_session(message_id).await;
+                break;
+            }
+
+            if let Some(reason) = response.stop_reason {
+                let mut state = session.lock().await;
+                if state.generation == generation {
+                    state.active = false;
+                    state.last_stop_reason = Some(reason);
+                }
+                break;
+            }
+        }
+    });
+}
+
+async fn fetch_response_for_kind(
+    kind: &SessionKind,
+    update_count: u32,
+    total_updates: u32,
+) -> Result<Option<StockResponse>, Error> {
+    match kind {
+        SessionKind::Stock { symbol } => {
+            build_stock_response(symbol, update_count, total_updates).await
+        }
+        SessionKind::Etf { tickers } => {
+            build_etf_response(tickers, update_count, total_updates).await
+        }
+    }
+}
+
+async fn edit_message(
+    http: &poise::serenity_prelude::Http,
+    channel_id: ChannelId,
+    message_id: u64,
+    embed: CreateEmbed,
+) -> Result<(), Error> {
+    channel_id
+        .edit_message(
+            http,
+            message_id,
+            EditMessage::new()
+                .embed(embed)
+                .components(refresh_components()),
+        )
+        .await?;
+    Ok(())
+}
+
+pub async fn handle_component_interaction(
+    ctx: &poise::serenity_prelude::Context,
+    interaction: &Interaction,
+) -> Result<bool, Error> {
+    let Interaction::Component(component) = interaction else {
+        return Ok(false);
+    };
+
+    if component.data.custom_id != STOCK_REFRESH_BUTTON_ID {
+        return Ok(false);
+    }
+
+    handle_refresh_button(ctx, component).await?;
+    Ok(true)
+}
+
+async fn handle_refresh_button(
+    ctx: &poise::serenity_prelude::Context,
+    component: &ComponentInteraction,
+) -> Result<(), Error> {
+    let message_id = component.message.id.get();
+    let session = {
+        let sessions = stock_sessions().read().await;
+        sessions.get(&message_id).cloned()
+    };
+
+    let Some(session) = session else {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content("This refresh session has expired. Please run `/stock` or `/etf` again.")
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(());
+    };
+
+    {
+        let mut state = session.lock().await;
+        if state.active {
+            component
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content("The default refresh loop is still running, so this button is not available yet.")
+                            .ephemeral(true),
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        if state.manual_restart_in_progress {
+            component
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content(
+                                "A refresh restart is already being prepared for this message.",
+                            )
+                            .ephemeral(true),
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        if state.manual_refresh_count >= MAX_MANUAL_REFRESHES {
+            component
+                .create_response(
+                    ctx,
+                    CreateInteractionResponse::Message(
+                        CreateInteractionResponseMessage::new()
+                            .content(format!(
+                                "You can manually restart this refresh loop up to {} times.",
+                                MAX_MANUAL_REFRESHES
+                            ))
+                            .ephemeral(true),
+                    ),
+                )
+                .await?;
+            return Ok(());
+        }
+
+        state.manual_restart_in_progress = true;
+    }
+
+    component.defer_ephemeral(ctx).await?;
+
+    let response = {
+        let state = session.lock().await;
+        fetch_response_for_kind(&state.kind, 0, total_updates()).await?
+    };
+
+    let Some(response) = response else {
+        {
+            let mut state = session.lock().await;
+            state.manual_restart_in_progress = false;
+            state.last_stop_reason = Some("fetch_failed");
+            state.active = false;
+        }
+
+        component
+            .edit_response(
+                ctx,
+                poise::serenity_prelude::EditInteractionResponse::new()
+                    .content("Failed to refresh stock data. Please try again later."),
+            )
+            .await?;
+        return Ok(());
+    };
+
+    edit_message(
+        &ctx.http,
+        component.channel_id,
+        message_id,
+        response.embed.clone(),
+    )
+    .await?;
+
+    {
+        let mut state = session.lock().await;
+        state.manual_restart_in_progress = false;
+        state.manual_refresh_count += 1;
+    }
+
+    initialize_session_loop(
+        ctx.http.clone(),
+        component.channel_id,
+        message_id,
+        session,
+        response.stop_reason,
+    )
+    .await;
+
+    component
+        .edit_response(
+            ctx,
+            poise::serenity_prelude::EditInteractionResponse::new()
+                .content("Stock refresh updated."),
+        )
+        .await?;
+
+    Ok(())
 }
 
 #[cfg(test)]

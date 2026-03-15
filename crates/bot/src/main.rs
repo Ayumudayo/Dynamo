@@ -23,6 +23,7 @@ async fn main() -> Result<(), Error> {
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
+            event_handler,
             commands,
             ..Default::default()
         })
@@ -74,4 +75,13 @@ fn init_tracing() {
                 .unwrap_or_else(|_| "dynamo_bot=info,dynamo_core=info,poise=info".into()),
         )
         .try_init();
+}
+
+fn event_handler<'a>(
+    ctx: &'a serenity::Context,
+    event: &'a serenity::FullEvent,
+    _framework: poise::FrameworkContext<'a, AppState, Error>,
+    data: &'a AppState,
+) -> poise::BoxFuture<'a, Result<(), Error>> {
+    Box::pin(async move { dynamo_app::handle_framework_event(ctx, event, data).await })
 }

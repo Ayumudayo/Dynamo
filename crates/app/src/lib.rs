@@ -1,9 +1,11 @@
 use std::sync::Arc;
 
 use dynamo_core::{
-    DeploymentSettingsRepository, GuildSettingsRepository, ModuleRegistry, Persistence,
+    AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, ModuleRegistry,
+    Persistence,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
+use poise::serenity_prelude::{Context, FullEvent};
 use tracing::info;
 
 pub fn module_registry() -> ModuleRegistry {
@@ -39,4 +41,18 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
         Some(guild_settings),
         Some(deployment_settings),
     ))
+}
+
+pub async fn handle_framework_event(
+    ctx: &Context,
+    event: &FullEvent,
+    _data: &AppState,
+) -> Result<(), Error> {
+    if let FullEvent::InteractionCreate { interaction } = event {
+        if dynamo_module_stock::handle_component_interaction(ctx, interaction).await? {
+            return Ok(());
+        }
+    }
+
+    Ok(())
 }
