@@ -87,36 +87,6 @@ function Resolve-BoolSetting {
   return ConvertTo-BoolSetting -Key $Key -Value $RawValue
 }
 
-function Stop-ManagedProcess {
-  param([string]$Name)
-
-  $PidPath = Join-Path $LogsDir "$Name.pid"
-  if (-not (Test-Path $PidPath)) {
-    return
-  }
-
-  $RawPid = Get-Content $PidPath -ErrorAction SilentlyContinue | Select-Object -First 1
-  if (-not $RawPid) {
-    Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
-    return
-  }
-
-  $ManagedPid = 0
-  if (-not [int]::TryParse($RawPid, [ref]$ManagedPid)) {
-    Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
-    return
-  }
-
-  $Process = Get-Process -Id $ManagedPid -ErrorAction SilentlyContinue
-  if ($Process) {
-    Write-Host "Stopping existing $Name process (pid=$ManagedPid)..."
-    Stop-Process -Id $ManagedPid -Force
-    Start-Sleep -Seconds 1
-  }
-
-  Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
-}
-
 function Join-CommandParts {
   param([string[]]$Parts)
   return ($Parts -join "; ")
@@ -125,6 +95,69 @@ function Join-CommandParts {
 function Get-BinaryPath {
   param([string]$Crate)
   return (Join-Path $RepoRoot "target\debug\$Crate.exe")
+}
+
+function Get-ManagedProcessIds {
+  param([string]$Crate)
+
+  $BinaryPath = Get-BinaryPath -Crate $Crate
+  $ShellNames = @("pwsh.exe", "powershell.exe")
+  $BinaryName = [System.IO.Path]::GetFileName($BinaryPath)
+
+  $Candidates = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {
+    ($_.Name -ieq $BinaryName -and ($_.ExecutablePath -eq $BinaryPath -or $_.CommandLine -like "*$BinaryPath*")) -or
+    ($ShellNames -contains $_.Name -and $_.CommandLine -like "*$BinaryPath*")
+  } | Select-Object -ExpandProperty ProcessId -Unique
+
+  return @($Candidates)
+}
+
+function Stop-ManagedProcess {
+  param(
+    [string]$Name,
+    [string]$Crate
+  )
+
+  $PidPath = Join-Path $LogsDir "$Name.pid"
+  $StoppedAny = $false
+
+  if (-not (Test-Path $PidPath)) {
+    Write-Host "No managed pid file for $Name. Scanning for lingering processes..."
+  } else {
+    $RawPid = Get-Content $PidPath -ErrorAction SilentlyContinue | Select-Object -First 1
+    if (-not $RawPid) {
+      Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
+    } else {
+      $ManagedPid = 0
+      if (-not [int]::TryParse($RawPid, [ref]$ManagedPid)) {
+        Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
+      } else {
+        $Process = Get-Process -Id $ManagedPid -ErrorAction SilentlyContinue
+        if ($Process) {
+          Write-Host "Stopping existing $Name wrapper (pid=$ManagedPid)..."
+          Stop-Process -Id $ManagedPid -Force
+          $StoppedAny = $true
+          Start-Sleep -Seconds 1
+        }
+      }
+    }
+  }
+
+  Remove-Item $PidPath -Force -ErrorAction SilentlyContinue
+
+  $LingeringPids = Get-ManagedProcessIds -Crate $Crate
+  foreach ($Pid in $LingeringPids) {
+    $Process = Get-Process -Id $Pid -ErrorAction SilentlyContinue
+    if ($Process) {
+      Write-Host "Stopping lingering $Name process (pid=$Pid)..."
+      Stop-Process -Id $Pid -Force -ErrorAction SilentlyContinue
+      $StoppedAny = $true
+    }
+  }
+
+  if ($StoppedAny) {
+    Start-Sleep -Seconds 1
+  }
 }
 
 function Assert-BinaryExists {
@@ -159,7 +192,7 @@ function Start-RustProcess {
     [string]$Crate
   )
 
-  Stop-ManagedProcess -Name $Name
+  Stop-ManagedProcess -Name $Name -Crate $Crate
 
   $ConsoleLogPath = Join-Path $LogsDir "$Name.console.log"
   $PidPath = Join-Path $LogsDir "$Name.pid"

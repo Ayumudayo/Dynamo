@@ -105,6 +105,14 @@ binary_path() {
   printf '%s/target/debug/%s\n' "$ROOT_DIR" "$crate"
 }
 
+find_managed_pids() {
+  local crate="$1"
+  local binary
+  binary="$(binary_path "$crate")"
+
+  pgrep -af "$binary" | awk '{print $1}' || true
+}
+
 assert_binary_exists() {
   local crate="$1"
   local binary
@@ -117,27 +125,44 @@ assert_binary_exists() {
 
 stop_managed_process() {
   local name="$1"
+  local crate="$2"
   local pid_path="$LOGS_DIR/${name}.pid"
+  local stopped_any=false
 
   if [[ ! -f "$pid_path" ]]; then
-    return
-  fi
-
-  local pid
-  pid="$(cat "$pid_path" 2>/dev/null || true)"
-  if [[ -z "$pid" ]]; then
-    rm -f "$pid_path"
-    return
-  fi
-
-  if kill -0 "$pid" >/dev/null 2>&1; then
-    echo "Stopping existing $name process (pid=$pid)..."
-    kill "$pid" >/dev/null 2>&1 || true
-    sleep 1
-    kill -9 "$pid" >/dev/null 2>&1 || true
+    echo "No managed pid file for $name. Scanning for lingering processes..."
+  else
+    local pid
+    pid="$(cat "$pid_path" 2>/dev/null || true)"
+    if [[ -z "$pid" ]]; then
+      rm -f "$pid_path"
+    else
+      if kill -0 "$pid" >/dev/null 2>&1; then
+        echo "Stopping existing $name wrapper (pid=$pid)..."
+        kill "$pid" >/dev/null 2>&1 || true
+        sleep 1
+        kill -9 "$pid" >/dev/null 2>&1 || true
+        stopped_any=true
+      fi
+    fi
   fi
 
   rm -f "$pid_path"
+
+  while IFS= read -r pid; do
+    [[ -z "$pid" ]] && continue
+    if kill -0 "$pid" >/dev/null 2>&1; then
+      echo "Stopping lingering $name process (pid=$pid)..."
+      kill "$pid" >/dev/null 2>&1 || true
+      sleep 1
+      kill -9 "$pid" >/dev/null 2>&1 || true
+      stopped_any=true
+    fi
+  done < <(find_managed_pids "$crate")
+
+  if [[ "$stopped_any" == "true" ]]; then
+    sleep 1
+  fi
 }
 
 start_process() {
@@ -153,7 +178,7 @@ start_process() {
     assert_binary_exists "$crate"
   fi
 
-  stop_managed_process "$name"
+  stop_managed_process "$name" "$crate"
 
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[dry-run] (cd '$ROOT_DIR' && '$binary') >'$stdout_path' 2>'$stderr_path' &"
