@@ -689,6 +689,7 @@ dependencies = [
  "dynamo-module-info",
  "dynamo-module-stock",
  "dynamo-persistence-mongo",
+ "dynamo-provider-yahoo",
  "poise",
  "tracing",
 ]
@@ -777,10 +778,8 @@ dependencies = [
 name = "dynamo-module-stock"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "dynamo-core",
  "poise",
- "reqwest",
  "serde",
  "serde_json",
  "tokio",
@@ -795,6 +794,25 @@ dependencies = [
  "dynamo-core",
  "mongodb",
  "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dynamo-provider-yahoo"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "dotenvy",
+ "dynamo-core",
+ "dynamo-persistence-mongo",
+ "reqwest",
+ "scraper",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+ "url",
 ]
 
 [[package]]

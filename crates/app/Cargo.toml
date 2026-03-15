@@ -12,5 +12,6 @@ dynamo-module-gameinfo = { path = "../modules/gameinfo" }
 dynamo-module-info = { path = "../modules/info" }
 dynamo-module-stock = { path = "../modules/stock" }
 dynamo-persistence-mongo = { path = "../persistence-mongo" }
+dynamo-provider-yahoo = { path = "../providers/yahoo" }
 poise.workspace = true
 tracing.workspace = true

@@ -10,12 +10,14 @@ async fn main() -> Result<(), Error> {
     let config = AppConfig::from_env()?;
     let registry = dynamo_app::module_registry();
     let persistence = dynamo_app::persistence_from_env().await?;
+    let services = dynamo_app::services_from_persistence(&persistence)?;
     let manifests = registry.manifests();
     let commands = registry.commands();
     let intents = aggregate_intents(manifests.iter().copied());
     let setup_catalog = registry.catalog().clone();
     let discord_config = config.discord.clone();
     let setup_persistence = persistence.clone();
+    let setup_services = services.clone();
 
     if let Some(database_name) = persistence.database_name.as_deref() {
         info!(database = %database_name, "MongoDB persistence initialized");
@@ -31,6 +33,7 @@ async fn main() -> Result<(), Error> {
             let discord_config = discord_config.clone();
             let setup_catalog = setup_catalog.clone();
             let setup_persistence = setup_persistence.clone();
+            let setup_services = setup_services.clone();
 
             Box::pin(async move {
                 info!(
@@ -55,7 +58,11 @@ async fn main() -> Result<(), Error> {
                     );
                 }
 
-                Ok(AppState::new(setup_catalog, setup_persistence))
+                Ok(AppState::new(
+                    setup_catalog,
+                    setup_persistence,
+                    setup_services,
+                ))
             })
         })
         .build();

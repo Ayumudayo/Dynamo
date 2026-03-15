@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use dynamo_core::{
     AppState, DeploymentSettingsRepository, Error, GuildSettingsRepository, ModuleRegistry,
-    Persistence,
+    Persistence, ProviderStateRepository, ServiceRegistry, StockQuoteService,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, FullEvent};
@@ -34,13 +34,22 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
 
     let database_name = Some(store.database().name().to_string());
     let guild_settings: Arc<dyn GuildSettingsRepository> = store.clone();
-    let deployment_settings: Arc<dyn DeploymentSettingsRepository> = store;
+    let deployment_settings: Arc<dyn DeploymentSettingsRepository> = store.clone();
+    let provider_state: Arc<dyn ProviderStateRepository> = store;
 
     Ok(Persistence::new(
         database_name,
         Some(guild_settings),
         Some(deployment_settings),
+        Some(provider_state),
     ))
+}
+
+pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<ServiceRegistry> {
+    let stock_quotes: Arc<dyn StockQuoteService> = Arc::new(
+        dynamo_provider_yahoo::YahooFinanceClient::new(persistence.provider_state.clone())?,
+    );
+    Ok(ServiceRegistry::new(Some(stock_quotes)))
 }
 
 pub async fn handle_framework_event(

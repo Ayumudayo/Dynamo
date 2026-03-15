@@ -1,19 +1,19 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::Duration,
 };
 
 use dynamo_core::{
     Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module, ModuleCategory,
-    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
+    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, StockQuote,
+    StockQuoteService,
 };
 use poise::serenity_prelude::{
     ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
     CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, EditMessage,
     Interaction,
 };
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use tokio::{
     sync::{Mutex, RwLock},
@@ -32,85 +32,15 @@ const MAX_MANUAL_REFRESHES: u32 = 5;
 const MAX_STORED_SESSIONS: usize = 200;
 pub const STOCK_REFRESH_BUTTON_ID: &str = "stock_refresh";
 
-#[derive(Debug, Deserialize)]
-struct ChartEnvelope {
-    chart: ChartResponse,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChartResponse {
-    result: Option<Vec<ChartResult>>,
-    error: Option<ChartError>,
-}
-
-#[derive(Debug, Deserialize)]
-struct ChartError {
-    description: Option<String>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct ChartResult {
-    meta: ChartMeta,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "camelCase")]
-struct ChartMeta {
-    symbol: String,
-    short_name: Option<String>,
-    long_name: Option<String>,
-    currency: Option<String>,
-    regular_market_price: Option<f64>,
-    regular_market_day_high: Option<f64>,
-    regular_market_day_low: Option<f64>,
-    regular_market_volume: Option<f64>,
-    chart_previous_close: Option<f64>,
-    current_trading_period: Option<CurrentTradingPeriod>,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct CurrentTradingPeriod {
-    pre: TradingPeriod,
-    regular: TradingPeriod,
-    post: TradingPeriod,
-}
-
-#[derive(Debug, Clone, Deserialize)]
-struct TradingPeriod {
-    start: i64,
-    end: i64,
-}
-
-#[derive(Debug, Clone)]
-struct StockSnapshot {
-    symbol: String,
-    short_name: Option<String>,
-    long_name: Option<String>,
-    currency_label: String,
-    phase: String,
-    regular_market_price: Option<f64>,
-    regular_market_change: Option<f64>,
-    regular_market_change_percent: Option<f64>,
-    pre_market_price: Option<f64>,
-    pre_market_change: Option<f64>,
-    pre_market_change_percent: Option<f64>,
-    post_market_price: Option<f64>,
-    post_market_change: Option<f64>,
-    post_market_change_percent: Option<f64>,
-    regular_market_day_high: Option<f64>,
-    regular_market_day_low: Option<f64>,
-    regular_market_volume: Option<f64>,
-}
-
 #[derive(Debug, Clone)]
 enum SessionKind {
     Stock { symbol: String },
     Etf { tickers: Vec<String> },
 }
 
-#[derive(Debug)]
 struct StockSession {
     kind: SessionKind,
+    service: Arc<dyn StockQuoteService>,
     active: bool,
     generation: u64,
     manual_restart_in_progress: bool,
@@ -119,9 +49,10 @@ struct StockSession {
 }
 
 impl StockSession {
-    fn new(kind: SessionKind) -> Self {
+    fn new(kind: SessionKind, service: Arc<dyn StockQuoteService>) -> Self {
         Self {
             kind,
+            service,
             active: false,
             generation: 0,
             manual_restart_in_progress: false,
@@ -216,19 +147,28 @@ async fn stock(
         return Ok(());
     }
 
+    let Some(service) = ctx.data().services.stock_quotes.clone() else {
+        ctx.say("The stock data service is not available in this deployment.")
+            .await?;
+        return Ok(());
+    };
+
     let settings = load_settings(ctx).await?;
     let symbol = normalize_symbol(symbol.unwrap_or(settings.default_symbol));
     let total_updates = total_updates();
-    let response = build_stock_response(&symbol, 0, total_updates).await?;
+    let response = build_stock_response(service.as_ref(), &symbol, 0, total_updates).await?;
     let Some(response) = response else {
         ctx.say("Failed to fetch stock data. Please try again later.")
             .await?;
         return Ok(());
     };
 
-    let session = Arc::new(Mutex::new(StockSession::new(SessionKind::Stock {
-        symbol: symbol.clone(),
-    })));
+    let session = Arc::new(Mutex::new(StockSession::new(
+        SessionKind::Stock {
+            symbol: symbol.clone(),
+        },
+        service,
+    )));
 
     let reply = ctx
         .send(
@@ -258,6 +198,12 @@ async fn etf(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
+    let Some(service) = ctx.data().services.stock_quotes.clone() else {
+        ctx.say("The stock data service is not available in this deployment.")
+            .await?;
+        return Ok(());
+    };
+
     let settings = load_settings(ctx).await?;
     let tickers = normalize_symbols(settings.etf_tickers);
     if tickers.is_empty() {
@@ -269,16 +215,19 @@ async fn etf(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let total_updates = total_updates();
-    let response = build_etf_response(&tickers, 0, total_updates).await?;
+    let response = build_etf_response(service.as_ref(), &tickers, 0, total_updates).await?;
     let Some(response) = response else {
         ctx.say("Failed to fetch ETF data. Please try again later.")
             .await?;
         return Ok(());
     };
 
-    let session = Arc::new(Mutex::new(StockSession::new(SessionKind::Etf {
-        tickers: tickers.clone(),
-    })));
+    let session = Arc::new(Mutex::new(StockSession::new(
+        SessionKind::Etf {
+            tickers: tickers.clone(),
+        },
+        service,
+    )));
 
     let reply = ctx
         .send(
@@ -390,12 +339,12 @@ fn total_updates() -> u32 {
 }
 
 async fn build_stock_response(
+    service: &dyn StockQuoteService,
     symbol: &str,
     update_count: u32,
     total_updates: u32,
 ) -> Result<Option<StockResponse>, Error> {
-    let snapshots = fetch_quotes(&[symbol.to_string()]).await?;
-    let Some(snapshot) = snapshots.into_iter().next().and_then(|entry| entry.ok()) else {
+    let Some(snapshot) = service.fetch_quote(symbol).await? else {
         return Ok(None);
     };
 
@@ -406,11 +355,12 @@ async fn build_stock_response(
 }
 
 async fn build_etf_response(
+    service: &dyn StockQuoteService,
     tickers: &[String],
     update_count: u32,
     total_updates: u32,
 ) -> Result<Option<StockResponse>, Error> {
-    let snapshots = fetch_quotes(tickers).await?;
+    let snapshots = service.fetch_quotes(tickers).await?;
     if snapshots.is_empty() {
         return Ok(None);
     }
@@ -422,95 +372,7 @@ async fn build_etf_response(
     }))
 }
 
-async fn fetch_quotes(symbols: &[String]) -> Result<Vec<Result<StockSnapshot, String>>, Error> {
-    let client = Client::builder()
-        .user_agent("Mozilla/5.0 (compatible; dynamo-rs/0.1)")
-        .timeout(std::time::Duration::from_secs(10))
-        .build()?;
-
-    let mut snapshots = Vec::with_capacity(symbols.len());
-    for symbol in symbols {
-        let url = format!(
-            "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d&includePrePost=true"
-        );
-        let response = client.get(&url).send().await?.error_for_status()?;
-        let envelope = response.json::<ChartEnvelope>().await?;
-
-        if let Some(result) = envelope.chart.result.and_then(|mut values| values.pop()) {
-            snapshots.push(Ok(normalize_chart(result.meta)));
-            continue;
-        }
-
-        let message = envelope
-            .chart
-            .error
-            .and_then(|error| error.description)
-            .unwrap_or_else(|| "Invalid Ticker".to_string());
-        snapshots.push(Err(message));
-    }
-
-    Ok(snapshots)
-}
-
-fn normalize_chart(meta: ChartMeta) -> StockSnapshot {
-    let regular_market_change = match (meta.regular_market_price, meta.chart_previous_close) {
-        (Some(price), Some(previous_close)) => Some(price - previous_close),
-        _ => None,
-    };
-    let regular_market_change_percent = match (regular_market_change, meta.chart_previous_close) {
-        (Some(change), Some(previous_close)) if previous_close != 0.0 => {
-            Some(change / previous_close)
-        }
-        _ => None,
-    };
-
-    StockSnapshot {
-        symbol: meta.symbol,
-        short_name: meta.short_name,
-        long_name: meta.long_name,
-        currency_label: meta.currency.unwrap_or_default(),
-        phase: infer_market_phase(meta.current_trading_period.as_ref()),
-        regular_market_price: meta.regular_market_price,
-        regular_market_change,
-        regular_market_change_percent,
-        pre_market_price: None,
-        pre_market_change: None,
-        pre_market_change_percent: None,
-        post_market_price: None,
-        post_market_change: None,
-        post_market_change_percent: None,
-        regular_market_day_high: meta.regular_market_day_high,
-        regular_market_day_low: meta.regular_market_day_low,
-        regular_market_volume: meta.regular_market_volume,
-    }
-}
-
-fn infer_market_phase(periods: Option<&CurrentTradingPeriod>) -> String {
-    let Some(periods) = periods else {
-        return "Unknown".to_string();
-    };
-
-    let now = current_unix_timestamp();
-    if now >= periods.regular.start && now <= periods.regular.end {
-        return "Regular Market".to_string();
-    }
-    if now >= periods.pre.start && now <= periods.pre.end {
-        return "Pre Market".to_string();
-    }
-    if now >= periods.post.start && now <= periods.post.end {
-        return "Post Market".to_string();
-    }
-    "Closed".to_string()
-}
-
-fn current_unix_timestamp() -> i64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|duration| duration.as_secs() as i64)
-        .unwrap_or_default()
-}
-
-fn representative_phase(snapshots: &[Result<StockSnapshot, String>]) -> String {
+fn representative_phase(snapshots: &[Result<StockQuote, String>]) -> String {
     let valid = snapshots.iter().filter_map(|entry| entry.as_ref().ok());
     let phases = valid.map(|quote| quote.phase.as_str()).collect::<Vec<_>>();
 
@@ -539,11 +401,7 @@ fn stop_reason_for_phase(phase: &str) -> Option<&'static str> {
     }
 }
 
-fn build_stock_embed(
-    snapshot: &StockSnapshot,
-    update_count: u32,
-    total_updates: u32,
-) -> CreateEmbed {
+fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u32) -> CreateEmbed {
     let current = current_market_data(snapshot, &snapshot.phase);
     let mut embed = CreateEmbed::new()
         .title(format!(
@@ -570,7 +428,7 @@ fn build_stock_embed(
                 snapshot.phase,
                 market_status_emoji(&snapshot.phase)
             ),
-            false,
+            true,
         )
         .field(
             "Price",
@@ -581,9 +439,24 @@ fn build_stock_embed(
             "Change",
             format_change(current.change, current.change_percent),
             true,
+        )
+        .field(
+            "Day High",
+            format_money(&snapshot.currency_label, snapshot.regular_market_day_high),
+            true,
+        )
+        .field(
+            "Day Low",
+            format_money(&snapshot.currency_label, snapshot.regular_market_day_low),
+            true,
+        )
+        .field(
+            "Volume",
+            format_volume(snapshot.regular_market_volume),
+            true,
         );
 
-    if snapshot.phase == "Pre Market" {
+    if snapshot.pre_market_price.is_some() {
         embed = embed
             .field(
                 "Pre - Price",
@@ -598,7 +471,9 @@ fn build_stock_embed(
                 ),
                 true,
             );
-    } else if snapshot.phase == "Post Market" {
+    }
+
+    if snapshot.post_market_price.is_some() {
         embed = embed
             .field(
                 "Post - Price",
@@ -615,26 +490,57 @@ fn build_stock_embed(
             );
     }
 
+    if let Some(value) = snapshot.quote_type.as_deref() {
+        embed = embed.field("Quote Type", value, true);
+    }
+    if let Some(value) = snapshot.exchange_name.as_deref() {
+        embed = embed.field("Exchange", value, true);
+    }
+    if let Some(value) = snapshot.market_cap {
+        embed = embed.field("Market Cap", format_compact_number(value), true);
+    }
+    if let Some(value) = snapshot.trailing_pe {
+        embed = embed.field("Trailing P/E", format!("{value:.2}"), true);
+    }
+    if let Some(value) = snapshot.forward_pe {
+        embed = embed.field("Forward P/E", format!("{value:.2}"), true);
+    }
+    if let Some(value) = snapshot.trailing_eps {
+        embed = embed.field(
+            "EPS",
+            format_money(&snapshot.currency_label, Some(value)),
+            true,
+        );
+    }
+    if let Some(value) = snapshot.dividend_yield {
+        embed = embed.field("Dividend Yield", format!("{:.2}%", value * 100.0), true);
+    }
+    if let Some(value) = snapshot.fifty_two_week_high {
+        embed = embed.field(
+            "52W High",
+            format_money(&snapshot.currency_label, Some(value)),
+            true,
+        );
+    }
+    if let Some(value) = snapshot.fifty_two_week_low {
+        embed = embed.field(
+            "52W Low",
+            format_money(&snapshot.currency_label, Some(value)),
+            true,
+        );
+    }
+    if let Some(value) = snapshot.sector.as_deref() {
+        embed = embed.field("Sector", value, true);
+    }
+    if let Some(value) = snapshot.industry.as_deref() {
+        embed = embed.field("Industry", value, true);
+    }
+
     embed
-        .field(
-            "Day High",
-            format_money(&snapshot.currency_label, snapshot.regular_market_day_high),
-            true,
-        )
-        .field(
-            "Day Low",
-            format_money(&snapshot.currency_label, snapshot.regular_market_day_low),
-            true,
-        )
-        .field(
-            "Volume",
-            format_volume(snapshot.regular_market_volume),
-            true,
-        )
 }
 
 fn build_etf_embed(
-    snapshots: &[Result<StockSnapshot, String>],
+    snapshots: &[Result<StockQuote, String>],
     phase: &str,
     update_count: u32,
     total_updates: u32,
@@ -655,17 +561,16 @@ fn build_etf_embed(
         match snapshot {
             Ok(snapshot) => {
                 let current = current_market_data(snapshot, phase);
-                embed = embed
-                    .field(
-                        snapshot.symbol.clone(),
+                embed = embed.field(
+                    snapshot.symbol.clone(),
+                    format!(
+                        "{}\n{}\nVolume: {}",
                         format_money(&snapshot.currency_label, current.price),
-                        true,
-                    )
-                    .field(
-                        "Change",
                         format_change(current.change, current.change_percent),
-                        true,
-                    );
+                        format_volume(snapshot.regular_market_volume),
+                    ),
+                    true,
+                );
             }
             Err(error) => {
                 embed = embed.field("Ticker", error.clone(), false);
@@ -682,7 +587,7 @@ struct CurrentMarketData {
     change_percent: Option<f64>,
 }
 
-fn current_market_data(snapshot: &StockSnapshot, phase: &str) -> CurrentMarketData {
+fn current_market_data(snapshot: &StockQuote, phase: &str) -> CurrentMarketData {
     match phase {
         "Pre Market" if snapshot.pre_market_price.is_some() => CurrentMarketData {
             price: snapshot.pre_market_price,
@@ -746,8 +651,26 @@ fn format_change(change: Option<f64>, change_percent: Option<f64>) -> String {
 
 fn format_volume(volume: Option<f64>) -> String {
     volume
-        .map(|value| (value.round() as u64).to_string())
+        .map(format_compact_number)
         .unwrap_or_else(|| "N/A".to_string())
+}
+
+fn format_compact_number(value: f64) -> String {
+    let abs = value.abs();
+    if abs >= 1_000_000_000_000.0 {
+        return format!("{:.2}T", value / 1_000_000_000_000.0);
+    }
+    if abs >= 1_000_000_000.0 {
+        return format!("{:.2}B", value / 1_000_000_000.0);
+    }
+    if abs >= 1_000_000.0 {
+        return format!("{:.2}M", value / 1_000_000.0);
+    }
+    if abs >= 1_000.0 {
+        return format!("{:.2}K", value / 1_000.0);
+    }
+
+    format!("{:.0}", value)
 }
 
 fn refresh_components() -> Vec<CreateActionRow> {
@@ -817,12 +740,18 @@ async fn initialize_session_loop(
                 break;
             }
 
-            let kind = {
+            let (kind, service) = {
                 let state = session.lock().await;
-                state.kind.clone()
+                (state.kind.clone(), state.service.clone())
             };
 
-            let response = match fetch_response_for_kind(&kind, update_count, total_updates()).await
+            let response = match fetch_response_for_kind(
+                service.as_ref(),
+                &kind,
+                update_count,
+                total_updates(),
+            )
+            .await
             {
                 Ok(value) => value,
                 Err(_) => {
@@ -880,16 +809,17 @@ async fn initialize_session_loop(
 }
 
 async fn fetch_response_for_kind(
+    service: &dyn StockQuoteService,
     kind: &SessionKind,
     update_count: u32,
     total_updates: u32,
 ) -> Result<Option<StockResponse>, Error> {
     match kind {
         SessionKind::Stock { symbol } => {
-            build_stock_response(symbol, update_count, total_updates).await
+            build_stock_response(service, symbol, update_count, total_updates).await
         }
         SessionKind::Etf { tickers } => {
-            build_etf_response(tickers, update_count, total_updates).await
+            build_etf_response(service, tickers, update_count, total_updates).await
         }
     }
 }
@@ -1006,10 +936,11 @@ async fn handle_refresh_button(
 
     component.defer_ephemeral(ctx).await?;
 
-    let response = {
+    let (kind, service) = {
         let state = session.lock().await;
-        fetch_response_for_kind(&state.kind, 0, total_updates()).await?
+        (state.kind.clone(), state.service.clone())
     };
+    let response = fetch_response_for_kind(service.as_ref(), &kind, 0, total_updates()).await?;
 
     let Some(response) = response else {
         {
@@ -1065,7 +996,8 @@ async fn handle_refresh_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{fetch_quotes, normalize_symbol, normalize_symbols, total_updates};
+    use super::{current_market_data, normalize_symbol, normalize_symbols, total_updates};
+    use dynamo_core::StockQuote;
 
     #[test]
     fn normalizes_symbols_to_uppercase() {
@@ -1087,17 +1019,22 @@ mod tests {
         assert_eq!(total_updates(), 12);
     }
 
-    #[tokio::test]
-    #[ignore = "live network smoke test"]
-    async fn live_quote_provider_returns_nvda_data() {
-        let response = fetch_quotes(&["NVDA".to_string()])
-            .await
-            .expect("request should succeed");
-        let first = response.into_iter().next().expect("one result");
-        let snapshot = first.expect("nvda should resolve");
+    #[test]
+    fn prefers_pre_market_values_when_active() {
+        let quote = StockQuote {
+            phase: "Pre Market".to_string(),
+            pre_market_price: Some(101.0),
+            pre_market_change: Some(1.0),
+            pre_market_change_percent: Some(0.01),
+            regular_market_price: Some(100.0),
+            regular_market_change: Some(0.5),
+            regular_market_change_percent: Some(0.005),
+            ..StockQuote::default()
+        };
 
-        assert_eq!(snapshot.symbol, "NVDA");
-        assert!(snapshot.regular_market_price.is_some());
-        assert!(snapshot.long_name.is_some() || snapshot.short_name.is_some());
+        let current = current_market_data(&quote, &quote.phase);
+        assert_eq!(current.price, Some(101.0));
+        assert_eq!(current.change, Some(1.0));
+        assert_eq!(current.change_percent, Some(0.01));
     }
 }

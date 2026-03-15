@@ -3,6 +3,7 @@ mod enablement;
 mod module;
 mod registry;
 mod repositories;
+mod services;
 mod settings;
 
 pub use config::{AppConfig, DiscordConfig};
@@ -12,7 +13,10 @@ pub use module::{
     SettingOption, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
 pub use registry::{AppState, ModuleRegistry, aggregate_intents};
-pub use repositories::{DeploymentSettingsRepository, GuildSettingsRepository, Persistence};
+pub use repositories::{
+    DeploymentSettingsRepository, GuildSettingsRepository, Persistence, ProviderStateRepository,
+};
+pub use services::{ServiceRegistry, StockQuote, StockQuoteService};
 pub use settings::{
     DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
 };

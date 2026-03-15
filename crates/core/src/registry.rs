@@ -2,7 +2,7 @@ use std::time::Instant;
 
 use crate::{
     DiscordCommand, GatewayIntents, Module, ModuleCatalog, ModuleCatalogEntry, ModuleManifest,
-    Persistence,
+    Persistence, ServiceRegistry,
 };
 
 pub struct ModuleRegistry {
@@ -48,14 +48,20 @@ pub struct AppState {
     pub started_at: Instant,
     pub module_catalog: ModuleCatalog,
     pub persistence: Persistence,
+    pub services: ServiceRegistry,
 }
 
 impl AppState {
-    pub fn new(module_catalog: ModuleCatalog, persistence: Persistence) -> Self {
+    pub fn new(
+        module_catalog: ModuleCatalog,
+        persistence: Persistence,
+        services: ServiceRegistry,
+    ) -> Self {
         Self {
             started_at: Instant::now(),
             module_catalog,
             persistence,
+            services,
         }
     }
 }

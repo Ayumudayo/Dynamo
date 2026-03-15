@@ -3,11 +3,11 @@ use std::{collections::BTreeMap, env};
 use async_trait::async_trait;
 use dynamo_core::{
     DeploymentModuleSettings, DeploymentSettings, DeploymentSettingsRepository, Error,
-    GuildModuleSettings, GuildSettings, GuildSettingsRepository,
+    GuildModuleSettings, GuildSettings, GuildSettingsRepository, ProviderStateRepository,
 };
 use mongodb::{
     Client, Collection, Database,
-    bson::{doc, to_bson},
+    bson::{DateTime as BsonDateTime, doc, from_bson, to_bson},
 };
 use serde::{Deserialize, Serialize};
 
@@ -61,6 +61,7 @@ pub struct MongoPersistence {
     database: Database,
     guild_settings: Collection<GuildSettingsDocument>,
     deployment_settings: Collection<DeploymentSettingsDocument>,
+    provider_state: Collection<ProviderStateDocument>,
 }
 
 impl MongoPersistence {
@@ -70,11 +71,13 @@ impl MongoPersistence {
         let guild_settings = database.collection::<GuildSettingsDocument>("guild_settings");
         let deployment_settings =
             database.collection::<DeploymentSettingsDocument>("deployment_settings");
+        let provider_state = database.collection::<ProviderStateDocument>("provider_state");
 
         Ok(Self {
             database,
             guild_settings,
             deployment_settings,
+            provider_state,
         })
     }
 
@@ -95,6 +98,13 @@ impl MongoPersistence {
             self.database
                 .create_collection("deployment_settings")
                 .await?;
+        }
+
+        if !existing_collections
+            .iter()
+            .any(|name| name == "provider_state")
+        {
+            self.database.create_collection("provider_state").await?;
         }
 
         self.deployment_settings
@@ -119,6 +129,43 @@ impl MongoPersistence {
 
     fn guild_document_id(guild_id: u64) -> String {
         guild_id.to_string()
+    }
+
+    pub async fn load_provider_state(
+        &self,
+        provider_id: &str,
+    ) -> Result<Option<serde_json::Value>, Error> {
+        let document = self
+            .provider_state
+            .find_one(doc! { "_id": provider_id })
+            .await?;
+        let Some(document) = document else {
+            return Ok(None);
+        };
+
+        Ok(Some(from_bson(document.state)?))
+    }
+
+    pub async fn save_provider_state(
+        &self,
+        provider_id: &str,
+        state: serde_json::Value,
+    ) -> Result<(), Error> {
+        self.provider_state
+            .update_one(
+                doc! { "_id": provider_id },
+                doc! {
+                    "$setOnInsert": { "_id": provider_id },
+                    "$set": {
+                        "state": to_bson(&state)?,
+                        "updated_at": BsonDateTime::now(),
+                    },
+                },
+            )
+            .upsert(true)
+            .await?;
+
+        Ok(())
     }
 }
 
@@ -169,6 +216,15 @@ impl DeploymentSettingsDocument {
             modules: self.modules,
         }
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct ProviderStateDocument {
+    #[serde(rename = "_id")]
+    id: String,
+    state: mongodb::bson::Bson,
+    #[serde(default)]
+    updated_at: Option<BsonDateTime>,
 }
 
 #[async_trait]
@@ -249,5 +305,16 @@ impl DeploymentSettingsRepository for MongoPersistence {
             .await?;
 
         self.get().await
+    }
+}
+
+#[async_trait]
+impl ProviderStateRepository for MongoPersistence {
+    async fn load_json(&self, provider_id: &str) -> Result<Option<serde_json::Value>, Error> {
+        self.load_provider_state(provider_id).await
+    }
+
+    async fn save_json(&self, provider_id: &str, value: serde_json::Value) -> Result<(), Error> {
+        self.save_provider_state(provider_id, value).await
     }
 }
