@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     sync::{Arc, OnceLock},
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use dynamo_core::{
@@ -33,36 +33,52 @@ const MAX_STORED_SESSIONS: usize = 200;
 pub const STOCK_REFRESH_BUTTON_ID: &str = "stock_refresh";
 
 #[derive(Debug, Deserialize)]
-struct QuoteEnvelope {
-    #[serde(rename = "quoteResponse")]
-    quote_response: QuoteResponse,
+struct ChartEnvelope {
+    chart: ChartResponse,
 }
 
 #[derive(Debug, Deserialize)]
-struct QuoteResponse {
-    result: Vec<YahooQuote>,
+struct ChartResponse {
+    result: Option<Vec<ChartResult>>,
+    error: Option<ChartError>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ChartError {
+    description: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct ChartResult {
+    meta: ChartMeta,
 }
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct YahooQuote {
+struct ChartMeta {
     symbol: String,
     short_name: Option<String>,
     long_name: Option<String>,
     currency: Option<String>,
-    market_state: Option<String>,
     regular_market_price: Option<f64>,
-    regular_market_change: Option<f64>,
-    regular_market_change_percent: Option<f64>,
-    pre_market_price: Option<f64>,
-    pre_market_change: Option<f64>,
-    pre_market_change_percent: Option<f64>,
-    post_market_price: Option<f64>,
-    post_market_change: Option<f64>,
-    post_market_change_percent: Option<f64>,
     regular_market_day_high: Option<f64>,
     regular_market_day_low: Option<f64>,
     regular_market_volume: Option<f64>,
+    chart_previous_close: Option<f64>,
+    current_trading_period: Option<CurrentTradingPeriod>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct CurrentTradingPeriod {
+    pre: TradingPeriod,
+    regular: TradingPeriod,
+    post: TradingPeriod,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TradingPeriod {
+    start: i64,
+    end: i64,
 }
 
 #[derive(Debug, Clone)]
@@ -408,62 +424,90 @@ async fn build_etf_response(
 
 async fn fetch_quotes(symbols: &[String]) -> Result<Vec<Result<StockSnapshot, String>>, Error> {
     let client = Client::builder()
+        .user_agent("Mozilla/5.0 (compatible; dynamo-rs/0.1)")
         .timeout(std::time::Duration::from_secs(10))
         .build()?;
-    let url = format!(
-        "https://query1.finance.yahoo.com/v7/finance/quote?symbols={}",
-        symbols.join(",")
-    );
-    let response = client.get(url).send().await?.error_for_status()?;
-    let envelope = response.json::<QuoteEnvelope>().await?;
 
-    let mut by_symbol = std::collections::HashMap::new();
-    for quote in envelope.quote_response.result {
-        by_symbol.insert(quote.symbol.to_ascii_uppercase(), quote);
+    let mut snapshots = Vec::with_capacity(symbols.len());
+    for symbol in symbols {
+        let url = format!(
+            "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d&includePrePost=true"
+        );
+        let response = client.get(&url).send().await?.error_for_status()?;
+        let envelope = response.json::<ChartEnvelope>().await?;
+
+        if let Some(result) = envelope.chart.result.and_then(|mut values| values.pop()) {
+            snapshots.push(Ok(normalize_chart(result.meta)));
+            continue;
+        }
+
+        let message = envelope
+            .chart
+            .error
+            .and_then(|error| error.description)
+            .unwrap_or_else(|| "Invalid Ticker".to_string());
+        snapshots.push(Err(message));
     }
 
-    Ok(symbols
-        .iter()
-        .map(|symbol| {
-            by_symbol
-                .get(&symbol.to_ascii_uppercase())
-                .cloned()
-                .map(normalize_quote)
-                .ok_or_else(|| "Invalid Ticker".to_string())
-        })
-        .collect())
+    Ok(snapshots)
 }
 
-fn normalize_quote(quote: YahooQuote) -> StockSnapshot {
+fn normalize_chart(meta: ChartMeta) -> StockSnapshot {
+    let regular_market_change = match (meta.regular_market_price, meta.chart_previous_close) {
+        (Some(price), Some(previous_close)) => Some(price - previous_close),
+        _ => None,
+    };
+    let regular_market_change_percent = match (regular_market_change, meta.chart_previous_close) {
+        (Some(change), Some(previous_close)) if previous_close != 0.0 => {
+            Some(change / previous_close)
+        }
+        _ => None,
+    };
+
     StockSnapshot {
-        symbol: quote.symbol,
-        short_name: quote.short_name,
-        long_name: quote.long_name,
-        currency_label: quote.currency.unwrap_or_default(),
-        phase: normalize_market_state(quote.market_state.as_deref()),
-        regular_market_price: quote.regular_market_price,
-        regular_market_change: quote.regular_market_change,
-        regular_market_change_percent: quote.regular_market_change_percent,
-        pre_market_price: quote.pre_market_price,
-        pre_market_change: quote.pre_market_change,
-        pre_market_change_percent: quote.pre_market_change_percent,
-        post_market_price: quote.post_market_price,
-        post_market_change: quote.post_market_change,
-        post_market_change_percent: quote.post_market_change_percent,
-        regular_market_day_high: quote.regular_market_day_high,
-        regular_market_day_low: quote.regular_market_day_low,
-        regular_market_volume: quote.regular_market_volume,
+        symbol: meta.symbol,
+        short_name: meta.short_name,
+        long_name: meta.long_name,
+        currency_label: meta.currency.unwrap_or_default(),
+        phase: infer_market_phase(meta.current_trading_period.as_ref()),
+        regular_market_price: meta.regular_market_price,
+        regular_market_change,
+        regular_market_change_percent,
+        pre_market_price: None,
+        pre_market_change: None,
+        pre_market_change_percent: None,
+        post_market_price: None,
+        post_market_change: None,
+        post_market_change_percent: None,
+        regular_market_day_high: meta.regular_market_day_high,
+        regular_market_day_low: meta.regular_market_day_low,
+        regular_market_volume: meta.regular_market_volume,
     }
 }
 
-fn normalize_market_state(state: Option<&str>) -> String {
-    match state.unwrap_or_default() {
-        "REGULAR" => "Regular Market".to_string(),
-        "PRE" | "PREPRE" => "Pre Market".to_string(),
-        "POST" | "POSTPOST" => "Post Market".to_string(),
-        "CLOSED" => "Closed".to_string(),
-        _ => "Unknown".to_string(),
+fn infer_market_phase(periods: Option<&CurrentTradingPeriod>) -> String {
+    let Some(periods) = periods else {
+        return "Unknown".to_string();
+    };
+
+    let now = current_unix_timestamp();
+    if now >= periods.regular.start && now <= periods.regular.end {
+        return "Regular Market".to_string();
     }
+    if now >= periods.pre.start && now <= periods.pre.end {
+        return "Pre Market".to_string();
+    }
+    if now >= periods.post.start && now <= periods.post.end {
+        return "Post Market".to_string();
+    }
+    "Closed".to_string()
+}
+
+fn current_unix_timestamp() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or_default()
 }
 
 fn representative_phase(snapshots: &[Result<StockSnapshot, String>]) -> String {
@@ -1021,7 +1065,7 @@ async fn handle_refresh_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{normalize_symbol, normalize_symbols, total_updates};
+    use super::{fetch_quotes, normalize_symbol, normalize_symbols, total_updates};
 
     #[test]
     fn normalizes_symbols_to_uppercase() {
@@ -1041,5 +1085,19 @@ mod tests {
     #[test]
     fn computes_total_updates_from_refresh_window() {
         assert_eq!(total_updates(), 12);
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke test"]
+    async fn live_quote_provider_returns_nvda_data() {
+        let response = fetch_quotes(&["NVDA".to_string()])
+            .await
+            .expect("request should succeed");
+        let first = response.into_iter().next().expect("one result");
+        let snapshot = first.expect("nvda should resolve");
+
+        assert_eq!(snapshot.symbol, "NVDA");
+        assert!(snapshot.regular_market_price.is_some());
+        assert!(snapshot.long_name.is_some() || snapshot.short_name.is_some());
     }
 }
