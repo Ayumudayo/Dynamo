@@ -41,7 +41,7 @@ Enable them explicitly with environment flags:
 Current optional-module status:
 
 - `giveaway`: implemented as an opt-in persisted slash workflow with entry buttons and timed completion polling
-- `music`: `Songbird` default backend is implemented with queue-oriented slash commands, and `Lavalink` settings are configurable as the next backend path
+- `music`: `Songbird` default backend is implemented with queue-oriented slash commands, and `Lavalink` is left as a documentation-only deployment guide
 
 ## Runtime Model
 
@@ -74,7 +74,7 @@ Music runtime notes:
 
 - `Songbird` is the implemented default backend.
 - `yt-dlp` must be available on the host path for YouTube URL/search playback.
-- `Lavalink` fields are configurable now, but the external-node runtime path is still the next implementation step.
+- `Lavalink` is not exposed in the runtime settings UI. If you want to experiment with an external node later, use [`docs/music-lavalink-guide.md`](./docs/music-lavalink-guide.md) as an operational reference only.
 
 ## Discord Intents
 

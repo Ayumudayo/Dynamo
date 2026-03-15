@@ -68,7 +68,12 @@ impl SongbirdMusicService {
         Self::ensure_backend(config)?;
         let manager = self.manager(ctx, config).await?;
         let Some(call) = manager.get(GuildId::new(guild_id)) else {
-            let context = guild_contexts().lock().await.get(&guild_id).cloned().unwrap_or_default();
+            let context = guild_contexts()
+                .lock()
+                .await
+                .get(&guild_id)
+                .cloned()
+                .unwrap_or_default();
             return Ok(MusicQueueSnapshot {
                 backend: MusicBackendKind::Songbird,
                 connected: false,
@@ -84,7 +89,12 @@ impl SongbirdMusicService {
             let handler = call.lock().await;
             handler.queue().current_queue()
         };
-        let context = guild_contexts().lock().await.get(&guild_id).cloned().unwrap_or_default();
+        let context = guild_contexts()
+            .lock()
+            .await
+            .get(&guild_id)
+            .cloned()
+            .unwrap_or_default();
 
         let mut current = None;
         let mut upcoming = Vec::new();
@@ -138,7 +148,8 @@ impl MusicService for SongbirdMusicService {
             MusicBackendKind::Songbird => MusicBackendStatus {
                 backend: MusicBackendKind::Songbird,
                 healthy: true,
-                summary: "Songbird backend is available and ready for in-process playback.".to_string(),
+                summary: "Songbird backend is available and ready for in-process playback."
+                    .to_string(),
             },
             MusicBackendKind::Lavalink => MusicBackendStatus {
                 backend: MusicBackendKind::Lavalink,

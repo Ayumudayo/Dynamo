@@ -16,7 +16,7 @@ impl Module for MusicModule {
         ModuleManifest::new(
             MODULE_ID,
             "Music",
-            "Optional music module with Songbird default and Lavalink-capable backend settings.",
+            "Optional music module with Songbird as the built-in playback backend.",
             ModuleCategory::Music,
             false,
             GatewayIntents::GUILDS | GatewayIntents::GUILD_VOICE_STATES,
@@ -33,28 +33,8 @@ impl Module for MusicModule {
                 SettingsSection {
                     id: "music",
                     title: "Music",
-                    description: Some("Select the runtime backend and common playback defaults."),
+                    description: Some("Configure Songbird playback defaults."),
                     fields: vec![
-                        SettingsField {
-                            key: "backend",
-                            label: "Backend",
-                            help_text: Some(
-                                "Songbird is the default in-process backend; Lavalink uses an external server.",
-                            ),
-                            required: false,
-                            kind: SettingsFieldKind::Select {
-                                options: vec![
-                                    dynamo_core::SettingOption {
-                                        label: "Songbird",
-                                        value: "songbird",
-                                    },
-                                    dynamo_core::SettingOption {
-                                        label: "Lavalink",
-                                        value: "lavalink",
-                                    },
-                                ],
-                            },
-                        },
                         SettingsField {
                             key: "default_source",
                             label: "Default source",
@@ -100,48 +80,6 @@ impl Module for MusicModule {
                         kind: SettingsFieldKind::Text,
                     }],
                 },
-                SettingsSection {
-                    id: "lavalink",
-                    title: "Lavalink",
-                    description: Some("External Lavalink node connection settings."),
-                    fields: vec![
-                        SettingsField {
-                            key: "lavalink.host",
-                            label: "Host",
-                            help_text: Some("Lavalink server hostname or IP."),
-                            required: false,
-                            kind: SettingsFieldKind::Text,
-                        },
-                        SettingsField {
-                            key: "lavalink.port",
-                            label: "Port",
-                            help_text: Some("Lavalink TCP port."),
-                            required: false,
-                            kind: SettingsFieldKind::Integer,
-                        },
-                        SettingsField {
-                            key: "lavalink.password",
-                            label: "Password",
-                            help_text: Some("Lavalink authorization password."),
-                            required: false,
-                            kind: SettingsFieldKind::Text,
-                        },
-                        SettingsField {
-                            key: "lavalink.secure",
-                            label: "Secure",
-                            help_text: Some("Use HTTPS/WSS for Lavalink traffic."),
-                            required: false,
-                            kind: SettingsFieldKind::Toggle,
-                        },
-                        SettingsField {
-                            key: "lavalink.resume_key",
-                            label: "Resume key",
-                            help_text: Some("Optional resume key or session label."),
-                            required: false,
-                            kind: SettingsFieldKind::Text,
-                        },
-                    ],
-                },
             ],
         }
     }
@@ -150,21 +88,17 @@ impl Module for MusicModule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 struct MusicSettings {
-    backend: MusicBackendKind,
     default_source: MusicSourceKind,
     auto_leave_seconds: u64,
     songbird: SongbirdSettings,
-    lavalink: LavalinkSettings,
 }
 
 impl Default for MusicSettings {
     fn default() -> Self {
         Self {
-            backend: MusicBackendKind::Songbird,
             default_source: MusicSourceKind::Youtube,
             auto_leave_seconds: DEFAULT_AUTO_LEAVE_SECONDS,
             songbird: SongbirdSettings::default(),
-            lavalink: LavalinkSettings::default(),
         }
     }
 }
@@ -173,16 +107,6 @@ impl Default for MusicSettings {
 #[serde(default)]
 struct SongbirdSettings {
     ytdlp_program: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-#[serde(default)]
-struct LavalinkSettings {
-    host: Option<String>,
-    port: Option<u16>,
-    password: Option<String>,
-    secure: bool,
-    resume_key: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
@@ -246,7 +170,7 @@ async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
         .title("Music Backend Status")
         .field(
             "Configured Backend",
-            format!("`{:?}`", settings.backend),
+            "`Songbird`".to_string(),
             true,
         )
         .field(
@@ -272,23 +196,8 @@ async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
             false,
         )
         .field(
-            "Lavalink",
-            format!(
-                "host: {}\nport: {}\npassword: {}\nsecure: {}\nresume_key: {}",
-                settings.lavalink.host.as_deref().unwrap_or("unset"),
-                settings
-                    .lavalink
-                    .port
-                    .map(|value| value.to_string())
-                    .unwrap_or_else(|| "unset".to_string()),
-                if settings.lavalink.password.is_some() {
-                    "configured"
-                } else {
-                    "unset"
-                },
-                settings.lavalink.secure,
-                settings.lavalink.resume_key.as_deref().unwrap_or("unset"),
-            ),
+            "External Node Guide",
+            "Lavalink is documented as an external deployment guide only and is not configurable from this runtime.",
             false,
         )
         .field("Runtime", runtime_status, false);
@@ -491,15 +400,15 @@ fn parse_music_settings(module: &GuildModuleSettings) -> Result<MusicSettings, E
 impl MusicSettings {
     fn to_backend_config(&self) -> MusicBackendConfig {
         MusicBackendConfig {
-            backend: self.backend,
+            backend: MusicBackendKind::Songbird,
             default_source: format!("{:?}", self.default_source).to_ascii_lowercase(),
             auto_leave_seconds: self.auto_leave_seconds,
             songbird_ytdlp_program: self.songbird.ytdlp_program.clone(),
-            lavalink_host: self.lavalink.host.clone(),
-            lavalink_port: self.lavalink.port,
-            lavalink_password: self.lavalink.password.clone(),
-            lavalink_secure: self.lavalink.secure,
-            lavalink_resume_key: self.lavalink.resume_key.clone(),
+            lavalink_host: None,
+            lavalink_port: None,
+            lavalink_password: None,
+            lavalink_secure: false,
+            lavalink_resume_key: None,
         }
     }
 }
@@ -588,10 +497,7 @@ fn render_queue_snapshot(title: &str, snapshot: &MusicQueueSnapshot) -> CreateEm
     if let Some(current) = &snapshot.current {
         embed = embed.field(
             "Current",
-            format!(
-                "{}\nrequested by `{}`",
-                current.title, current.requested_by
-            ),
+            format!("{}\nrequested by `{}`", current.title, current.requested_by),
             false,
         );
     } else {
@@ -606,7 +512,9 @@ fn render_queue_snapshot(title: &str, snapshot: &MusicQueueSnapshot) -> CreateEm
             .iter()
             .take(5)
             .enumerate()
-            .map(|(index, track)| format!("{}. {} (`{}`)", index + 1, track.title, track.requested_by))
+            .map(|(index, track)| {
+                format!("{}. {} (`{}`)", index + 1, track.title, track.requested_by)
+            })
             .collect::<Vec<_>>()
             .join("\n");
         embed = embed.field("Up Next", queue_text, false);
@@ -617,28 +525,19 @@ fn render_queue_snapshot(title: &str, snapshot: &MusicQueueSnapshot) -> CreateEm
 
 #[cfg(test)]
 mod tests {
-    use super::{MusicBackendKind, MusicSettings, MusicSourceKind};
+    use super::{MusicSettings, MusicSourceKind};
 
     #[test]
-    fn music_settings_accept_nested_backend_shape() {
+    fn music_settings_accept_songbird_shape() {
         let settings: MusicSettings = serde_json::from_value(serde_json::json!({
-            "backend": "lavalink",
             "default_source": "youtube_music",
             "auto_leave_seconds": 90,
-            "songbird": { "ytdlp_program": "yt-dlp" },
-            "lavalink": {
-                "host": "127.0.0.1",
-                "port": 2333,
-                "password": "youshallnotpass",
-                "secure": false,
-                "resume_key": "dynamo"
-            }
+            "songbird": { "ytdlp_program": "yt-dlp" }
         }))
         .expect("settings");
 
-        assert_eq!(settings.backend, MusicBackendKind::Lavalink);
         assert_eq!(settings.default_source, MusicSourceKind::YoutubeMusic);
         assert_eq!(settings.auto_leave_seconds, 90);
-        assert_eq!(settings.lavalink.port, Some(2333));
+        assert_eq!(settings.songbird.ytdlp_program.as_deref(), Some("yt-dlp"));
     }
 }
