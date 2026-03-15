@@ -12,7 +12,7 @@ pub use module::{
     SettingOption, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
 pub use registry::{AppState, ModuleRegistry, aggregate_intents};
-pub use repositories::{DeploymentSettingsRepository, GuildSettingsRepository};
+pub use repositories::{DeploymentSettingsRepository, GuildSettingsRepository, Persistence};
 pub use settings::{
     DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
 };

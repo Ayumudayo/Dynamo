@@ -2,14 +2,17 @@ use std::{env, net::SocketAddr, sync::Arc};
 
 use axum::{
     Json, Router,
+    extract::Path,
     extract::State,
+    http::StatusCode,
     response::{Html, IntoResponse},
-    routing::get,
+    routing::{get, patch},
 };
 use dynamo_core::{
-    DeploymentSettings, DeploymentSettingsRepository, ModuleCatalog, resolve_module_states,
+    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog, Persistence,
+    resolve_module_states,
 };
-use dynamo_persistence_mongo::MongoPersistence;
+use serde::Deserialize;
 use tracing::info;
 
 #[tokio::main]
@@ -19,10 +22,10 @@ async fn main() -> anyhow::Result<()> {
 
     let config = DashboardConfig::from_env()?;
     let registry = dynamo_app::module_registry();
-    let deployment_store = dynamo_app::optional_mongo_from_env().await?;
+    let persistence = dynamo_app::persistence_from_env().await?;
     let state = Arc::new(DashboardState {
         module_catalog: registry.catalog().clone(),
-        deployment_store,
+        persistence,
     });
 
     let app = Router::new()
@@ -34,6 +37,16 @@ async fn main() -> anyhow::Result<()> {
             get(list_default_module_states),
         )
         .route("/api/module-states/live", get(list_live_module_states))
+        .route("/api/deployment-settings", get(get_deployment_settings))
+        .route(
+            "/api/deployment-settings/:module_id",
+            patch(patch_deployment_module_settings),
+        )
+        .route("/api/guild-settings/:guild_id", get(get_guild_settings))
+        .route(
+            "/api/guild-settings/:guild_id/:module_id",
+            patch(patch_guild_module_settings),
+        )
         .with_state(state);
 
     let address = SocketAddr::new(config.host, config.port);
@@ -71,7 +84,7 @@ impl DashboardConfig {
 #[derive(Clone)]
 struct DashboardState {
     module_catalog: ModuleCatalog,
-    deployment_store: Option<Arc<MongoPersistence>>,
+    persistence: Persistence,
 }
 
 async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
@@ -122,18 +135,18 @@ async fn list_default_module_states(State(state): State<Arc<DashboardState>>) ->
 }
 
 async fn list_live_module_states(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
-    let deployment_settings = match &state.deployment_store {
-        Some(store) => match DeploymentSettingsRepository::get(store.as_ref()).await {
-            Ok(settings) => settings,
-            Err(error) => {
-                return Json(serde_json::json!({
+    let deployment_settings = match state.persistence.deployment_settings_or_default().await {
+        Ok(settings) => settings,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(serde_json::json!({
                     "status": "error",
                     "message": format!("failed to load deployment settings: {error}")
-                }))
+                })),
+            )
                 .into_response();
-            }
-        },
-        None => DeploymentSettings::default(),
+        }
     };
 
     Json(serde_json::json!({
@@ -150,4 +163,184 @@ fn init_tracing() {
                 .unwrap_or_else(|_| "dynamo_dashboard=info,dynamo_app=info".into()),
         )
         .try_init();
+}
+
+#[derive(Debug, Deserialize)]
+struct DeploymentModuleSettingsPatch {
+    installed: Option<bool>,
+    enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+struct GuildModuleSettingsPatch {
+    enabled: Option<bool>,
+    configuration: Option<serde_json::Value>,
+}
+
+async fn get_deployment_settings(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
+    match state.persistence.deployment_settings_or_default().await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to load deployment settings: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn patch_deployment_module_settings(
+    State(state): State<Arc<DashboardState>>,
+    Path(module_id): Path<String>,
+    Json(patch): Json<DeploymentModuleSettingsPatch>,
+) -> impl IntoResponse {
+    if !module_exists(&state.module_catalog, &module_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(error_payload(format!("unknown module id: {module_id}"))),
+        )
+            .into_response();
+    }
+
+    let Some(repo) = state.persistence.deployment_settings.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_payload(
+                "deployment settings repository is not configured".to_string(),
+            )),
+        )
+            .into_response();
+    };
+
+    let current_settings = match repo.get().await {
+        Ok(settings) => settings,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_payload(format!(
+                    "failed to load deployment settings: {error}"
+                ))),
+            )
+                .into_response();
+        }
+    };
+
+    let mut next = current_settings
+        .modules
+        .get(&module_id)
+        .cloned()
+        .unwrap_or(DeploymentModuleSettings::default());
+
+    if let Some(installed) = patch.installed {
+        next.installed = installed;
+    }
+    if let Some(enabled) = patch.enabled {
+        next.enabled = enabled;
+    }
+
+    match repo.upsert_module_settings(&module_id, next).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to persist deployment settings: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn get_guild_settings(
+    State(state): State<Arc<DashboardState>>,
+    Path(guild_id): Path<u64>,
+) -> impl IntoResponse {
+    match state.persistence.guild_settings_or_default(guild_id).await {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to load guild settings: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn patch_guild_module_settings(
+    State(state): State<Arc<DashboardState>>,
+    Path((guild_id, module_id)): Path<(u64, String)>,
+    Json(patch): Json<GuildModuleSettingsPatch>,
+) -> impl IntoResponse {
+    if !module_exists(&state.module_catalog, &module_id) {
+        return (
+            StatusCode::NOT_FOUND,
+            Json(error_payload(format!("unknown module id: {module_id}"))),
+        )
+            .into_response();
+    }
+
+    let Some(repo) = state.persistence.guild_settings.clone() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_payload(
+                "guild settings repository is not configured".to_string(),
+            )),
+        )
+            .into_response();
+    };
+
+    let current_settings = match repo.get_or_create(guild_id).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            return (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(error_payload(format!(
+                    "failed to load guild settings: {error}"
+                ))),
+            )
+                .into_response();
+        }
+    };
+
+    let mut next = current_settings
+        .modules
+        .get(&module_id)
+        .cloned()
+        .unwrap_or(GuildModuleSettings::default());
+
+    if let Some(enabled) = patch.enabled {
+        next.enabled = enabled;
+    }
+    if let Some(configuration) = patch.configuration {
+        next.configuration = configuration;
+    }
+
+    match repo
+        .upsert_module_settings(guild_id, &module_id, next)
+        .await
+    {
+        Ok(settings) => Json(settings).into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to persist guild settings: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+fn module_exists(catalog: &ModuleCatalog, module_id: &str) -> bool {
+    catalog
+        .entries
+        .iter()
+        .any(|entry| entry.module.id == module_id)
+}
+
+fn error_payload(message: String) -> serde_json::Value {
+    serde_json::json!({
+        "status": "error",
+        "message": message
+    })
 }

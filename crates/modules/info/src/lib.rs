@@ -43,10 +43,15 @@ async fn about(ctx: Context<'_>) -> Result<(), Error> {
         .map(|entry| entry.module.display_name)
         .collect::<Vec<_>>()
         .join(", ");
+    let persistence = data
+        .persistence
+        .database_name
+        .as_deref()
+        .unwrap_or("disabled");
 
     ctx.say(format!(
-        "Dynamo Rust workspace foundation is running.\nLoaded modules: {}\nUptime: {}s",
-        module_names, uptime
+        "Dynamo Rust workspace foundation is running.\nLoaded modules: {}\nUptime: {}s\nPersistence: {}",
+        module_names, uptime, persistence
     ))
     .await?;
 
