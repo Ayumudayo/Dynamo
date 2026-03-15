@@ -1,10 +1,12 @@
 mod config;
+mod enablement;
 mod module;
 mod registry;
 mod repositories;
 mod settings;
 
 pub use config::{AppConfig, DiscordConfig};
+pub use enablement::{ResolvedModuleState, resolve_module_states};
 pub use module::{
     Module, ModuleCatalog, ModuleCatalogEntry, ModuleCategory, ModuleDescriptor, ModuleManifest,
     SettingOption, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,

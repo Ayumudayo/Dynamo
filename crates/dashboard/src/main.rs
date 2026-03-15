@@ -6,7 +6,10 @@ use axum::{
     response::{Html, IntoResponse},
     routing::get,
 };
-use dynamo_core::ModuleCatalog;
+use dynamo_core::{
+    DeploymentSettings, DeploymentSettingsRepository, ModuleCatalog, resolve_module_states,
+};
+use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use tracing::info;
 
 #[tokio::main]
@@ -15,14 +18,21 @@ async fn main() -> anyhow::Result<()> {
 
     let config = DashboardConfig::from_env()?;
     let registry = dynamo_app::module_registry();
+    let deployment_store = connect_deployment_store().await?;
     let state = Arc::new(DashboardState {
         module_catalog: registry.catalog().clone(),
+        deployment_store,
     });
 
     let app = Router::new()
         .route("/", get(index))
         .route("/healthz", get(healthz))
         .route("/api/modules", get(list_modules))
+        .route(
+            "/api/module-states/default",
+            get(list_default_module_states),
+        )
+        .route("/api/module-states/live", get(list_live_module_states))
         .with_state(state);
 
     let address = SocketAddr::new(config.host, config.port);
@@ -60,17 +70,28 @@ impl DashboardConfig {
 #[derive(Clone)]
 struct DashboardState {
     module_catalog: ModuleCatalog,
+    deployment_store: Option<Arc<MongoPersistence>>,
 }
 
 async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
+    let default_states =
+        resolve_module_states(&state.module_catalog, &DeploymentSettings::default(), None);
     let items = state
         .module_catalog
         .entries
         .iter()
-        .map(|entry| {
+        .zip(default_states.iter())
+        .map(|(entry, state)| {
             format!(
-                "<li><strong>{}</strong> ({})<br/>{}</li>",
-                entry.module.display_name, entry.module.id, entry.module.description
+                "<li><strong>{}</strong> ({}) - default: {}<br/>{}</li>",
+                entry.module.display_name,
+                entry.module.id,
+                if state.effective_enabled {
+                    "enabled"
+                } else {
+                    "disabled"
+                },
+                entry.module.description
             )
         })
         .collect::<Vec<_>>()
@@ -91,6 +112,36 @@ async fn list_modules(State(state): State<Arc<DashboardState>>) -> impl IntoResp
     Json(state.module_catalog.clone())
 }
 
+async fn list_default_module_states(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
+    Json(resolve_module_states(
+        &state.module_catalog,
+        &DeploymentSettings::default(),
+        None,
+    ))
+}
+
+async fn list_live_module_states(State(state): State<Arc<DashboardState>>) -> impl IntoResponse {
+    let deployment_settings = match &state.deployment_store {
+        Some(store) => match store.get().await {
+            Ok(settings) => settings,
+            Err(error) => {
+                return Json(serde_json::json!({
+                    "status": "error",
+                    "message": format!("failed to load deployment settings: {error}")
+                }))
+                .into_response();
+            }
+        },
+        None => DeploymentSettings::default(),
+    };
+
+    Json(serde_json::json!({
+        "status": "ok",
+        "states": resolve_module_states(&state.module_catalog, &deployment_settings, None)
+    }))
+    .into_response()
+}
+
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
@@ -98,4 +149,16 @@ fn init_tracing() {
                 .unwrap_or_else(|_| "dynamo_dashboard=info,dynamo_app=info".into()),
         )
         .try_init();
+}
+
+async fn connect_deployment_store() -> anyhow::Result<Option<Arc<MongoPersistence>>> {
+    let Some(config) = MongoPersistenceConfig::try_from_env()? else {
+        info!(
+            "MongoDB configuration not found; dashboard live module state endpoint will use defaults"
+        );
+        return Ok(None);
+    };
+
+    let store = MongoPersistence::connect(config).await?;
+    Ok(Some(Arc::new(store)))
 }

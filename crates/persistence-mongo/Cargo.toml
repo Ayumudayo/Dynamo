@@ -6,3 +6,8 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+dynamo-core = { path = "../core" }
+mongodb.workspace = true
+serde.workspace = true
