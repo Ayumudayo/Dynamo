@@ -111,6 +111,29 @@ cargo run -p dynamo-bot
 
 If `DISCORD_REGISTER_GLOBALLY=false`, commands are registered only in `DISCORD_DEV_GUILD_ID`.
 
+## Startup Scripts
+
+Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and start the dashboard and bot with log files and pid files under `logs/`.
+
+PowerShell:
+
+```powershell
+./scripts/dev-up.ps1
+```
+
+POSIX shell:
+
+```bash
+./scripts/dev-up.sh
+```
+
+Useful flags:
+
+- `--skip-bootstrap` / `-SkipBootstrap`
+- `--enable-giveaway` / `-EnableGiveaway`
+- `--enable-music` / `-EnableMusic`
+- `--dry-run` / `-DryRun`
+
 ## Validation Commands
 
 These are the baseline checks used during development and CI:
