@@ -16,9 +16,9 @@ use axum::{
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dynamo_core::{
     CommandCatalog, CommandCatalogEntry, DeploymentModuleSettings, DeploymentSettings,
-    GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, ModuleCategory, Persistence,
-    ResolvedCommandState, ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema,
-    resolve_command_states, resolve_module_states,
+    GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence, ResolvedCommandState,
+    ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, resolve_command_states,
+    resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -418,43 +418,21 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
         None,
     );
 
-    let sections = state
+    let module_modals = state
         .module_catalog
         .entries
         .iter()
         .zip(resolved_states.iter())
         .map(|(entry, resolved)| {
-            let current = settings
-                .modules
-                .get(entry.module.id)
-                .cloned()
-                .unwrap_or(DeploymentModuleSettings {
+            let current = settings.modules.get(entry.module.id).cloned().unwrap_or(
+                DeploymentModuleSettings {
                     installed: true,
                     enabled: entry.module.enabled_by_default,
-                });
-            let command_sections = render_deployment_command_sections(
-                &state.command_catalog,
-                &settings,
-                &resolved_command_states,
-                entry.module.id,
+                },
             );
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
-            format!(
-                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\" data-module-category=\"{module_category}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form>{command_sections}</section>",
-                section_id = module_anchor_id("deployment", entry.module.id),
-                module_name = escape_html(entry.module.display_name),
-                module_category = module_category_key(entry.module.category),
-                name = escape_html(entry.module.display_name),
-                description = escape_html(entry.module.description),
-                status = render_deployment_status(resolved),
-                status_badge = render_enabled_badge(resolved.effective_enabled),
-                runtime_notice = runtime_notice,
-                module_id = escape_html(entry.module.id),
-                installed = if current.installed { "checked" } else { "" },
-                enabled = if current.enabled { "checked" } else { "" },
-                command_sections = command_sections,
-            )
+            render_deployment_module_modal(entry, resolved, &runtime_notice, &current)
         })
         .collect::<Vec<_>>()
         .join("\n");
@@ -462,12 +440,20 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
     let module_cards = render_module_summary_cards(
         "deployment",
         &state.module_catalog,
-        &state.command_catalog,
+        &settings,
+        None,
         &resolved_states,
     );
     let command_cards = render_command_summary_cards(
         "deployment",
         &state.command_catalog,
+        &settings,
+        None,
+        &resolved_command_states,
+    );
+    let command_modals = render_deployment_command_modals(
+        &state.command_catalog,
+        &settings,
         &resolved_command_states,
     );
     let overview = render_overview_section(
@@ -489,13 +475,14 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
         ],
     );
     let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Activity</p><h2>Runtime Notes</h2></div></div>{runtime_notices}</section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div>{module_tabs}<div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Deployment Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
+        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Activity</p><h2>Runtime Notes</h2></div></div>{runtime_notices}</section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid\">{command_cards}</div></section>{module_modals}{command_modals}<script>{script}</script>",
         overview = overview,
         runtime_notices = render_runtime_notices(&state.module_catalog),
-        module_tabs = render_module_category_tabs(&state.module_catalog),
         module_cards = module_cards,
+        command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
-        sections = sections,
+        module_modals = module_modals,
+        command_modals = command_modals,
         script = dashboard_script(),
     );
 
@@ -555,7 +542,7 @@ async fn guild_page(
         Some(&settings),
     );
 
-    let sections = state
+    let module_modals = state
         .module_catalog
         .entries
         .iter()
@@ -569,36 +556,18 @@ async fn guild_page(
             let configuration_pretty = pretty_configuration(&current.configuration);
             let structured_fields =
                 render_structured_fields(entry, &current.configuration, guild_id, entry.module.id);
-            let advanced_form = render_advanced_json_form(
-                guild_id,
-                entry.module.id,
-                &configuration_pretty,
-            );
-            let command_sections = render_guild_command_sections(
-                &state.command_catalog,
-                &settings,
-                &resolved_command_states,
-                guild_id,
-                entry.module.id,
-            );
+            let advanced_form =
+                render_advanced_json_form(guild_id, entry.module.id, &configuration_pretty);
             let runtime_notice = render_module_runtime_notice(entry.module.id);
 
-            format!(
-                "<section id=\"{section_id}\" class=\"detail-panel\" data-module-name=\"{module_name}\" data-module-category=\"{module_category}\"><div class=\"detail-panel-head\"><div><p class=\"eyebrow\">Module</p><h2>{name}</h2><p>{description}</p></div><div class=\"detail-panel-status\">{status_badge}</div></div><p class=\"detail-meta\"><strong>Status:</strong> {status}</p>{runtime_notice}<form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}{command_sections}</section>",
-                section_id = module_anchor_id("guild", entry.module.id),
-                module_name = escape_html(entry.module.display_name),
-                module_category = module_category_key(entry.module.category),
-                guild_id = guild_id,
-                name = escape_html(entry.module.display_name),
-                description = escape_html(entry.module.description),
-                status = render_guild_status(resolved),
-                status_badge = render_enabled_badge(resolved.effective_enabled),
-                runtime_notice = runtime_notice,
-                module_id = escape_html(entry.module.id),
-                enabled = if current.enabled { "checked" } else { "" },
-                structured_fields = structured_fields,
-                advanced_form = advanced_form,
-                command_sections = command_sections,
+            render_guild_module_modal(
+                guild_id,
+                entry,
+                resolved,
+                &runtime_notice,
+                &current,
+                &structured_fields,
+                &advanced_form,
             )
         })
         .collect::<Vec<_>>()
@@ -607,13 +576,25 @@ async fn guild_page(
     let module_cards = render_module_summary_cards(
         "guild",
         &state.module_catalog,
-        &state.command_catalog,
+        &deployment,
+        Some(&settings),
         &resolved_states,
     );
-    let command_cards =
-        render_command_summary_cards("guild", &state.command_catalog, &resolved_command_states);
+    let command_cards = render_command_summary_cards(
+        "guild",
+        &state.command_catalog,
+        &deployment,
+        Some(&settings),
+        &resolved_command_states,
+    );
+    let command_modals = render_guild_command_modals(
+        guild_id,
+        &state.command_catalog,
+        &settings,
+        &resolved_command_states,
+    );
     let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two\"><article class=\"panel info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div>{module_tabs}<div class=\"module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><div class=\"module-grid command-grid\">{command_cards}</div></section><section id=\"module-settings\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Settings</p><h2>Guild Detail Panels</h2></div></div><div class=\"detail-stack\">{sections}</div></section><script>{script}</script>",
+        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two\"><article class=\"panel info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid\">{command_cards}</div></section>{module_modals}{command_modals}<script>{script}</script>",
         overview = render_overview_section(
             &card.name,
             "Guild-scoped module and command controls for this server.",
@@ -631,10 +612,11 @@ async fn guild_page(
         ),
         guild_id = guild_id,
         runtime_notices = render_runtime_notices(&state.module_catalog),
-        module_tabs = render_module_category_tabs(&state.module_catalog),
         module_cards = module_cards,
+        command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
-        sections = sections,
+        module_modals = module_modals,
+        command_modals = command_modals,
         script = dashboard_script(),
     );
 
@@ -1252,6 +1234,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .detail-panel-status { display: flex; align-items: center; }
 .summary-card h3, .detail-panel h2, .command-detail-card h3 { font-size: 0.98rem; line-height: 1.2; }
 .summary-card p, .detail-panel p, .command-detail-card p { font-size: 0.92rem; }
+.summary-card-subtitle { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
 .detail-panel p, .summary-card p, .info-panel p { color: var(--muted); }
 .detail-meta { margin: 8px 0 0; }
 .detail-stack { display: grid; gap: 18px; }
@@ -1268,6 +1251,17 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
   padding: 8px 12px; border-radius: 10px; font: inherit; font-weight: 700; cursor: pointer; width: auto; margin: 0;
 }
 .tab-button.active, .tab-button:hover { color: var(--text); background: rgba(221, 46, 83, 0.16); border-color: rgba(221,46,83,0.24); }
+.toggle-switch { position: relative; display: inline-flex; width: 44px; height: 24px; align-items: center; cursor: pointer; }
+.toggle-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
+.toggle-slider { width: 44px; height: 24px; border-radius: 999px; background: #2a313e; border: 1px solid rgba(255,255,255,0.06); position: relative; transition: background-color 150ms ease; }
+.toggle-slider::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #aab3c5; transition: transform 150ms ease, background-color 150ms ease; }
+.toggle-switch input:checked + .toggle-slider { background: rgba(72, 229, 178, 0.24); }
+.toggle-switch input:checked + .toggle-slider::after { transform: translateX(20px); background: var(--success); }
+.settings-modal-overlay { position: fixed; inset: 0; background: rgba(7, 9, 14, 0.74); display: grid; place-items: center; padding: 20px; z-index: 50; }
+.settings-modal { width: min(560px, 100%); max-height: min(80vh, 860px); overflow: auto; background: #11151e; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
+.settings-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 18px 12px; position: sticky; top: 0; background: #11151e; }
+.settings-modal-body { padding: 0 18px 18px; }
+.modal-close { width: auto; min-width: 40px; padding: 8px 12px; font-size: 24px; line-height: 1; background: transparent; color: var(--text); }
 form, .advanced-json-form { margin-top: 14px; }
 label, small, legend { color: var(--text); }
 small { color: var(--muted); }
@@ -1313,9 +1307,7 @@ function filterModuleCards(query) {
   const cards = document.querySelectorAll('[data-module-name]');
   for (const card of cards) {
     const moduleName = card.getAttribute('data-module-name') || '';
-    const category = window.__activeModuleCategory || 'all';
-    const categoryMatch = category === 'all' || card.getAttribute('data-module-category') === category;
-    card.style.display = moduleName.includes(value) && categoryMatch ? '' : 'none';
+    card.style.display = moduleName.includes(value) ? '' : 'none';
   }
 }
 
@@ -1324,24 +1316,20 @@ function filterCommandCards(query) {
   const cards = document.querySelectorAll('[data-command-name]');
   for (const card of cards) {
     const commandName = card.getAttribute('data-command-name') || '';
-    card.style.display = commandName.includes(value) ? '' : 'none';
+    const category = window.__activeCommandCategory || 'all';
+    const categoryMatch = category === 'all' || card.getAttribute('data-command-category') === category;
+    card.style.display = commandName.includes(value) && categoryMatch ? '' : 'none';
   }
 }
 
-function setModuleCategory(category, button) {
-  window.__activeModuleCategory = category;
-  document.querySelectorAll('.tab-button').forEach((item) => item.classList.remove('active'));
+function setCommandCategory(category, button) {
+  window.__activeCommandCategory = category;
+  document.querySelectorAll('.command-tab, .tab-button').forEach((item) => item.classList.remove('active'));
   if (button) {
     button.classList.add('active');
   }
-  const currentSearch = document.getElementById('module-filter');
-  filterModuleCards(currentSearch ? currentSearch.value : '');
-
-  const detailPanels = document.querySelectorAll('.detail-panel');
-  for (const panel of detailPanels) {
-    const panelCategory = panel.getAttribute('data-module-category');
-    panel.style.display = category === 'all' || panelCategory === category ? '' : 'none';
-  }
+  const currentSearch = document.getElementById('command-filter');
+  filterCommandCards(currentSearch ? currentSearch.value : '');
 }
 "#
 }
@@ -1454,19 +1442,224 @@ fn render_runtime_notices(catalog: &ModuleCatalog) -> String {
     }
 }
 
-fn render_module_category_tabs(catalog: &ModuleCatalog) -> String {
+fn render_deployment_module_modal(
+    entry: &ModuleCatalogEntry,
+    resolved: &ResolvedModuleState,
+    runtime_notice: &str,
+    current: &DeploymentModuleSettings,
+) -> String {
+    render_settings_modal(
+        &modal_id_for_module("deployment", entry.module.id),
+        entry.module.display_name,
+        &format!(
+            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchDeploymentModule(event, '{}')\"><label><input type=\"checkbox\" name=\"installed\" {}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{}\" style=\"margin-left:8px\"></span></form>",
+            render_deployment_status(resolved),
+            runtime_notice,
+            escape_html(entry.module.id),
+            if current.installed { "checked" } else { "" },
+            if current.enabled { "checked" } else { "" },
+            escape_html(entry.module.id)
+        ),
+    )
+}
+
+fn render_guild_module_modal(
+    guild_id: u64,
+    entry: &ModuleCatalogEntry,
+    resolved: &ResolvedModuleState,
+    runtime_notice: &str,
+    current: &GuildModuleSettings,
+    structured_fields: &str,
+    advanced_form: &str,
+) -> String {
+    render_settings_modal(
+        &modal_id_for_module("guild", entry.module.id),
+        entry.module.display_name,
+        &format!(
+            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchGuildModule(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save</button><span id=\"guild-status-{}\" style=\"margin-left:8px\"></span></form>{}",
+            render_guild_status(resolved),
+            runtime_notice,
+            guild_id,
+            escape_html(entry.module.id),
+            if current.enabled { "checked" } else { "" },
+            structured_fields,
+            escape_html(entry.module.id),
+            advanced_form,
+        ),
+    )
+}
+
+fn render_deployment_command_modals(
+    command_catalog: &CommandCatalog,
+    settings: &DeploymentSettings,
+    resolved_states: &[ResolvedCommandState],
+) -> String {
+    command_catalog
+        .entries
+        .iter()
+        .map(|entry| {
+            let current = settings
+                .commands
+                .get(&entry.command.id)
+                .cloned()
+                .unwrap_or_default();
+            let resolved = resolved_states
+                .iter()
+                .find(|state| state.command.id == entry.command.id);
+            let structured_fields = render_command_structured_fields(entry, &current.configuration);
+            let advanced_form = render_deployment_command_json_form(
+                &entry.command.id,
+                &pretty_configuration(&current.configuration),
+            );
+            render_settings_modal(
+                &modal_id_for_command("deployment", &entry.command.id),
+                &entry.command.display_name,
+                &format!(
+                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchDeploymentCommand(event, '{}')\"><label><input type=\"checkbox\" name=\"installed\" {}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{}\" style=\"margin-left:8px\"></span></form>{}",
+                    resolved
+                        .map(render_deployment_command_status)
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    escape_html(&entry.command.id),
+                    if current.installed { "checked" } else { "" },
+                    if current.enabled { "checked" } else { "" },
+                    structured_fields,
+                    status_key(&entry.command.id),
+                    advanced_form,
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_guild_command_modals(
+    guild_id: u64,
+    command_catalog: &CommandCatalog,
+    settings: &dynamo_core::GuildSettings,
+    resolved_states: &[ResolvedCommandState],
+) -> String {
+    command_catalog
+        .entries
+        .iter()
+        .map(|entry| {
+            let current = settings
+                .commands
+                .get(&entry.command.id)
+                .cloned()
+                .unwrap_or_default();
+            let resolved = resolved_states
+                .iter()
+                .find(|state| state.command.id == entry.command.id);
+            let structured_fields = render_command_structured_fields(entry, &current.configuration);
+            let advanced_form = render_guild_command_json_form(
+                guild_id,
+                &entry.command.id,
+                &pretty_configuration(&current.configuration),
+            );
+            render_settings_modal(
+                &modal_id_for_command("guild", &entry.command.id),
+                &entry.command.display_name,
+                &format!(
+                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchGuildCommand(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{}\" style=\"margin-left:8px\"></span></form>{}",
+                    resolved
+                        .map(render_guild_command_status)
+                        .unwrap_or_else(|| "unknown".to_string()),
+                    guild_id,
+                    escape_html(&entry.command.id),
+                    if current.enabled { "checked" } else { "" },
+                    structured_fields,
+                    status_key(&entry.command.id),
+                    advanced_form,
+                ),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+fn render_settings_modal(modal_id: &str, title: &str, body: &str) -> String {
+    format!(
+        "<div id=\"{modal_id}\" class=\"settings-modal-overlay\" hidden><div class=\"settings-modal\"><div class=\"settings-modal-head\"><h3>{title}</h3><button class=\"modal-close\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">×</button></div><div class=\"settings-modal-body\">{body}</div></div></div>",
+        modal_id = modal_id,
+        title = escape_html(title),
+        body = body,
+    )
+}
+
+fn render_module_toggle(
+    scope: &str,
+    module_id: &str,
+    _deployment: &DeploymentSettings,
+    guild: Option<&dynamo_core::GuildSettings>,
+    resolved: &ResolvedModuleState,
+) -> String {
+    match scope {
+        "guild" => format!(
+            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildModule({}, '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
+            if resolved.effective_enabled {
+                "checked"
+            } else {
+                ""
+            },
+            guild.map(|g| g.guild_id).unwrap_or_default(),
+            escape_html(module_id),
+        ),
+        _ => format!(
+            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleDeploymentModule('{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
+            if resolved.effective_enabled {
+                "checked"
+            } else {
+                ""
+            },
+            escape_html(module_id),
+        ),
+    }
+}
+
+fn render_command_toggle(
+    scope: &str,
+    command_id: &str,
+    _deployment: &DeploymentSettings,
+    guild: Option<&dynamo_core::GuildSettings>,
+    resolved: &ResolvedCommandState,
+) -> String {
+    match scope {
+        "guild" => format!(
+            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildCommand({}, '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
+            if resolved.effective_enabled {
+                "checked"
+            } else {
+                ""
+            },
+            guild.map(|g| g.guild_id).unwrap_or_default(),
+            escape_html(command_id),
+        ),
+        _ => format!(
+            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleDeploymentCommand('{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
+            if resolved.effective_enabled {
+                "checked"
+            } else {
+                ""
+            },
+            escape_html(command_id),
+        ),
+    }
+}
+
+fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
     let mut seen = HashSet::new();
     let mut tabs = vec![
-        "<button class=\"tab-button active\" type=\"button\" onclick=\"setModuleCategory('all', this)\">All</button>".to_string(),
+        "<button class=\"tab-button active\" type=\"button\" onclick=\"setCommandCategory('all', this)\">All</button>".to_string(),
     ];
 
     for entry in &catalog.entries {
-        let key = module_category_key(entry.module.category);
-        if seen.insert(key) {
+        let key = command_category_key(entry);
+        let label = command_category_label(entry);
+        if seen.insert(key.clone()) {
             tabs.push(format!(
-                "<button class=\"tab-button\" type=\"button\" onclick=\"setModuleCategory('{key}', this)\">{label}</button>",
-                key = key,
-                label = module_category_label(entry.module.category),
+                "<button class=\"tab-button command-tab\" type=\"button\" onclick=\"setCommandCategory('{key}', this)\">{label}</button>",
+                key = escape_html(&key),
+                label = escape_html(&label),
             ));
         }
     }
@@ -1498,7 +1691,8 @@ fn render_overview_section(title: &str, subtitle: &str, stats: &[(&str, String)]
 fn render_module_summary_cards(
     scope: &str,
     catalog: &ModuleCatalog,
-    command_catalog: &CommandCatalog,
+    deployment: &DeploymentSettings,
+    guild: Option<&dynamo_core::GuildSettings>,
     resolved_states: &[ResolvedModuleState],
 ) -> String {
     catalog
@@ -1506,16 +1700,14 @@ fn render_module_summary_cards(
         .iter()
         .zip(resolved_states.iter())
         .map(|(entry, resolved)| {
+            let toggle = render_module_toggle(scope, entry.module.id, deployment, guild, resolved);
             format!(
-                "<article class=\"panel summary-card\" data-module-name=\"{data_name}\" data-module-category=\"{category_key}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p>{description}</p><div class=\"summary-card-meta\"><span>Commands</span><code>{command_count}</code></div><div class=\"summary-card-meta\"><span>Category</span><code>{category_label}</code></div><div class=\"actions\"><a class=\"button button-secondary\" href=\"#{anchor}\">Settings</a></div></article>",
+                "<article class=\"panel summary-card module-card\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{toggle}</div><p>{description}</p><div class=\"actions\"><button class=\"button button-secondary\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button></div></article>",
                 data_name = escape_html(&entry.module.display_name.to_ascii_lowercase()),
-                category_key = module_category_key(entry.module.category),
                 name = escape_html(entry.module.display_name),
-                badge = render_enabled_badge(resolved.effective_enabled),
+                toggle = toggle,
                 description = escape_html(entry.module.description),
-                command_count = catalog_command_count_for_module(command_catalog, entry.module.id),
-                category_label = module_category_label(entry.module.category),
-                anchor = module_anchor_id(scope, entry.module.id),
+                modal_id = modal_id_for_module(scope, entry.module.id),
             )
         })
         .collect::<Vec<_>>()
@@ -1525,6 +1717,8 @@ fn render_module_summary_cards(
 fn render_command_summary_cards(
     scope: &str,
     catalog: &CommandCatalog,
+    deployment: &DeploymentSettings,
+    guild: Option<&dynamo_core::GuildSettings>,
     resolved_states: &[ResolvedCommandState],
 ) -> String {
     catalog
@@ -1532,78 +1726,55 @@ fn render_command_summary_cards(
         .iter()
         .zip(resolved_states.iter())
         .map(|(entry, resolved)| {
+            let toggle = render_command_toggle(scope, &entry.command.id, deployment, guild, resolved);
             format!(
-                "<article class=\"panel summary-card command-card\" data-command-name=\"{command_name}\"><div class=\"summary-card-head\"><h3>{display_name}</h3>{badge}</div><p>{description}</p><div class=\"summary-card-meta\"><span>Module</span><code>{module_name}</code></div><div class=\"actions\"><a class=\"button button-secondary\" href=\"#{anchor}\">Settings</a></div></article>",
+                "<article class=\"panel summary-card command-card\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3>{display_name}</h3>{toggle}</div><p>{description}</p><div class=\"summary-card-subtitle\">{category_label}</div><div class=\"actions\"><button class=\"button button-secondary\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button></div></article>",
                 command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
+                category_key = escape_html(&command_category_key(entry)),
                 display_name = escape_html(&entry.command.display_name),
-                badge = render_enabled_badge(resolved.effective_enabled),
+                toggle = toggle,
                 description = escape_html(entry.command.description.as_deref().unwrap_or("No description provided.")),
-                module_name = escape_html(entry.command.module_display_name),
-                anchor = command_anchor_id(scope, &entry.command.id),
+                category_label = escape_html(&command_category_label(entry)),
+                modal_id = modal_id_for_command(scope, &entry.command.id),
             )
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
-fn catalog_command_count_for_module(catalog: &CommandCatalog, module_id: &str) -> usize {
-    catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.command.module_id == module_id)
-        .count()
+fn command_category_key(entry: &CommandCatalogEntry) -> String {
+    entry
+        .command
+        .category
+        .clone()
+        .unwrap_or_else(|| {
+            module_category_label_from_name(entry.command.module_display_name).to_string()
+        })
+        .to_ascii_lowercase()
+        .replace(' ', "-")
 }
 
-fn render_enabled_badge(enabled: bool) -> String {
-    if enabled {
-        "<span class=\"pill pill-success\">Enabled</span>".to_string()
-    } else {
-        "<span class=\"pill pill-warn\">Disabled</span>".to_string()
+fn command_category_label(entry: &CommandCatalogEntry) -> String {
+    entry
+        .command
+        .category
+        .clone()
+        .unwrap_or_else(|| entry.command.module_display_name.to_string())
+}
+
+fn module_category_label_from_name(name: &str) -> &str {
+    match name {
+        "Game Info" => "Game Info",
+        _ => name,
     }
 }
 
-fn module_category_key(category: ModuleCategory) -> &'static str {
-    match category {
-        ModuleCategory::Core => "core",
-        ModuleCategory::Info => "info",
-        ModuleCategory::Currency => "currency",
-        ModuleCategory::Utility => "utility",
-        ModuleCategory::Moderation => "moderation",
-        ModuleCategory::Ticket => "ticket",
-        ModuleCategory::Suggestion => "suggestion",
-        ModuleCategory::Giveaway => "giveaway",
-        ModuleCategory::GameInfo => "gameinfo",
-        ModuleCategory::Stocks => "stocks",
-        ModuleCategory::Music => "music",
-        ModuleCategory::Dashboard => "dashboard",
-        ModuleCategory::Operations => "operations",
-    }
+fn modal_id_for_module(scope: &str, module_id: &str) -> String {
+    format!("modal-{}-module-{}", scope, status_key(module_id))
 }
 
-fn module_category_label(category: ModuleCategory) -> &'static str {
-    match category {
-        ModuleCategory::Core => "Core",
-        ModuleCategory::Info => "Info",
-        ModuleCategory::Currency => "Currency",
-        ModuleCategory::Utility => "Utility",
-        ModuleCategory::Moderation => "Moderation",
-        ModuleCategory::Ticket => "Ticket",
-        ModuleCategory::Suggestion => "Suggestion",
-        ModuleCategory::Giveaway => "Giveaway",
-        ModuleCategory::GameInfo => "Game Info",
-        ModuleCategory::Stocks => "Stocks",
-        ModuleCategory::Music => "Music",
-        ModuleCategory::Dashboard => "Dashboard",
-        ModuleCategory::Operations => "Operations",
-    }
-}
-
-fn module_anchor_id(scope: &str, module_id: &str) -> String {
-    format!("{scope}-module-{}", status_key(module_id))
-}
-
-fn command_anchor_id(scope: &str, command_id: &str) -> String {
-    format!("{scope}-command-{}", status_key(command_id))
+fn modal_id_for_command(scope: &str, command_id: &str) -> String {
+    format!("modal-{}-command-{}", scope, status_key(command_id))
 }
 
 fn count_enabled_modules(states: &[ResolvedModuleState]) -> usize {
@@ -1683,112 +1854,6 @@ fn render_settings_sections(
         empty_markup.to_string()
     } else {
         fields
-    }
-}
-
-fn render_deployment_command_sections(
-    command_catalog: &CommandCatalog,
-    settings: &DeploymentSettings,
-    resolved_states: &[ResolvedCommandState],
-    module_id: &str,
-) -> String {
-    let commands = command_catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.command.module_id == module_id)
-        .map(|entry| {
-            let current = settings
-                .commands
-                .get(&entry.command.id)
-                .cloned()
-                .unwrap_or_default();
-            let resolved = resolved_states
-                .iter()
-                .find(|state| state.command.id == entry.command.id);
-            let structured_fields = render_command_structured_fields(entry, &current.configuration);
-            let advanced_form = render_deployment_command_json_form(
-                &entry.command.id,
-                &pretty_configuration(&current.configuration),
-            );
-
-            format!(
-                "<article id=\"{article_id}\" class=\"command-detail-card\" data-command-name=\"{command_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentCommand(event, '{command_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
-                article_id = command_anchor_id("deployment", &entry.command.id),
-                command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
-                name = escape_html(&entry.command.display_name),
-                badge = render_enabled_badge(resolved.map(|s| s.effective_enabled).unwrap_or(false)),
-                status = resolved
-                    .map(render_deployment_command_status)
-                    .unwrap_or_else(|| "unknown".to_string()),
-                command_id = escape_html(&entry.command.id),
-                command_key = status_key(&entry.command.id),
-                installed = if current.installed { "checked" } else { "" },
-                enabled = if current.enabled { "checked" } else { "" },
-                structured_fields = structured_fields,
-                advanced_form = advanced_form,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    if commands.is_empty() {
-        String::new()
-    } else {
-        format!("<details><summary>Command Settings</summary>{commands}</details>")
-    }
-}
-
-fn render_guild_command_sections(
-    command_catalog: &CommandCatalog,
-    settings: &dynamo_core::GuildSettings,
-    resolved_states: &[ResolvedCommandState],
-    guild_id: u64,
-    module_id: &str,
-) -> String {
-    let commands = command_catalog
-        .entries
-        .iter()
-        .filter(|entry| entry.command.module_id == module_id)
-        .map(|entry| {
-            let current = settings
-                .commands
-                .get(&entry.command.id)
-                .cloned()
-                .unwrap_or_default();
-            let resolved = resolved_states
-                .iter()
-                .find(|state| state.command.id == entry.command.id);
-            let structured_fields = render_command_structured_fields(entry, &current.configuration);
-            let advanced_form = render_guild_command_json_form(
-                guild_id,
-                &entry.command.id,
-                &pretty_configuration(&current.configuration),
-            );
-
-            format!(
-                "<article id=\"{article_id}\" class=\"command-detail-card\" data-command-name=\"{command_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{badge}</div><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildCommand(event, {guild_id}, '{command_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{command_key}\" style=\"margin-left:8px\"></span></form>{advanced_form}</article>",
-                article_id = command_anchor_id("guild", &entry.command.id),
-                command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
-                name = escape_html(&entry.command.display_name),
-                badge = render_enabled_badge(resolved.map(|s| s.effective_enabled).unwrap_or(false)),
-                status = resolved
-                    .map(render_guild_command_status)
-                    .unwrap_or_else(|| "unknown".to_string()),
-                guild_id = guild_id,
-                command_id = escape_html(&entry.command.id),
-                command_key = status_key(&entry.command.id),
-                enabled = if current.enabled { "checked" } else { "" },
-                structured_fields = structured_fields,
-                advanced_form = advanced_form,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    if commands.is_empty() {
-        String::new()
-    } else {
-        format!("<details><summary>Command Settings</summary>{commands}</details>")
     }
 }
 
@@ -2475,6 +2540,33 @@ fn error_payload(message: String) -> serde_json::Value {
 
 fn dashboard_script() -> &'static str {
     r#"
+function openSettingsModal(modalId) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return false;
+  modal.hidden = false;
+  document.body.style.overflow = 'hidden';
+  return false;
+}
+
+function closeSettingsModal(modalId) {
+  const modal = document.getElementById(modalId);
+  if (!modal) return false;
+  modal.hidden = true;
+  document.body.style.overflow = '';
+  return false;
+}
+
+async function toggleDeploymentModule(moduleId, enabled) {
+  const response = await fetch(`/api/deployment-settings/${moduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    alert('Failed to update deployment module state.');
+  }
+}
+
 async function patchDeploymentModule(event, moduleId) {
   event.preventDefault();
   const form = event.target;
@@ -2489,7 +2581,21 @@ async function patchDeploymentModule(event, moduleId) {
   });
   const output = await response.json();
   document.getElementById(`deployment-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-deployment-module-${statusKey(moduleId)}`);
+  }
   return false;
+}
+
+async function toggleDeploymentCommand(commandId, enabled) {
+  const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    alert('Failed to update deployment command state.');
+  }
 }
 
 async function patchDeploymentCommand(event, commandId) {
@@ -2514,6 +2620,9 @@ async function patchDeploymentCommand(event, commandId) {
   });
   const output = await response.json();
   document.getElementById(`deployment-command-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-deployment-command-${statusKey(commandId)}`);
+  }
   return false;
 }
 
@@ -2592,7 +2701,21 @@ async function patchGuildModule(event, guildId, moduleId) {
   });
   const output = await response.json();
   document.getElementById(`guild-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-guild-module-${statusKey(moduleId)}`);
+  }
   return false;
+}
+
+async function toggleGuildModule(guildId, moduleId, enabled) {
+  const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    alert('Failed to update guild module state.');
+  }
 }
 
 async function patchGuildCommand(event, guildId, commandId) {
@@ -2616,7 +2739,21 @@ async function patchGuildCommand(event, guildId, commandId) {
   });
   const output = await response.json();
   document.getElementById(`guild-command-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-guild-command-${statusKey(commandId)}`);
+  }
   return false;
+}
+
+async function toggleGuildCommand(guildId, commandId, enabled) {
+  const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ enabled }),
+  });
+  if (!response.ok) {
+    alert('Failed to update guild command state.');
+  }
 }
 
 async function patchGuildModuleJson(event, guildId, moduleId) {
@@ -2637,6 +2774,9 @@ async function patchGuildModuleJson(event, guildId, moduleId) {
   });
   const output = await response.json();
   document.getElementById(`guild-json-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-guild-module-${statusKey(moduleId)}`);
+  }
   return false;
 }
 
@@ -2658,6 +2798,9 @@ async function patchDeploymentCommandJson(event, commandId) {
   });
   const output = await response.json();
   document.getElementById(`deployment-command-json-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-deployment-command-${statusKey(commandId)}`);
+  }
   return false;
 }
 
@@ -2679,6 +2822,9 @@ async function patchGuildCommandJson(event, guildId, commandId) {
   });
   const output = await response.json();
   document.getElementById(`guild-command-json-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  if (response.ok) {
+    closeSettingsModal(`modal-guild-command-${statusKey(commandId)}`);
+  }
   return false;
 }
 "#
