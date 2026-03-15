@@ -9,10 +9,12 @@ use axum::{
     routing::{get, patch},
 };
 use dynamo_core::{
-    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog, Persistence,
+    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog,
+    ModuleCatalogEntry, Persistence, ResolvedModuleState, SettingsField, SettingsFieldKind,
     resolve_module_states,
 };
 use serde::Deserialize;
+use serde_json::Value;
 use tracing::info;
 
 #[tokio::main]
@@ -97,17 +99,13 @@ async fn index(State(state): State<Arc<DashboardState>>) -> Html<String> {
         .entries
         .iter()
         .zip(default_states.iter())
-        .map(|(entry, state)| {
+        .map(|(entry, resolved)| {
             format!(
-                "<li><strong>{}</strong> ({}) - default: {}<br/>{}</li>",
-                entry.module.display_name,
-                entry.module.id,
-                if state.effective_enabled {
-                    "enabled"
-                } else {
-                    "disabled"
-                },
-                entry.module.description
+                "<li><strong>{}</strong> ({}) {}<br/>{}</li>",
+                escape_html(entry.module.display_name),
+                escape_html(entry.module.id),
+                render_effective_badge(resolved),
+                escape_html(entry.module.description),
             )
         })
         .collect::<Vec<_>>()
@@ -126,12 +124,14 @@ async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<Strin
         .deployment_settings_or_default()
         .await
         .unwrap_or_default();
+    let resolved_states = resolve_module_states(&state.module_catalog, &settings, None);
 
     let sections = state
         .module_catalog
         .entries
         .iter()
-        .map(|entry| {
+        .zip(resolved_states.iter())
+        .map(|(entry, resolved)| {
             let current = settings
                 .modules
                 .get(entry.module.id)
@@ -142,10 +142,11 @@ async fn deployment_page(State(state): State<Arc<DashboardState>>) -> Html<Strin
                 });
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form></section>",
-                name = entry.module.display_name,
-                description = entry.module.description,
-                module_id = entry.module.id,
+                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchDeploymentModule(event, '{module_id}')\"><label><input type=\"checkbox\" name=\"installed\" {installed}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{module_id}\" style=\"margin-left:8px\"></span></form></section>",
+                name = escape_html(entry.module.display_name),
+                description = escape_html(entry.module.description),
+                status = render_deployment_status(resolved),
+                module_id = escape_html(entry.module.id),
                 installed = if current.installed { "checked" } else { "" },
                 enabled = if current.enabled { "checked" } else { "" },
             )
@@ -164,37 +165,49 @@ async fn guild_page(
     State(state): State<Arc<DashboardState>>,
     Path(guild_id): Path<u64>,
 ) -> Html<String> {
+    let deployment = state
+        .persistence
+        .deployment_settings_or_default()
+        .await
+        .unwrap_or_default();
     let settings = state
         .persistence
         .guild_settings_or_default(guild_id)
         .await
         .unwrap_or_default();
+    let resolved_states =
+        resolve_module_states(&state.module_catalog, &deployment, Some(&settings));
 
     let sections = state
         .module_catalog
         .entries
         .iter()
-        .map(|entry| {
+        .zip(resolved_states.iter())
+        .map(|(entry, resolved)| {
             let current = settings
                 .modules
                 .get(entry.module.id)
                 .cloned()
                 .unwrap_or_default();
-            let configuration = if current.configuration.is_null() {
-                "{}".to_string()
-            } else {
-                serde_json::to_string_pretty(&current.configuration)
-                    .unwrap_or_else(|_| "{}".to_string())
-            };
+            let configuration_pretty = pretty_configuration(&current.configuration);
+            let structured_fields =
+                render_structured_fields(entry, &current.configuration, guild_id, entry.module.id);
+            let advanced_form = render_advanced_json_form(
+                guild_id,
+                entry.module.id,
+                &configuration_pretty,
+            );
 
             format!(
-                "<section><h2>{name}</h2><p>{description}</p><form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label><br/><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form></section>",
+                "<section><h2>{name}</h2><p>{description}</p><p><strong>Status:</strong> {status}</p><form onsubmit=\"return patchGuildModule(event, {guild_id}, '{module_id}')\"><label><input type=\"checkbox\" name=\"enabled\" {enabled}/> Enabled in guild</label>{structured_fields}<br/><button type=\"submit\">Save structured settings</button><span id=\"guild-status-{module_id}\" style=\"margin-left:8px\"></span></form>{advanced_form}</section>",
                 guild_id = guild_id,
-                name = entry.module.display_name,
-                description = entry.module.description,
-                module_id = entry.module.id,
+                name = escape_html(entry.module.display_name),
+                description = escape_html(entry.module.description),
+                status = render_guild_status(resolved),
+                module_id = escape_html(entry.module.id),
                 enabled = if current.enabled { "checked" } else { "" },
-                configuration = configuration,
+                structured_fields = structured_fields,
+                advanced_form = advanced_form,
             )
         })
         .collect::<Vec<_>>()
@@ -206,6 +219,197 @@ async fn guild_page(
         sections = sections,
         script = dashboard_script()
     ))
+}
+
+fn render_structured_fields(
+    entry: &ModuleCatalogEntry,
+    configuration: &Value,
+    guild_id: u64,
+    module_id: &str,
+) -> String {
+    let fields = entry
+        .settings
+        .sections
+        .iter()
+        .map(|section| {
+            let rendered_fields = section
+                .fields
+                .iter()
+                .map(|field| render_field(field, configuration))
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            format!(
+                "<fieldset><legend>{}</legend><p>{}</p>{}</fieldset>",
+                escape_html(section.title),
+                escape_html(section.description.unwrap_or("")),
+                rendered_fields
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    if fields.is_empty() {
+        format!(
+            "<p>No structured settings for this module. Use the advanced JSON editor below.</p><input type=\"hidden\" data-setting-key=\"__empty\" data-setting-kind=\"text\" value=\"\" form=\"structured-{guild_id}-{module_id}\" />"
+        )
+    } else {
+        fields
+    }
+}
+
+fn render_field(field: &SettingsField, configuration: &Value) -> String {
+    let help_text = field
+        .help_text
+        .map(escape_html)
+        .map(|text| format!("<small>{text}</small><br/>"))
+        .unwrap_or_default();
+    let required = if field.required { "required" } else { "" };
+
+    match &field.kind {
+        SettingsFieldKind::Toggle => {
+            let checked = field_bool_value(configuration, field.key).unwrap_or(false);
+            format!(
+                "<label><input type=\"checkbox\" data-setting-key=\"{key}\" data-setting-kind=\"toggle\" {checked}/> {label}</label><br/>{help_text}",
+                key = escape_html(field.key),
+                label = escape_html(field.label),
+                checked = if checked { "checked" } else { "" },
+                help_text = help_text,
+            )
+        }
+        SettingsFieldKind::Integer => {
+            let value = field_string_value(configuration, field.key);
+            format!(
+                "<label>{label}</label><br/>{help_text}<input type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\" {required}/>",
+                label = escape_html(field.label),
+                help_text = help_text,
+                key = escape_html(field.key),
+                value = escape_html(&value.unwrap_or_default()),
+                required = required,
+            )
+        }
+        SettingsFieldKind::Text => {
+            let value = field_string_value(configuration, field.key).unwrap_or_default();
+            if value.len() > 40 || value.starts_with('[') || value.starts_with('{') {
+                format!(
+                    "<label>{label}</label><br/>{help_text}<textarea data-setting-key=\"{key}\" data-setting-kind=\"text\" rows=\"4\" cols=\"80\" {required}>{value}</textarea>",
+                    label = escape_html(field.label),
+                    help_text = help_text,
+                    key = escape_html(field.key),
+                    required = required,
+                    value = escape_html(&value),
+                )
+            } else {
+                format!(
+                    "<label>{label}</label><br/>{help_text}<input type=\"text\" data-setting-key=\"{key}\" data-setting-kind=\"text\" value=\"{value}\" {required}/>",
+                    label = escape_html(field.label),
+                    help_text = help_text,
+                    key = escape_html(field.key),
+                    value = escape_html(&value),
+                    required = required,
+                )
+            }
+        }
+        SettingsFieldKind::Select { options } => {
+            let current = field_string_value(configuration, field.key).unwrap_or_default();
+            let options = options
+                .iter()
+                .map(|option| {
+                    format!(
+                        "<option value=\"{value}\" {selected}>{label}</option>",
+                        value = escape_html(option.value),
+                        selected = if current == option.value {
+                            "selected"
+                        } else {
+                            ""
+                        },
+                        label = escape_html(option.label),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+
+            format!(
+                "<label>{label}</label><br/>{help_text}<select data-setting-key=\"{key}\" data-setting-kind=\"select\" {required}>{options}</select>",
+                label = escape_html(field.label),
+                help_text = help_text,
+                key = escape_html(field.key),
+                required = required,
+                options = options,
+            )
+        }
+    }
+}
+
+fn render_advanced_json_form(guild_id: u64, module_id: &str, configuration_pretty: &str) -> String {
+    format!(
+        "<details><summary>Advanced JSON</summary><form onsubmit=\"return patchGuildModuleJson(event, {guild_id}, '{module_id}')\"><label>Configuration JSON</label><br/><textarea name=\"configuration\" rows=\"8\" cols=\"80\">{configuration}</textarea><br/><button type=\"submit\">Save JSON</button><span id=\"guild-json-status-{module_id}\" style=\"margin-left:8px\"></span></form></details>",
+        guild_id = guild_id,
+        module_id = escape_html(module_id),
+        configuration = escape_html(configuration_pretty),
+    )
+}
+
+fn render_effective_badge(state: &ResolvedModuleState) -> String {
+    if state.effective_enabled {
+        "<span style=\"color:#0a7f40\">enabled</span>".to_string()
+    } else {
+        "<span style=\"color:#a40000\">disabled</span>".to_string()
+    }
+}
+
+fn render_deployment_status(state: &ResolvedModuleState) -> String {
+    format!(
+        "installed: {} | deployment: {} | effective: {}",
+        yes_no(state.installed),
+        yes_no(state.deployment_enabled),
+        yes_no(state.effective_enabled),
+    )
+}
+
+fn render_guild_status(state: &ResolvedModuleState) -> String {
+    format!(
+        "installed: {} | deployment: {} | guild: {} | effective: {}",
+        yes_no(state.installed),
+        yes_no(state.deployment_enabled),
+        yes_no(state.guild_enabled),
+        yes_no(state.effective_enabled),
+    )
+}
+
+fn yes_no(value: bool) -> &'static str {
+    if value { "yes" } else { "no" }
+}
+
+fn field_bool_value(configuration: &Value, key: &str) -> Option<bool> {
+    configuration.get(key).and_then(Value::as_bool)
+}
+
+fn field_string_value(configuration: &Value, key: &str) -> Option<String> {
+    let value = configuration.get(key)?;
+    match value {
+        Value::Null => None,
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        Value::Array(_) | Value::Object(_) => serde_json::to_string_pretty(value).ok(),
+    }
+}
+
+fn pretty_configuration(configuration: &Value) -> String {
+    if configuration.is_null() {
+        "{}".to_string()
+    } else {
+        serde_json::to_string_pretty(configuration).unwrap_or_else(|_| "{}".to_string())
+    }
+}
+
+fn escape_html(input: &str) -> String {
+    input
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
 }
 
 async fn healthz() -> impl IntoResponse {
@@ -454,14 +658,50 @@ async function patchDeploymentModule(event, moduleId) {
   return false;
 }
 
+function collectConfiguration(form) {
+  const config = {};
+  const fields = form.querySelectorAll('[data-setting-key]');
+  for (const field of fields) {
+    const key = field.dataset.settingKey;
+    if (!key || key === '__empty') continue;
+
+    const kind = field.dataset.settingKind;
+    if (kind === 'toggle') {
+      config[key] = !!field.checked;
+      continue;
+    }
+
+    const raw = (field.value ?? '').trim();
+    if (raw === '') continue;
+
+    if (kind === 'integer') {
+      const parsed = Number.parseInt(raw, 10);
+      if (Number.isNaN(parsed)) {
+        throw new Error(`Invalid integer for ${key}`);
+      }
+      config[key] = parsed;
+      continue;
+    }
+
+    if ((raw.startsWith('[') && raw.endsWith(']')) || (raw.startsWith('{') && raw.endsWith('}'))) {
+      config[key] = JSON.parse(raw);
+      continue;
+    }
+
+    config[key] = raw;
+  }
+
+  return config;
+}
+
 async function patchGuildModule(event, guildId, moduleId) {
   event.preventDefault();
   const form = event.target;
   let configuration;
   try {
-    configuration = JSON.parse(form.configuration.value || '{}');
+    configuration = collectConfiguration(form);
   } catch (error) {
-    document.getElementById(`guild-status-${moduleId}`).textContent = `Error: invalid JSON`;
+    document.getElementById(`guild-status-${moduleId}`).textContent = `Error: ${error.message}`;
     return false;
   }
 
@@ -478,5 +718,64 @@ async function patchGuildModule(event, guildId, moduleId) {
   document.getElementById(`guild-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
   return false;
 }
+
+async function patchGuildModuleJson(event, guildId, moduleId) {
+  event.preventDefault();
+  const form = event.target;
+  let configuration;
+  try {
+    configuration = JSON.parse(form.configuration.value || '{}');
+  } catch (error) {
+    document.getElementById(`guild-json-status-${moduleId}`).textContent = 'Error: invalid JSON';
+    return false;
+  }
+
+  const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ configuration }),
+  });
+  const output = await response.json();
+  document.getElementById(`guild-json-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  return false;
+}
 "#
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{escape_html, render_advanced_json_form, render_field};
+    use dynamo_core::{SettingsField, SettingsFieldKind};
+
+    #[test]
+    fn escapes_html_characters() {
+        assert_eq!(
+            escape_html("<script>alert(\"x\")</script>"),
+            "&lt;script&gt;alert(&quot;x&quot;)&lt;/script&gt;"
+        );
+    }
+
+    #[test]
+    fn renders_text_field_with_schema_attributes() {
+        let field = SettingsField {
+            key: "channel_id",
+            label: "Channel ID",
+            help_text: Some("Target channel"),
+            required: false,
+            kind: SettingsFieldKind::Text,
+        };
+
+        let rendered = render_field(&field, &serde_json::json!({ "channel_id": "123" }));
+        assert!(rendered.contains("data-setting-key=\"channel_id\""));
+        assert!(rendered.contains("data-setting-kind=\"text\""));
+        assert!(rendered.contains("value=\"123\""));
+    }
+
+    #[test]
+    fn advanced_json_form_includes_textarea_and_submit() {
+        let rendered = render_advanced_json_form(1, "stock", "{\n  \"foo\": \"bar\"\n}");
+        assert!(rendered.contains("textarea"));
+        assert!(rendered.contains("patchGuildModuleJson"));
+        assert!(rendered.contains("guild-json-status-stock"));
+    }
 }
