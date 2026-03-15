@@ -212,6 +212,7 @@ struct DiscordApplicationInfo {
 struct DashboardSession {
     user: DashboardUser,
     guilds: Vec<DashboardGuild>,
+    access_token: String,
     expires_at: chrono::DateTime<chrono::Utc>,
 }
 
@@ -664,6 +665,11 @@ async fn load_session(state: &DashboardState, jar: &CookieJar) -> Option<Dashboa
     sessions.get(&session_id).cloned()
 }
 
+fn session_cookie_value(jar: &CookieJar) -> Option<String> {
+    jar.get(SESSION_COOKIE_NAME)
+        .map(|cookie| cookie.value().to_string())
+}
+
 fn is_session_expired(session: &DashboardSession) -> bool {
     session.expires_at <= chrono::Utc::now()
 }
@@ -763,6 +769,7 @@ async fn exchange_oauth_code(
             avatar: user.avatar,
         },
         guilds,
+        access_token: token_payload.access_token,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(SESSION_TTL_HOURS),
     })
 }
@@ -797,6 +804,38 @@ fn session_can_manage_guild(session: &DashboardSession, guild_id: u64) -> bool {
         .guilds
         .iter()
         .any(|guild| guild.id == guild_id && user_can_manage_guild(guild))
+}
+
+async fn refresh_session_guilds(
+    state: &DashboardState,
+    session_id: &str,
+) -> Result<Option<DashboardSession>, anyhow::Error> {
+    let access_token = {
+        let sessions = state.sessions.read().await;
+        sessions
+            .get(session_id)
+            .map(|session| session.access_token.clone())
+    };
+    let Some(access_token) = access_token else {
+        return Ok(None);
+    };
+
+    let bearer = format!("Bearer {}", access_token);
+    let guilds_response = state
+        .http
+        .get(format!("{DISCORD_API_BASE}/users/@me/guilds"))
+        .header(reqwest::header::AUTHORIZATION, &bearer)
+        .send()
+        .await?
+        .error_for_status()?;
+    let guilds: Vec<DashboardGuild> = guilds_response.json().await?;
+
+    let mut sessions = state.sessions.write().await;
+    let Some(session) = sessions.get_mut(session_id) else {
+        return Ok(None);
+    };
+    session.guilds = guilds;
+    Ok(Some(session.clone()))
 }
 
 fn user_can_manage_guild(guild: &DashboardGuild) -> bool {
@@ -2116,6 +2155,30 @@ async fn require_api_guild_access(
     if session_can_manage_guild(&session, guild_id) {
         Ok(session)
     } else {
+        if let Some(session_id) = session_cookie_value(jar) {
+            match refresh_session_guilds(state, &session_id).await {
+                Ok(Some(refreshed)) if session_can_manage_guild(&refreshed, guild_id) => {
+                    return Ok(refreshed);
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    warn!(
+                        user_id = session.user.id,
+                        guild_id,
+                        ?error,
+                        "failed to refresh dashboard guild access state"
+                    );
+                }
+            }
+        }
+
+        warn!(
+            user_id = session.user.id,
+            guild_id,
+            shared_guild_ids = ?session.guilds.iter().map(|guild| guild.id).collect::<Vec<_>>(),
+            "dashboard denied guild access"
+        );
+
         Err((
             StatusCode::FORBIDDEN,
             Json(error_payload(
