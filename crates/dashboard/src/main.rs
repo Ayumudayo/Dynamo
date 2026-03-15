@@ -792,6 +792,13 @@ async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) ->
     .await
 }
 
+fn session_can_manage_guild(session: &DashboardSession, guild_id: u64) -> bool {
+    session
+        .guilds
+        .iter()
+        .any(|guild| guild.id == guild_id && user_can_manage_guild(guild))
+}
+
 fn user_can_manage_guild(guild: &DashboardGuild) -> bool {
     let Ok(bits) = guild.permissions.parse::<u64>() else {
         return false;
@@ -2106,11 +2113,7 @@ async fn require_api_guild_access(
     guild_id: u64,
 ) -> Result<DashboardSession, Response> {
     let session = require_api_session(state, jar).await?;
-    let guild_cards = load_guild_cards(state, &session).await;
-    if guild_cards
-        .iter()
-        .any(|card| card.id == guild_id && card.manageable && card.bot_present)
-    {
+    if session_can_manage_guild(&session, guild_id) {
         Ok(session)
     } else {
         Err((
