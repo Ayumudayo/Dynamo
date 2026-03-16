@@ -115,6 +115,18 @@ fn collect_command_entries(
     if command.subcommands.is_empty() {
         let qualified_name = parent_segments.join(" ");
         let command_id = parent_segments.join("::");
+        let description = command
+            .description
+            .as_ref()
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty())
+            .map(|value| value.to_string())
+            .unwrap_or_else(|| {
+                format!(
+                    "Command /{} in the {} module.",
+                    qualified_name, manifest.display_name
+                )
+            });
         entries.push(CommandCatalogEntry {
             command: CommandDescriptor {
                 id: command_id.clone(),
@@ -124,7 +136,7 @@ fn collect_command_entries(
                 display_name: format!("/{}", qualified_name),
                 qualified_name: qualified_name.clone(),
                 category: command.category.clone(),
-                description: command.description.clone(),
+                description: Some(description),
             },
             settings: module.command_settings_schema(&command_id),
         });

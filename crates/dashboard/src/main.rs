@@ -1284,20 +1284,27 @@ fn render_nav(
     active_path: Option<&str>,
 ) -> String {
     let default_dashboard = if session.is_some() { "/selector" } else { "/" };
+    let show_section_nav = active_path
+        .map(|path| path == "/deployment" || path.starts_with("/guild/"))
+        .unwrap_or(false);
     let mut items = vec![nav_link(
         "Dashboard",
         default_dashboard,
         active_path == Some("/") || active_path == Some("/selector"),
     )];
     if session.is_some() {
-        items.push(nav_link("Modules", "#modules", false));
-        items.push(nav_link("Commands", "#commands", false));
+        if show_section_nav {
+            items.push(nav_link("Modules", "#modules", false));
+            items.push(nav_link("Commands", "#commands", false));
+        }
         items.push(nav_link(
             "Server Listing",
             "/selector",
             active_path == Some("/selector"),
         ));
-        items.push(nav_link("Logs", "#activity", false));
+        if show_section_nav {
+            items.push(nav_link("Logs", "#activity", false));
+        }
         if session
             .map(|session| user_is_dashboard_admin(state, &session.user))
             .unwrap_or(false)
