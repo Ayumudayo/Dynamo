@@ -26,7 +26,7 @@ use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tracing::warn;
+use tracing::{info, warn};
 use url::Url;
 
 const MUSIC_RUNTIME_NOTICE: &str = "Regular voice channels currently require Discord DAVE/E2EE support. This stable build does not support DAVE yet, so music commands only work for stage-channel smoke tests.";
@@ -42,6 +42,12 @@ async fn main() -> anyhow::Result<()> {
     init_tracing();
 
     let config = DashboardConfig::from_env()?;
+    info!(
+        host = %config.host,
+        port = config.port,
+        public_base_url = %config.public_base_url,
+        "Dashboard startup preflight: loading registry, persistence, and Discord application metadata"
+    );
     let registry = dynamo_app::module_registry();
     let module_catalog = registry.catalog().clone();
     let command_catalog = registry.command_catalog().clone();
@@ -2286,6 +2292,7 @@ async fn list_live_module_states(
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stdout)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "dynamo_dashboard=info,dynamo_app=info".into()),

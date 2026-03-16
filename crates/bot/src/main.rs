@@ -118,6 +118,7 @@ async fn main() -> Result<(), Error> {
 
 fn init_tracing() {
     let _ = tracing_subscriber::fmt()
+        .with_writer(std::io::stdout)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| "dynamo_bot=info,dynamo_core=info,poise=info".into()),

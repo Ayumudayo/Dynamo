@@ -248,6 +248,7 @@ function Start-RustProcess {
   if ($Headless) {
     $Commands += "& '$BinaryPath'"
   } else {
+    $Commands += "Write-Host '[launcher] starting $Name from $BinaryPath'"
     $Commands += "& '$BinaryPath' 2>&1 | Tee-Object -FilePath '$ConsoleLogPath'"
   }
   $Command = Join-CommandParts -Parts $Commands

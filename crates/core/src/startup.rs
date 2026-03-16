@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, env, fmt};
 
 use crate::{
     CommandCatalog, DeploymentSettings, GatewayIntents, GuildSettings, ModuleCatalog,
@@ -89,11 +89,14 @@ impl StartupReport {
 
     pub fn render(&self) -> String {
         let mut lines = vec![
-            format!(
-                "[startup:{}] overall={} phases={}",
-                self.process,
-                self.overall_status(),
-                self.phases.len()
+            colorize(
+                &format!(
+                    "[startup:{}] overall={} phases={}",
+                    self.process,
+                    self.overall_status(),
+                    self.phases.len()
+                ),
+                Style::Header,
             ),
             render_table(
                 &["phase", "stat", "summary"],
@@ -103,7 +106,7 @@ impl StartupReport {
                     .map(|phase| {
                         vec![
                             phase.name.to_string(),
-                            phase.status.to_string(),
+                            phase.status.as_str().to_string(),
                             phase.summary.clone(),
                         ]
                     })
@@ -118,16 +121,11 @@ impl StartupReport {
             }
 
             lines.push(String::new());
-            lines.push(format!("[{} details]", phase.name));
-            lines.push(render_table(
-                &["key", "value"],
-                &phase
-                    .details
-                    .iter()
-                    .map(|(key, value)| vec![key.clone(), value.clone()])
-                    .collect::<Vec<_>>(),
-                &[24, 80],
+            lines.push(colorize(
+                &format!("[{} details]", phase.name),
+                Style::Section,
             ));
+            lines.push(render_detail_block(&phase.details));
         }
 
         lines.join("\n")
@@ -250,7 +248,7 @@ fn render_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[usize]) ->
 
     for row in rows {
         for (index, cell) in row.iter().enumerate().take(column_count) {
-            widths[index] = widths[index].max(cell.chars().count());
+            widths[index] = widths[index].max(visible_width(cell));
         }
     }
 
@@ -282,6 +280,34 @@ fn render_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[usize]) ->
         lines.extend(render_wrapped_rows(row, &widths));
     }
     lines.push(border);
+    lines.join("\n")
+}
+
+fn render_detail_block(details: &[(String, String)]) -> String {
+    let key_width = details
+        .iter()
+        .map(|(key, _)| key.chars().count())
+        .max()
+        .unwrap_or(0)
+        .clamp(12, 28);
+    let value_width = 92usize.saturating_sub(key_width);
+    let mut lines = Vec::new();
+
+    for (key, value) in details {
+        let wrapped = wrap_cell(value, value_width.max(24));
+        for (index, line) in wrapped.into_iter().enumerate() {
+            if index == 0 {
+                lines.push(format!(
+                    "  {}  {}",
+                    colorize(&format!("{:width$}", key, width = key_width), Style::Key),
+                    line
+                ));
+            } else {
+                lines.push(format!("  {:width$}  {}", "", line, width = key_width));
+            }
+        }
+    }
+
     lines.join("\n")
 }
 
@@ -320,7 +346,7 @@ fn render_table_row(columns: &[String], widths: &[usize]) -> String {
     let cells = columns
         .iter()
         .zip(widths.iter())
-        .map(|(column, width)| format!(" {:width$} ", column, width = *width))
+        .map(|(column, width)| format!(" {} ", pad_visible(column, *width)))
         .collect::<Vec<_>>()
         .join("|");
     format!("|{}|", cells)
@@ -391,6 +417,65 @@ fn hard_wrap(value: &str, width: usize) -> Vec<String> {
     } else {
         lines
     }
+}
+
+#[derive(Clone, Copy)]
+enum Style {
+    Header,
+    Section,
+    Key,
+}
+
+fn colorize(value: &str, style: Style) -> String {
+    if !colors_enabled() {
+        return value.to_string();
+    }
+
+    let code = match style {
+        Style::Header => "\x1b[1;36m",
+        Style::Section => "\x1b[1;34m",
+        Style::Key => "\x1b[2;37m",
+    };
+
+    format!("{code}{value}\x1b[0m")
+}
+
+fn colors_enabled() -> bool {
+    env::var_os("NO_COLOR").is_none()
+}
+
+fn visible_width(value: &str) -> usize {
+    strip_ansi(value).chars().count()
+}
+
+fn pad_visible(value: &str, width: usize) -> String {
+    let visible = visible_width(value);
+    if visible >= width {
+        return value.to_string();
+    }
+
+    format!("{value}{}", " ".repeat(width - visible))
+}
+
+fn strip_ansi(value: &str) -> String {
+    let mut result = String::with_capacity(value.len());
+    let mut chars = value.chars().peekable();
+
+    while let Some(ch) = chars.next() {
+        if ch == '\u{1b}' && chars.peek() == Some(&'[') {
+            chars.next();
+            for inner in chars.by_ref() {
+                if inner == 'm' {
+                    break;
+                }
+            }
+            continue;
+        }
+
+        result.push(ch);
+    }
+
+    result
 }
 
 pub fn format_gateway_intents(intents: GatewayIntents) -> String {

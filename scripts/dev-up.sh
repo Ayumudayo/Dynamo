@@ -218,6 +218,7 @@ start_process() {
     if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
       export DYNAMO_ENABLE_GIVEAWAY=true
     fi
+    echo "[launcher] starting $name from $binary"
     nohup "$binary" >"$stdout_path" 2>"$stderr_path" &
     echo $! >"$pid_path"
     echo "$name started (pid=$(cat "$pid_path"))"
