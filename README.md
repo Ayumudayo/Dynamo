@@ -180,8 +180,6 @@ The companion dashboard exposes:
 - deployment-level module install/enable toggles
 - guild-level module enablement and structured settings forms
 - deployment-level and guild-level command toggles for individual leaf slash commands
-- advanced JSON editor fallback for module configuration
-- advanced JSON editor fallback for command configuration
 - effective module state rendering shared with the runtime guard layer
 - runtime notices for modules with known platform limitations, such as the current DAVE restriction on `music`
 
@@ -204,6 +202,15 @@ OAuth notes:
 - The dashboard signs users in with `identify` and `guilds` scopes.
 - Guild pages are available only for servers where the signed-in user has `Manage Server` or `Administrator`.
 - The deployment page is restricted to the bot application owner or `DASHBOARD_ADMIN_USER_IDS`.
+
+Playwright smoke:
+
+- Install Chromium once: `npm run dashboard:smoke:install`
+- Create a reusable authenticated storage state after manual login:
+  - `npm run dashboard:smoke:auth`
+- Then run the smoke suite with:
+  - `PLAYWRIGHT_GUILD_ID=<guild_id> PLAYWRIGHT_STORAGE_STATE=output/playwright/dashboard-auth.json npm run dashboard:smoke`
+- Override the dashboard host if needed with `PLAYWRIGHT_BASE_URL`
 
 ## Smoke Checklist
 

@@ -774,7 +774,7 @@ async fn guild_page(
         &resolved_command_states,
     );
     let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two\"><article class=\"panel info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid\">{command_cards}</div></section>{module_modals}{command_modals}<script>{script}</script>",
+        "{overview}<section id=\"activity\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>{module_modals}{command_modals}<script>{script}</script>",
         overview = render_overview_section(
             &card.name,
             "Guild-scoped module and command controls for this server.",
@@ -1254,7 +1254,7 @@ fn render_document(
     });
 
     format!(
-        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{title}</title><style>{styles}</style></head><body><div class=\"backdrop\"></div><div class=\"app-shell\"><aside class=\"sidebar\"><div class=\"sidebar-brand\">{brand_media}<div><p class=\"eyebrow\">Dynamo</p><h1>{app_name}</h1></div></div><nav class=\"sidebar-nav\">{nav}</nav><div class=\"sidebar-footer\"><span class=\"sidebar-footnote\">Rust dashboard control plane</span></div></aside><main class=\"content-shell\"><header class=\"content-topbar\"><div class=\"content-topbar-copy\"><p class=\"eyebrow\">Control Plane</p><h2>{page_title}</h2><p class=\"lede\">{subtitle}</p></div><div class=\"content-topbar-right\"><div class=\"stat-strip\"><div class=\"stat\"><span>Modules</span><strong>{module_count}</strong></div><div class=\"stat\"><span>Commands</span><strong>{command_count}</strong></div></div><div class=\"session-box\">{session_summary}</div></div></header><section class=\"content-body\">{content}</section></main></div><script>{ui_script}</script></body></html>",
+        "<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\" /><title>{title}</title><style>{styles}</style></head><body><div class=\"backdrop\"></div><div class=\"app-shell\" data-testid=\"dashboard-shell\"><aside class=\"sidebar\"><div class=\"sidebar-brand\">{brand_media}<div><p class=\"eyebrow\">Dynamo</p><h1>{app_name}</h1></div></div><nav class=\"sidebar-nav\">{nav}</nav><div class=\"sidebar-footer\"><span class=\"sidebar-footnote\">Rust dashboard control plane</span></div></aside><main class=\"content-shell\"><header class=\"content-topbar\"><div class=\"content-topbar-copy\"><p class=\"eyebrow\">Control Plane</p><h2>{page_title}</h2><p class=\"lede\">{subtitle}</p></div><div class=\"content-topbar-right\"><div class=\"stat-strip\"><div class=\"stat\"><span>Modules</span><strong>{module_count}</strong></div><div class=\"stat\"><span>Commands</span><strong>{command_count}</strong></div></div><div class=\"session-box\">{session_summary}</div></div></header><section class=\"content-body\" data-testid=\"content-body\">{content}</section></main></div><script>{ui_script}</script></body></html>",
         title = escape_html(title),
         styles = dashboard_styles(),
         ui_script = dashboard_ui_script(),
@@ -1438,10 +1438,10 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .button-primary { background: var(--accent); color: #fff6fa; }
 .button-primary:hover { background: var(--accent-strong); }
 .button-secondary { background: var(--panel-strong); color: var(--text); border-color: rgba(255,255,255,0.06); }
-.grid { display: grid; gap: 20px; }
-.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 24px; }
+.grid { display: grid; gap: 14px; }
+.grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
 .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-.panel, section, article, details { padding: 16px; border-radius: 14px; margin-bottom: 16px; }
+.panel, section, article, details { padding: 14px; border-radius: 14px; margin-bottom: 14px; }
 .guild-card p, .panel p { color: var(--muted); line-height: 1.6; }
 .pill {
   display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px;
@@ -1449,17 +1449,22 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 }
 .pill-success { color: #bbf7d0; background: rgba(72, 229, 178, 0.14); }
 .pill-warn { color: #fdba74; background: rgba(249, 115, 22, 0.12); }
-.toolbar-panel, .section-block { margin-bottom: 18px; }
-.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.toolbar-panel, .section-block { margin-bottom: 16px; }
+.toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .toolbar-search { max-width: 320px; margin: 0; }
-.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; }
-.module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.compact-search { max-width: 240px; height: 40px; padding: 10px 12px; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.compact-heading { margin-bottom: 12px; }
+.module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.compact-module-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .command-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.compact-command-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .summary-card-head, .detail-panel-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .detail-panel-status { display: flex; align-items: center; }
-.summary-card h3, .detail-panel h2, .command-detail-card h3 { font-size: 0.98rem; line-height: 1.2; }
-.summary-card p, .detail-panel p, .command-detail-card p { font-size: 0.92rem; }
-.summary-card-subtitle { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 4px; }
+.summary-card { min-height: 156px; display: flex; flex-direction: column; justify-content: space-between; }
+.summary-card h3, .detail-panel h2, .command-detail-card h3 { font-size: 0.95rem; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+.summary-card p, .detail-panel p, .command-detail-card p { font-size: 0.88rem; margin: 8px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.summary-card-subtitle { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 8px; }
 .detail-panel p, .summary-card p, .info-panel p { color: var(--muted); }
 .detail-meta { margin: 8px 0 0; }
 .detail-stack { display: grid; gap: 18px; }
@@ -1470,10 +1475,10 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .guild-card-meta code { color: var(--text); background: rgba(255,255,255,0.04); padding: 4px 8px; border-radius: 8px; }
 .empty-state { min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
 .card-action { margin-top: 10px; }
-.tab-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 14px; }
+.tab-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
 .tab-button {
   appearance: none; border: 1px solid rgba(255,255,255,0.06); background: var(--panel-strong); color: var(--muted);
-  padding: 8px 12px; border-radius: 10px; font: inherit; font-weight: 700; cursor: pointer; width: auto; margin: 0;
+  padding: 7px 11px; border-radius: 10px; font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; width: auto; margin: 0; min-height: 38px;
 }
 .tab-button.active, .tab-button:hover { color: var(--text); background: rgba(221, 46, 83, 0.16); border-color: rgba(221,46,83,0.24); }
 .toggle-switch { position: relative; display: inline-flex; width: 44px; height: 24px; align-items: center; cursor: pointer; }
@@ -1482,23 +1487,43 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .toggle-slider::after { content: ''; position: absolute; top: 2px; left: 2px; width: 18px; height: 18px; border-radius: 50%; background: #aab3c5; transition: transform 150ms ease, background-color 150ms ease; }
 .toggle-switch input:checked + .toggle-slider { background: rgba(72, 229, 178, 0.24); }
 .toggle-switch input:checked + .toggle-slider::after { transform: translateX(20px); background: var(--success); }
-.settings-modal-overlay { position: fixed; inset: 0; background: rgba(7, 9, 14, 0.74); display: grid; place-items: center; padding: 20px; z-index: 50; }
+.settings-modal-overlay { position: fixed; inset: 0; background: rgba(7, 9, 14, 0.78); display: grid; place-items: center; padding: 18px; z-index: 50; }
 .settings-modal-overlay[hidden] { display: none !important; }
-.settings-modal { width: min(560px, 100%); max-height: min(80vh, 860px); overflow: auto; background: #11151e; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
-.settings-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 18px 18px 12px; position: sticky; top: 0; background: #11151e; }
-.settings-modal-body { padding: 0 18px 18px; }
+.settings-modal { width: min(640px, 100%); max-height: min(82vh, 860px); overflow: auto; background: #11151e; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
+.settings-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px 10px; position: sticky; top: 0; background: #11151e; z-index: 2; }
+.settings-modal-body { padding: 0 16px 16px; }
 .modal-close { width: auto; min-width: 40px; padding: 8px 12px; font-size: 24px; line-height: 1; background: transparent; color: var(--text); }
-form, .advanced-json-form { margin-top: 14px; }
+form, .advanced-json-form { margin-top: 12px; }
 label, small, legend { color: var(--text); }
-small { color: var(--muted); }
+small, .section-help { color: var(--muted); font-size: 12px; line-height: 1.5; }
 input, textarea, select, button {
-  width: 100%; margin-top: 8px; margin-bottom: 12px; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06);
-  background: #262b36; color: var(--text); padding: 12px 14px; font: inherit;
+  width: 100%; margin-top: 6px; margin-bottom: 0; border-radius: 10px; border: 1px solid rgba(255,255,255,0.06);
+  background: #262b36; color: var(--text); padding: 10px 12px; font: inherit;
 }
 input[type='checkbox'] { width: auto; margin-right: 8px; }
 button { width: auto; cursor: pointer; background: var(--accent-soft); color: #ffd5df; }
 button:hover { background: rgba(221, 46, 83, 0.24); }
-fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 16px; margin-top: 16px; }
+fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 12px; margin-top: 12px; }
+.settings-section > p { margin: 4px 0 0; }
+.settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
+.settings-grid-basic { margin-bottom: 12px; }
+.settings-field { display: grid; gap: 6px; align-content: start; }
+.settings-field-span-2 { grid-column: 1 / -1; }
+.settings-field-textarea textarea { min-height: 112px; resize: vertical; }
+.toggle-field { display: flex; justify-content: space-between; align-items: start; gap: 12px; cursor: pointer; }
+.toggle-field input { margin-top: 2px; }
+.toggle-field-copy { display: grid; gap: 4px; }
+.toggle-field-copy strong { font-size: 0.92rem; }
+.modal-status-row { display: grid; gap: 8px; margin-top: 4px; }
+.modal-actions { position: sticky; bottom: 0; display: flex; align-items: center; justify-content: flex-end; gap: 10px; margin-top: 14px; padding-top: 12px; background: linear-gradient(180deg, rgba(17,21,30,0), #11151e 24px); }
+.modal-status { margin-right: auto; font-size: 12px; color: var(--muted); }
+.modal-status[data-kind='success'], .card-status[data-kind='success'] { color: #bbf7d0; }
+.modal-status[data-kind='error'], .card-status[data-kind='error'] { color: #fdba74; }
+.card-status { font-size: 12px; color: var(--muted); min-height: 16px; }
+.compact-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.button-compact { padding: 8px 12px; font-size: 0.86rem; }
+.compact-grid-two { gap: 12px; }
+.compact-info-panel { min-height: 120px; }
 details summary { cursor: pointer; color: var(--text); font-weight: 600; }
 article { margin-top: 16px; }
 a { color: #ff6b87; }
@@ -1507,9 +1532,14 @@ a { color: #ff6b87; }
 @media (max-width: 1100px) {
   .app-shell { grid-template-columns: 1fr; }
   .sidebar { position: relative; height: auto; }
-  .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid { grid-template-columns: 1fr; }
+  .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid, .compact-module-grid, .compact-command-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .toolbar { flex-direction: column; align-items: stretch; }
   .content-shell { padding: 20px; }
+  .settings-grid { grid-template-columns: 1fr; }
+}
+@media (max-width: 820px) {
+  .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid, .compact-module-grid, .compact-command-grid { grid-template-columns: 1fr; }
+  .settings-modal { width: min(96vw, 640px); }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
@@ -1678,13 +1708,17 @@ fn render_deployment_module_modal(
         &modal_id_for_module("deployment", entry.module.id),
         entry.module.display_name,
         &format!(
-            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchDeploymentModule(event, '{}')\"><label><input type=\"checkbox\" name=\"installed\" {}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled</label><br/><button type=\"submit\">Save</button><span id=\"deployment-status-{}\" style=\"margin-left:8px\"></span></form>",
+            "<div class=\"modal-status-row\"><p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}</div><form class=\"settings-form\" data-testid=\"deployment-module-form-{}\" onsubmit=\"return patchDeploymentModule(event, '{}')\"><div class=\"settings-grid settings-grid-basic\"><div class=\"settings-field settings-field-span-2 settings-field-toggle\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>Installed</strong><small>Controls whether this module is installed deployment-wide.</small></span><input type=\"checkbox\" name=\"installed\" {}/></label></div><div class=\"settings-field settings-field-span-2 settings-field-toggle\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>Enabled</strong><small>Controls whether this module is enabled by default.</small></span><input type=\"checkbox\" name=\"enabled\" {}/></label></div></div><div class=\"modal-actions\"><button class=\"button button-secondary\" data-testid=\"cancel-settings-{}\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">Cancel</button><button class=\"button button-primary\" data-testid=\"save-settings-{}\" type=\"submit\">Save</button><span class=\"modal-status\" id=\"deployment-status-{status_key}\"></span></div></form>",
             render_deployment_status(resolved),
             runtime_notice,
+            status_key(entry.module.id),
             escape_html(entry.module.id),
             if current.installed { "checked" } else { "" },
             if current.enabled { "checked" } else { "" },
-            escape_html(entry.module.id)
+            status_key(entry.module.id),
+            status_key(entry.module.id),
+            modal_id = modal_id_for_module("deployment", entry.module.id),
+            status_key = escape_html(entry.module.id)
         ),
     )
 }
@@ -1701,14 +1735,18 @@ fn render_guild_module_modal(
         &modal_id_for_module("guild", entry.module.id),
         entry.module.display_name,
         &format!(
-            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchGuildModule(event, '{}', '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save</button><span id=\"guild-status-{}\" style=\"margin-left:8px\"></span></form>",
+            "<div class=\"modal-status-row\"><p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}</div><form class=\"settings-form\" data-testid=\"guild-module-form-{}\" onsubmit=\"return patchGuildModule(event, '{}', '{}')\"><div class=\"settings-grid settings-grid-basic\"><div class=\"settings-field settings-field-span-2 settings-field-toggle\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>Enabled in guild</strong><small>Overrides deployment defaults for this server.</small></span><input type=\"checkbox\" name=\"enabled\" {}/></label></div></div>{}<div class=\"modal-actions\"><button class=\"button button-secondary\" data-testid=\"cancel-settings-{}\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">Cancel</button><button class=\"button button-primary\" data-testid=\"save-settings-{}\" type=\"submit\">Save</button><span class=\"modal-status\" id=\"guild-status-{status_key}\"></span></div></form>",
             render_guild_status(resolved),
             runtime_notice,
+            status_key(entry.module.id),
             guild_id,
             escape_html(entry.module.id),
             if current.enabled { "checked" } else { "" },
             structured_fields,
-            escape_html(entry.module.id),
+            status_key(entry.module.id),
+            status_key(entry.module.id),
+            modal_id = modal_id_for_module("guild", entry.module.id),
+            status_key = escape_html(entry.module.id),
         ),
     )
 }
@@ -1735,15 +1773,19 @@ fn render_deployment_command_modals(
                 &modal_id_for_command("deployment", &entry.command.id),
                 &entry.command.display_name,
                 &format!(
-                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchDeploymentCommand(event, '{}')\"><label><input type=\"checkbox\" name=\"installed\" {}/> Installed</label><br/><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"deployment-command-status-{}\" style=\"margin-left:8px\"></span></form>",
+                    "<div class=\"modal-status-row\"><p class=\"detail-meta\"><strong>Status:</strong> {}</p></div><form class=\"settings-form\" data-testid=\"deployment-command-form-{}\" onsubmit=\"return patchDeploymentCommand(event, '{}')\"><div class=\"settings-grid settings-grid-basic\"><div class=\"settings-field settings-field-span-2 settings-field-toggle\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>Installed</strong><small>Controls whether the command is installed deployment-wide.</small></span><input type=\"checkbox\" name=\"installed\" {}/></label></div><div class=\"settings-field settings-field-span-2 settings-field-toggle\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>Enabled</strong><small>Controls whether the command is enabled by default.</small></span><input type=\"checkbox\" name=\"enabled\" {}/></label></div></div>{}<div class=\"modal-actions\"><button class=\"button button-secondary\" data-testid=\"cancel-settings-{}\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">Cancel</button><button class=\"button button-primary\" data-testid=\"save-settings-{}\" type=\"submit\">Save</button><span class=\"modal-status\" id=\"deployment-command-status-{status_key}\"></span></div></form>",
                     resolved
                         .map(render_deployment_command_status)
                         .unwrap_or_else(|| "unknown".to_string()),
+                    status_key(&entry.command.id),
                     escape_html(&entry.command.id),
                     if current.installed { "checked" } else { "" },
                     if current.enabled { "checked" } else { "" },
                     structured_fields,
                     status_key(&entry.command.id),
+                    status_key(&entry.command.id),
+                    modal_id = modal_id_for_command("deployment", &entry.command.id),
+                    status_key = status_key(&entry.command.id),
                 ),
             )
         })
@@ -1774,15 +1816,19 @@ fn render_guild_command_modals(
                 &modal_id_for_command("guild", &entry.command.id),
                 &entry.command.display_name,
                 &format!(
-                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchGuildCommand(event, '{}', '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{}\" style=\"margin-left:8px\"></span></form>",
+                    "<div class=\"modal-status-row\"><p class=\"detail-meta\"><strong>Status:</strong> {}</p></div><form class=\"settings-form\" data-testid=\"guild-command-form-{}\" onsubmit=\"return patchGuildCommand(event, '{}', '{}')\"><div class=\"settings-grid settings-grid-basic\"><div class=\"settings-field settings-field-span-2 settings-field-toggle\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>Enabled in guild</strong><small>Overrides deployment command defaults for this server.</small></span><input type=\"checkbox\" name=\"enabled\" {}/></label></div></div>{}<div class=\"modal-actions\"><button class=\"button button-secondary\" data-testid=\"cancel-settings-{}\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">Cancel</button><button class=\"button button-primary\" data-testid=\"save-settings-{}\" type=\"submit\">Save</button><span class=\"modal-status\" id=\"guild-command-status-{status_key}\"></span></div></form>",
                     resolved
                         .map(render_guild_command_status)
                         .unwrap_or_else(|| "unknown".to_string()),
+                    status_key(&entry.command.id),
                     guild_id,
                     escape_html(&entry.command.id),
                     if current.enabled { "checked" } else { "" },
                     structured_fields,
                     status_key(&entry.command.id),
+                    status_key(&entry.command.id),
+                    modal_id = modal_id_for_command("guild", &entry.command.id),
+                    status_key = status_key(&entry.command.id),
                 ),
             )
         })
@@ -1792,8 +1838,9 @@ fn render_guild_command_modals(
 
 fn render_settings_modal(modal_id: &str, title: &str, body: &str) -> String {
     format!(
-        "<div id=\"{modal_id}\" class=\"settings-modal-overlay\" hidden><div class=\"settings-modal\"><div class=\"settings-modal-head\"><h3>{title}</h3><button class=\"modal-close\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">×</button></div><div class=\"settings-modal-body\">{body}</div></div></div>",
+        "<div id=\"{modal_id}\" class=\"settings-modal-overlay\" data-testid=\"settings-modal-{modal_testid}\" hidden onclick=\"dismissSettingsModal(event, '{modal_id}')\"><div class=\"settings-modal\" onclick=\"event.stopPropagation()\"><div class=\"settings-modal-head\"><div><p class=\"eyebrow\">Settings</p><h3 title=\"{title}\">{title}</h3></div><button class=\"modal-close\" data-testid=\"modal-close-{modal_testid}\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">×</button></div><div class=\"settings-modal-body\">{body}</div></div></div>",
         modal_id = modal_id,
+        modal_testid = status_key(modal_id),
         title = escape_html(title),
         body = body,
     )
@@ -1808,23 +1855,25 @@ fn render_module_toggle(
 ) -> String {
     match scope {
         "guild" => format!(
-            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildModule('{}', '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
-            if resolved.effective_enabled {
+            "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleGuildModule('{guild_id}', '{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            testid = status_key(module_id),
+            checked = if resolved.effective_enabled {
                 "checked"
             } else {
                 ""
             },
-            guild.map(|g| g.guild_id.to_string()).unwrap_or_default(),
-            escape_html(module_id),
+            guild_id = guild.map(|g| g.guild_id.to_string()).unwrap_or_default(),
+            module_id = escape_html(module_id),
         ),
         _ => format!(
-            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleDeploymentModule('{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
-            if resolved.effective_enabled {
+            "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleDeploymentModule('{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            testid = status_key(module_id),
+            checked = if resolved.effective_enabled {
                 "checked"
             } else {
                 ""
             },
-            escape_html(module_id),
+            module_id = escape_html(module_id),
         ),
     }
 }
@@ -1838,23 +1887,25 @@ fn render_command_toggle(
 ) -> String {
     match scope {
         "guild" => format!(
-            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildCommand('{}', '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
-            if resolved.effective_enabled {
+            "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleGuildCommand('{guild_id}', '{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            testid = status_key(command_id),
+            checked = if resolved.effective_enabled {
                 "checked"
             } else {
                 ""
             },
-            guild.map(|g| g.guild_id.to_string()).unwrap_or_default(),
-            escape_html(command_id),
+            guild_id = guild.map(|g| g.guild_id.to_string()).unwrap_or_default(),
+            command_id = escape_html(command_id),
         ),
         _ => format!(
-            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleDeploymentCommand('{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
-            if resolved.effective_enabled {
+            "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleDeploymentCommand('{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            testid = status_key(command_id),
+            checked = if resolved.effective_enabled {
                 "checked"
             } else {
                 ""
             },
-            escape_html(command_id),
+            command_id = escape_html(command_id),
         ),
     }
 }
@@ -1862,7 +1913,7 @@ fn render_command_toggle(
 fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
     let mut seen = HashSet::new();
     let mut tabs = vec![
-        "<button class=\"tab-button active\" type=\"button\" onclick=\"setCommandCategory('all', this)\">All</button>".to_string(),
+        "<button class=\"tab-button active\" data-testid=\"command-tab-all\" type=\"button\" onclick=\"setCommandCategory('all', this)\">All</button>".to_string(),
     ];
 
     for entry in &catalog.entries {
@@ -1870,7 +1921,7 @@ fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
         let label = command_category_label(entry);
         if seen.insert(key.clone()) {
             tabs.push(format!(
-                "<button class=\"tab-button command-tab\" type=\"button\" onclick=\"setCommandCategory('{key}', this)\">{label}</button>",
+                "<button class=\"tab-button command-tab\" data-testid=\"command-tab-{key}\" type=\"button\" onclick=\"setCommandCategory('{key}', this)\">{label}</button>",
                 key = escape_html(&key),
                 label = escape_html(&label),
             ));
@@ -1915,7 +1966,8 @@ fn render_module_summary_cards(
         .map(|(entry, resolved)| {
             let toggle = render_module_toggle(scope, entry.module.id, deployment, guild, resolved);
             format!(
-                "<article class=\"panel summary-card module-card\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3>{name}</h3>{toggle}</div><p>{description}</p><div class=\"actions\"><button class=\"button button-secondary\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button></div></article>",
+                "<article class=\"panel summary-card module-card\" data-testid=\"module-card-{testid}\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3 title=\"{name}\">{name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"module-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button><span class=\"card-status\" id=\"card-status-module-{testid}\"></span></div></article>",
+                testid = status_key(entry.module.id),
                 data_name = escape_html(&entry.module.display_name.to_ascii_lowercase()),
                 name = escape_html(entry.module.display_name),
                 toggle = toggle,
@@ -1941,7 +1993,8 @@ fn render_command_summary_cards(
         .map(|(entry, resolved)| {
             let toggle = render_command_toggle(scope, &entry.command.id, deployment, guild, resolved);
             format!(
-                "<article class=\"panel summary-card command-card\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3>{display_name}</h3>{toggle}</div><p>{description}</p><div class=\"summary-card-subtitle\">{category_label}</div><div class=\"actions\"><button class=\"button button-secondary\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button></div></article>",
+                "<article class=\"panel summary-card command-card\" data-testid=\"command-card-{testid}\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3 title=\"{display_name}\">{display_name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"summary-card-subtitle\">{category_label}</div><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"command-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button><span class=\"card-status\" id=\"card-status-command-{testid}\"></span></div></article>",
+                testid = status_key(&entry.command.id),
                 command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
                 category_key = escape_html(&command_category_key(entry)),
                 display_name = escape_html(&entry.command.display_name),
@@ -2047,7 +2100,7 @@ fn render_settings_sections(
                 .join("\n");
 
             format!(
-                "<fieldset><legend>{}</legend><p>{}</p>{}</fieldset>",
+                "<fieldset class=\"settings-section\"><legend>{}</legend><p class=\"section-help\">{}</p><div class=\"settings-grid\">{}</div></fieldset>",
                 escape_html(section.title),
                 escape_html(section.description.unwrap_or("")),
                 rendered_fields
@@ -2075,17 +2128,20 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
     let help_text = field
         .help_text
         .map(escape_html)
-        .map(|text| format!("<small>{text}</small><br/>"))
+        .map(|text| format!("<small>{text}</small>"))
         .unwrap_or_default();
     let required = if field.required { "required" } else { "" };
+    let field_key = escape_html(field.key);
+    let field_label = escape_html(field.label);
 
     match &field.kind {
         SettingsFieldKind::Toggle => {
             let checked = field_bool_value(configuration, field.key).unwrap_or(false);
             format!(
-                "<label><input type=\"checkbox\" data-setting-key=\"{key}\" data-setting-kind=\"toggle\" {checked}/> {label}</label><br/>{help_text}",
-                key = escape_html(field.key),
-                label = escape_html(field.label),
+                "<div class=\"settings-field settings-field-span-2 settings-field-toggle\" data-testid=\"field-{testid}\"><label class=\"toggle-field\"><span class=\"toggle-field-copy\"><strong>{label}</strong>{help_text}</span><input type=\"checkbox\" data-setting-key=\"{key}\" data-setting-kind=\"toggle\" {checked}/></label></div>",
+                testid = status_key(field.key),
+                key = field_key,
+                label = field_label,
                 checked = if checked { "checked" } else { "" },
                 help_text = help_text,
             )
@@ -2093,10 +2149,11 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
         SettingsFieldKind::Integer => {
             let value = field_string_value(configuration, field.key);
             format!(
-                "<label>{label}</label><br/>{help_text}<input type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\" {required}/>",
-                label = escape_html(field.label),
+                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<input type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\" {required}/></div>",
+                testid = status_key(field.key),
+                label = field_label,
                 help_text = help_text,
-                key = escape_html(field.key),
+                key = field_key,
                 value = escape_html(&value.unwrap_or_default()),
                 required = required,
             )
@@ -2105,19 +2162,21 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
             let value = field_string_value(configuration, field.key).unwrap_or_default();
             if value.len() > 40 || value.starts_with('[') || value.starts_with('{') {
                 format!(
-                    "<label>{label}</label><br/>{help_text}<textarea data-setting-key=\"{key}\" data-setting-kind=\"text\" rows=\"4\" cols=\"80\" {required}>{value}</textarea>",
-                    label = escape_html(field.label),
+                    "<div class=\"settings-field settings-field-span-2 settings-field-textarea\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<textarea data-setting-key=\"{key}\" data-setting-kind=\"text\" rows=\"4\" cols=\"80\" {required}>{value}</textarea></div>",
+                    testid = status_key(field.key),
+                    label = field_label,
                     help_text = help_text,
-                    key = escape_html(field.key),
+                    key = field_key,
                     required = required,
                     value = escape_html(&value),
                 )
             } else {
                 format!(
-                    "<label>{label}</label><br/>{help_text}<input type=\"text\" data-setting-key=\"{key}\" data-setting-kind=\"text\" value=\"{value}\" {required}/>",
-                    label = escape_html(field.label),
+                    "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<input type=\"text\" data-setting-key=\"{key}\" data-setting-kind=\"text\" value=\"{value}\" {required}/></div>",
+                    testid = status_key(field.key),
+                    label = field_label,
                     help_text = help_text,
-                    key = escape_html(field.key),
+                    key = field_key,
                     value = escape_html(&value),
                     required = required,
                 )
@@ -2143,10 +2202,11 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
                 .join("\n");
 
             format!(
-                "<label>{label}</label><br/>{help_text}<select data-setting-key=\"{key}\" data-setting-kind=\"select\" {required}>{options}</select>",
-                label = escape_html(field.label),
+                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<select data-setting-key=\"{key}\" data-setting-kind=\"select\" {required}>{options}</select></div>",
+                testid = status_key(field.key),
+                label = field_label,
                 help_text = help_text,
-                key = escape_html(field.key),
+                key = field_key,
                 required = required,
                 options = options,
             )
@@ -2727,6 +2787,13 @@ fn error_payload(message: String) -> serde_json::Value {
 
 fn dashboard_script() -> &'static str {
     r#"
+function setInlineStatus(id, message, kind = 'info') {
+  const target = document.getElementById(id);
+  if (!target) return;
+  target.textContent = message || '';
+  target.dataset.kind = kind;
+}
+
 function openSettingsModal(modalId) {
   const modal = document.getElementById(modalId);
   if (!modal) return false;
@@ -2743,14 +2810,32 @@ function closeSettingsModal(modalId) {
   return false;
 }
 
-async function toggleDeploymentModule(moduleId, enabled) {
+function dismissSettingsModal(event, modalId) {
+  if (event.target && event.target.id === modalId) {
+    closeSettingsModal(modalId);
+  }
+  return false;
+}
+
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  const openModal = document.querySelector('.settings-modal-overlay:not([hidden])');
+  if (openModal) {
+    closeSettingsModal(openModal.id);
+  }
+});
+
+async function toggleDeploymentModule(moduleId, enabled, input) {
   const response = await fetch(`/api/deployment-settings/${moduleId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!response.ok) {
-    alert('Failed to update deployment module state.');
+    if (input) input.checked = !enabled;
+    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Update failed', 'error');
+  } else {
+    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Saved', 'success');
   }
 }
 
@@ -2767,21 +2852,24 @@ async function patchDeploymentModule(event, moduleId) {
     body: JSON.stringify(body),
   });
   const output = await response.json();
-  document.getElementById(`deployment-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  setInlineStatus(`deployment-status-${moduleId}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
   if (response.ok) {
     closeSettingsModal(`modal-deployment-module-${statusKey(moduleId)}`);
   }
   return false;
 }
 
-async function toggleDeploymentCommand(commandId, enabled) {
+async function toggleDeploymentCommand(commandId, enabled, input) {
   const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!response.ok) {
-    alert('Failed to update deployment command state.');
+    if (input) input.checked = !enabled;
+    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Update failed', 'error');
+  } else {
+    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Saved', 'success');
   }
 }
 
@@ -2792,7 +2880,7 @@ async function patchDeploymentCommand(event, commandId) {
   try {
     configuration = collectConfiguration(form);
   } catch (error) {
-    document.getElementById(`deployment-command-status-${statusKey(commandId)}`).textContent = `Error: ${error.message}`;
+    setInlineStatus(`deployment-command-status-${statusKey(commandId)}`, `Error: ${error.message}`, 'error');
     return false;
   }
 
@@ -2806,7 +2894,7 @@ async function patchDeploymentCommand(event, commandId) {
     }),
   });
   const output = await response.json();
-  document.getElementById(`deployment-command-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  setInlineStatus(`deployment-command-status-${statusKey(commandId)}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
   if (response.ok) {
     closeSettingsModal(`modal-deployment-command-${statusKey(commandId)}`);
   }
@@ -2873,7 +2961,7 @@ async function patchGuildModule(event, guildId, moduleId) {
   try {
     configuration = collectConfiguration(form);
   } catch (error) {
-    document.getElementById(`guild-status-${moduleId}`).textContent = `Error: ${error.message}`;
+    setInlineStatus(`guild-status-${moduleId}`, `Error: ${error.message}`, 'error');
     return false;
   }
 
@@ -2887,21 +2975,24 @@ async function patchGuildModule(event, guildId, moduleId) {
     body: JSON.stringify(body),
   });
   const output = await response.json();
-  document.getElementById(`guild-status-${moduleId}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  setInlineStatus(`guild-status-${moduleId}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
   if (response.ok) {
     closeSettingsModal(`modal-guild-module-${statusKey(moduleId)}`);
   }
   return false;
 }
 
-async function toggleGuildModule(guildId, moduleId, enabled) {
+async function toggleGuildModule(guildId, moduleId, enabled, input) {
   const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!response.ok) {
-    alert('Failed to update guild module state.');
+    if (input) input.checked = !enabled;
+    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Update failed', 'error');
+  } else {
+    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Saved', 'success');
   }
 }
 
@@ -2912,7 +3003,7 @@ async function patchGuildCommand(event, guildId, commandId) {
   try {
     configuration = collectConfiguration(form);
   } catch (error) {
-    document.getElementById(`guild-command-status-${statusKey(commandId)}`).textContent = `Error: ${error.message}`;
+    setInlineStatus(`guild-command-status-${statusKey(commandId)}`, `Error: ${error.message}`, 'error');
     return false;
   }
 
@@ -2925,21 +3016,24 @@ async function patchGuildCommand(event, guildId, commandId) {
     }),
   });
   const output = await response.json();
-  document.getElementById(`guild-command-status-${statusKey(commandId)}`).textContent = response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`;
+  setInlineStatus(`guild-command-status-${statusKey(commandId)}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
   if (response.ok) {
     closeSettingsModal(`modal-guild-command-${statusKey(commandId)}`);
   }
   return false;
 }
 
-async function toggleGuildCommand(guildId, commandId, enabled) {
+async function toggleGuildCommand(guildId, commandId, enabled, input) {
   const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ enabled }),
   });
   if (!response.ok) {
-    alert('Failed to update guild command state.');
+    if (input) input.checked = !enabled;
+    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Update failed', 'error');
+  } else {
+    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Saved', 'success');
   }
 }
 

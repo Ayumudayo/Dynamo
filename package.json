@@ -12,6 +12,10 @@
     "dev": "nodemon .",
     "start": "node .",
     "format": "prettier --write src",
+    "dashboard:smoke:auth": "playwright codegen --save-storage=output/playwright/dashboard-auth.json http://127.0.0.1:3000/login",
+    "dashboard:smoke": "playwright test -c playwright.dashboard.config.cjs tests/playwright/dashboard-guild-smoke.spec.cjs",
+    "dashboard:smoke:headed": "playwright test --headed -c playwright.dashboard.config.cjs tests/playwright/dashboard-guild-smoke.spec.cjs",
+    "dashboard:smoke:install": "playwright install chromium",
     "docker:package": "tar -cf discord-js-bot.tar dashboard logs src bot.js config.js dockerfile package.json package-lock.json",
     "docker:build": "docker build -t saitejamadha/discord-js-bot:5.6.0 ."
   },
@@ -71,6 +75,7 @@
     "zlib-sync": "^0.1.9"
   },
   "devDependencies": {
+    "@playwright/test": "^1.58.2",
     "eslint": "^8.57.1",
     "eslint-plugin-jsdoc": "^46.10.1",
     "node": "^18.20.6",
