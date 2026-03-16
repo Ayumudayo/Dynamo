@@ -2,8 +2,8 @@ use std::sync::Arc;
 
 use dynamo_core::{
     AppState, CommandCatalog, DashboardAuditLogRepository, DeploymentSettings,
-    DeploymentSettingsRepository, DiscordCommand, Error, GiveawaysRepository, GuildSettings,
-    GuildSettingsRepository, InviteRepository, MemberStatsRepository, ModuleCatalog,
+    DeploymentSettingsRepository, DiscordCommand, Error, ExchangeRateService, GiveawaysRepository,
+    GuildSettings, GuildSettingsRepository, InviteRepository, MemberStatsRepository, ModuleCatalog,
     ModuleRegistry, MusicService, OptionalModulesConfig, Persistence, ProviderStateRepository,
     ServiceRegistry, StockQuoteService, SuggestionsRepository, WarningLogRepository,
     resolve_command_state,
@@ -84,9 +84,18 @@ pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<Se
     let stock_quotes: Arc<dyn StockQuoteService> = Arc::new(
         dynamo_provider_yahoo::YahooFinanceClient::new(persistence.provider_state.clone())?,
     );
+    let exchange_rates: Arc<dyn ExchangeRateService> = Arc::new(
+        dynamo_provider_google_finance::GoogleFinanceExchangeService::new(
+            persistence.provider_state.clone(),
+        )?,
+    );
     let music: Arc<dyn MusicService> =
         Arc::new(dynamo_provider_music_songbird::SongbirdMusicService::new());
-    Ok(ServiceRegistry::new(Some(stock_quotes), Some(music)))
+    Ok(ServiceRegistry::new(
+        Some(stock_quotes),
+        Some(exchange_rates),
+        Some(music),
+    ))
 }
 
 pub fn create_application_commands_for_scope(

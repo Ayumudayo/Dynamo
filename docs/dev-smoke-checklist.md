@@ -61,6 +61,18 @@ Run this checklist after major module, persistence, or dashboard changes.
 5. Run `/stock NVDA`.
 6. Run `/etf`.
 
+## Currency
+
+1. Run `/exchange` with no arguments and confirm dashboard defaults are applied.
+2. Run `/exchange USD KRW 1` and confirm the embed shows:
+   - `Data Source`
+   - `As of`
+   - a Google Finance backed value
+3. Run `/rate` and confirm each row shows a rate plus live/cached source text.
+4. Force or simulate a fetch failure and confirm cached fallback values are shown instead of a hard failure.
+5. Confirm a `provider_state` document exists for the Google Finance exchange cache.
+6. Confirm the bot startup log shows the exchange-rate cache service and 30-minute refresh loop status.
+
 ## Greeting And Invite
 
 1. Enable `greeting` and `invite` in deployment and guild settings.

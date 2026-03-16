@@ -1,5 +1,3 @@
-use std::env;
-
 use dynamo_core::{
     Context, DeploymentCommandSettings, DiscordCommand, Error, GatewayIntents,
     GuildCommandSettings, Module, ModuleCategory, ModuleManifest, SettingOption, SettingsField,
@@ -7,7 +5,6 @@ use dynamo_core::{
 };
 use futures_util::future::join_all;
 use poise::serenity_prelude::{CreateEmbed, CreateEmbedFooter, Timestamp};
-use reqwest::Client;
 use serde::{Deserialize, Serialize};
 
 const MODULE_ID: &str = "currency";
@@ -29,7 +26,7 @@ impl Module for CurrencyModule {
         ModuleManifest::new(
             MODULE_ID,
             "Currency",
-            "Exchange rate commands backed by ExchangeRate-API.",
+            "Exchange rate commands backed by Google Finance with cached fallback.",
             ModuleCategory::Currency,
             true,
             GatewayIntents::GUILDS,
@@ -146,17 +143,6 @@ impl Default for RateCommandSettings {
     }
 }
 
-#[derive(Debug, Deserialize)]
-struct ExchangeRateApiResponse {
-    result: String,
-    #[serde(rename = "conversion_result")]
-    conversion_result: Option<f64>,
-    #[serde(rename = "conversion_rate")]
-    conversion_rate: Option<f64>,
-    #[serde(rename = "error-type")]
-    error_type: Option<String>,
-}
-
 /// Convert one currency amount into another currency.
 #[poise::command(slash_command, category = "Currency")]
 async fn exchange(
@@ -173,22 +159,39 @@ async fn exchange(
         return Ok(());
     }
 
-    let api_key = exchange_api_key()?;
-    let client = Client::new();
     let defaults = load_exchange_defaults(ctx).await?;
     let from = normalize_currency(from.as_deref().unwrap_or(defaults.default_from.as_str()));
     let to = normalize_currency(to.as_deref().unwrap_or(defaults.default_to.as_str()));
     let amount = amount.unwrap_or(defaults.default_amount);
-
-    let converted = convert(&client, &api_key, &from, &to, amount).await?;
+    let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
+        ctx.say("The exchange-rate service is not available in this deployment.")
+            .await?;
+        return Ok(());
+    };
+    let quote = match service.fetch_pair(&from, &to).await {
+        Ok(quote) => quote,
+        Err(_) => {
+            ctx.say("Failed to fetch latest exchange data and no cached data is available.")
+                .await?;
+            return Ok(());
+        }
+    };
+    let converted = quote.rate * amount;
     let embed = CreateEmbed::new()
         .title(format!("Exchange rate from {from} to {to}"))
         .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new("Data from ExchangeRate-API."))
-        .timestamp(Timestamp::now())
+        .footer(CreateEmbedFooter::new(format!(
+            "Data from Google Finance. {}",
+            source_footer_suffix(quote.source_kind)
+        )))
+        .timestamp(Timestamp::from_unix_timestamp(
+            quote.source_timestamp.timestamp(),
+        )?)
         .field("From", format!("{} {from}", format_decimal(amount)), false)
-        .field("To", format!("{} {to}", format_decimal(converted)), false);
+        .field("To", format!("{} {to}", format_decimal(converted)), false)
+        .field("Data Source", source_label(quote.source_kind), true)
+        .field("As of", quote.source_timestamp_text, true);
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
@@ -209,27 +212,44 @@ async fn rate(
         return Ok(());
     }
 
-    let api_key = exchange_api_key()?;
-    let client = Client::new();
     let defaults = load_exchange_defaults(ctx).await?;
     let from = normalize_currency(from.as_deref().unwrap_or(defaults.default_from.as_str()));
     let amount = amount.unwrap_or(defaults.default_amount);
     let rate_targets = load_rate_targets(ctx).await?;
+    let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
+        ctx.say("The exchange-rate service is not available in this deployment.")
+            .await?;
+        return Ok(());
+    };
 
     let requests = rate_targets.iter().map(|target| {
-        let client = client.clone();
-        let api_key = api_key.clone();
         let from = from.clone();
         let target = target.clone();
+        let service = service.clone();
         async move {
-            let value = convert(&client, &api_key, &from, &target, amount)
-                .await
-                .ok();
+            let value = service.fetch_pair(&from, &target).await.ok();
             (target, value)
         }
     });
 
     let responses = join_all(requests).await;
+    let timestamps = responses
+        .iter()
+        .filter_map(|(_, quote)| {
+            quote
+                .as_ref()
+                .map(|quote| quote.source_timestamp_text.clone())
+        })
+        .collect::<Vec<_>>();
+    if timestamps.is_empty() {
+        ctx.say("Failed to fetch latest exchange data and no cached data is available.")
+            .await?;
+        return Ok(());
+    }
+    let uniform_timestamp = timestamps
+        .first()
+        .filter(|first| timestamps.iter().all(|timestamp| timestamp == *first))
+        .cloned();
     let mut embed = CreateEmbed::new()
         .title(format!(
             "Exchange rate from {} {from}",
@@ -237,8 +257,10 @@ async fn rate(
         ))
         .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new("Data from ExchangeRate-API."))
-        .timestamp(Timestamp::now());
+        .footer(CreateEmbedFooter::new(match uniform_timestamp {
+            Some(timestamp) => format!("Data from Google Finance. As of {timestamp}."),
+            None => "Data from Google Finance. Timestamps vary by row.".to_string(),
+        }));
 
     for (currency, rate) in responses {
         let name = match currency.as_str() {
@@ -253,45 +275,21 @@ async fn rate(
 
         embed = embed.field(
             name,
-            rate.map(format_decimal)
-                .unwrap_or_else(|| "Failed to fetch".to_string()),
+            rate.map(|quote| {
+                format!(
+                    "{}\n{} · {}",
+                    format_decimal(quote.rate * amount),
+                    source_label(quote.source_kind),
+                    quote.source_timestamp_text
+                )
+            })
+            .unwrap_or_else(|| "Failed to fetch".to_string()),
             true,
         );
     }
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
-}
-
-fn exchange_api_key() -> Result<String, Error> {
-    env::var("EXCHANGE_API_KEY")
-        .map_err(|_| anyhow::anyhow!("EXCHANGE_API_KEY is not configured in this deployment."))
-}
-
-async fn convert(
-    client: &Client,
-    api_key: &str,
-    from: &str,
-    to: &str,
-    amount: f64,
-) -> Result<f64, Error> {
-    let url = format!("https://v6.exchangerate-api.com/v6/{api_key}/pair/{from}/{to}/{amount}");
-    let response = client.get(url).send().await?;
-    let payload = response.json::<ExchangeRateApiResponse>().await?;
-
-    if payload.result == "success" {
-        return payload
-            .conversion_result
-            .or(payload.conversion_rate)
-            .ok_or_else(|| anyhow::anyhow!("ExchangeRate-API returned success without a value."));
-    }
-
-    Err(anyhow::anyhow!(
-        "ExchangeRate-API Error: {}",
-        payload
-            .error_type
-            .unwrap_or_else(|| "Unknown API Error".to_string())
-    ))
 }
 
 async fn load_exchange_defaults(ctx: Context<'_>) -> Result<ResolvedExchangeDefaults, Error> {
@@ -514,6 +512,20 @@ fn currency_select_options(include_blank: bool) -> Vec<SettingOption> {
 
 fn normalize_currency(input: &str) -> String {
     input.trim().to_ascii_uppercase()
+}
+
+fn source_label(kind: dynamo_core::ExchangeRateSourceKind) -> &'static str {
+    match kind {
+        dynamo_core::ExchangeRateSourceKind::Live => "Live",
+        dynamo_core::ExchangeRateSourceKind::Cache => "Cached fallback",
+    }
+}
+
+fn source_footer_suffix(kind: dynamo_core::ExchangeRateSourceKind) -> &'static str {
+    match kind {
+        dynamo_core::ExchangeRateSourceKind::Live => "Live quote.",
+        dynamo_core::ExchangeRateSourceKind::Cache => "Cached fallback.",
+    }
 }
 
 fn format_decimal(value: f64) -> String {

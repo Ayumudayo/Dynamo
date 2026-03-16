@@ -10,6 +10,7 @@ anyhow.workspace = true
 dynamo-app = { path = "../app" }
 dynamo-core = { path = "../core" }
 dynamo-module-giveaway = { path = "../modules/giveaway" }
+dynamo-provider-google-finance = { path = "../providers/google-finance" }
 dotenvy.workspace = true
 poise.workspace = true
 songbird.workspace = true

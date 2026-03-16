@@ -956,6 +956,7 @@ dependencies = [
  "dynamo-module-suggestion",
  "dynamo-module-ticket",
  "dynamo-persistence-mongo",
+ "dynamo-provider-google-finance",
  "dynamo-provider-music-songbird",
  "dynamo-provider-yahoo",
  "poise",
@@ -984,6 +985,7 @@ dependencies = [
  "dynamo-app",
  "dynamo-core",
  "dynamo-module-giveaway",
+ "dynamo-provider-google-finance",
  "poise",
  "songbird",
  "tokio",
@@ -1035,7 +1037,6 @@ dependencies = [
  "dynamo-core",
  "futures-util",
  "poise",
- "reqwest",
  "serde",
  "serde_json",
 ]
@@ -1185,6 +1186,21 @@ dependencies = [
  "dynamo-core",
  "futures-util",
  "mongodb",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
+name = "dynamo-provider-google-finance"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dynamo-core",
+ "reqwest",
+ "scraper",
  "serde",
  "serde_json",
  "tokio",

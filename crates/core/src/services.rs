@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
 use crate::Error;
@@ -44,6 +45,49 @@ pub trait StockQuoteService: Send + Sync {
         &self,
         symbols: &[String],
     ) -> Result<Vec<Result<StockQuote, String>>, Error>;
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExchangeRateSourceKind {
+    Live,
+    Cache,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ExchangeRateQuote {
+    pub from: String,
+    pub to: String,
+    pub rate: f64,
+    pub source_kind: ExchangeRateSourceKind,
+    pub source_timestamp: DateTime<Utc>,
+    pub source_timestamp_text: String,
+    pub fetched_at_utc: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExchangeRateCacheStatus {
+    pub target_currency_count: usize,
+    pub cached_currency_count: usize,
+    pub uses_persisted_cache: bool,
+    pub last_refresh_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ExchangeRateRefreshResult {
+    pub target_currency_count: usize,
+    pub refreshed_currency_count: usize,
+    pub failed_currency_count: usize,
+    pub last_refresh_at: Option<DateTime<Utc>>,
+}
+
+#[async_trait]
+pub trait ExchangeRateService: Send + Sync {
+    async fn fetch_pair(&self, from: &str, to: &str) -> Result<ExchangeRateQuote, Error>;
+    async fn refresh_cache(&self) -> Result<ExchangeRateRefreshResult, Error>;
+    async fn cache_status(&self) -> Result<ExchangeRateCacheStatus, Error>;
+    fn cache_target_count(&self) -> usize;
+    fn uses_persisted_cache(&self) -> bool;
 }
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
@@ -163,16 +207,19 @@ pub trait MusicService: Send + Sync {
 #[derive(Clone, Default)]
 pub struct ServiceRegistry {
     pub stock_quotes: Option<Arc<dyn StockQuoteService>>,
+    pub exchange_rates: Option<Arc<dyn ExchangeRateService>>,
     pub music: Option<Arc<dyn MusicService>>,
 }
 
 impl ServiceRegistry {
     pub fn new(
         stock_quotes: Option<Arc<dyn StockQuoteService>>,
+        exchange_rates: Option<Arc<dyn ExchangeRateService>>,
         music: Option<Arc<dyn MusicService>>,
     ) -> Self {
         Self {
             stock_quotes,
+            exchange_rates,
             music,
         }
     }

@@ -11,12 +11,13 @@ The repository still contains the legacy JavaScript bot while the Rust migration
 - [`crates/bootstrap`](./crates/bootstrap): MongoDB bootstrap utility
 - [`crates/core`](./crates/core): shared config, state, module registry, repositories, guards
 - [`crates/persistence-mongo`](./crates/persistence-mongo): MongoDB repositories and bootstrap
+- [`crates/providers/google-finance`](./crates/providers/google-finance): Google Finance exchange-rate provider with persisted USD-base cache
 - [`crates/providers/yahoo`](./crates/providers/yahoo): Yahoo Finance provider with persisted crumb/cookie enrichment
 - [`crates/modules`](./crates/modules): first-party modules
 
 ## Included Core Modules
 
-- `currency`: ExchangeRate-API backed `/exchange` and `/rate` commands
+- `currency`: Google Finance backed `/exchange` and `/rate` commands with cached fallback
 - `info`: basic bot diagnostics
 - `gameinfo`: FFXIV world transfer, maintenance, and PLL lookups with fallback cache
 - `stock`: Yahoo-backed quote lookups, ETF summaries, refresh sessions
@@ -65,7 +66,6 @@ If `DISCORD_REGISTER_GLOBALLY` is omitted and `DISCORD_DEV_GUILD_ID` or `GUILD_I
 
 Common optional variables:
 
-- `EXCHANGE_API_KEY` required for the currency module
 - `MONGODB_DATABASE` default: `dynamo-rs`
 - `DASHBOARD_HOST` default: `127.0.0.1`
 - `DASHBOARD_PORT` default: `3000`
@@ -123,6 +123,7 @@ Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and 
 They prebuild `dynamo-bootstrap`, `dynamo-dashboard`, and `dynamo-bot` once with a single `cargo build` invocation, then run the shared binaries from `target/debug/`.
 Bot startup logs include the resolved command scope, loaded module count, loaded leaf command count, and loaded module ids. Dashboard startup logs include the listening URL plus loaded module and command counts.
 Long startup lists are compacted as `count + preview` so the report stays readable in terminals and server logs.
+The bot startup report also shows whether the Google Finance exchange-rate cache service is wired and whether the 30-minute refresh loop is active.
 
 PowerShell:
 
@@ -171,6 +172,7 @@ Live network smoke checks for Yahoo enrichment are available but intentionally i
 ```powershell
 cargo test -p dynamo-provider-yahoo live_quote_summary_enrichment_returns_rich_nvda_quote -- --ignored --nocapture
 cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to_mongodb -- --ignored --nocapture
+cargo test -p dynamo-provider-google-finance
 ```
 
 ## Dashboard

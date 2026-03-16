@@ -45,8 +45,10 @@ pub use repositories::{
     ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
 };
 pub use services::{
-    MusicBackendConfig, MusicBackendKind, MusicBackendStatus, MusicEnqueueResult,
-    MusicQueueSnapshot, MusicService, MusicTrack, ServiceRegistry, StockQuote, StockQuoteService,
+    ExchangeRateCacheStatus, ExchangeRateQuote, ExchangeRateRefreshResult, ExchangeRateService,
+    ExchangeRateSourceKind, MusicBackendConfig, MusicBackendKind, MusicBackendStatus,
+    MusicEnqueueResult, MusicQueueSnapshot, MusicService, MusicTrack, ServiceRegistry, StockQuote,
+    StockQuoteService,
 };
 pub use settings::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,

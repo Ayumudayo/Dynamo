@@ -88,6 +88,7 @@ async fn main() -> Result<(), Error> {
                     command_sync_config.sync_interval_seconds,
                     app_state.clone(),
                 );
+                spawn_exchange_rate_refresh_loop(app_state.clone());
                 if optional_modules.giveaway_enabled {
                     spawn_giveaway_poll_loop(ctx.clone(), app_state.clone());
                 }
@@ -256,6 +257,22 @@ fn build_bot_preconnect_report(
             } else {
                 format_preview_list(&services_wired, 5)
             },
+        )
+        .detail(
+            "exchange_rate_cache_targets",
+            services
+                .exchange_rates
+                .as_ref()
+                .map(|service| service.cache_target_count().to_string())
+                .unwrap_or_else(|| "0".to_string()),
+        )
+        .detail(
+            "exchange_rate_cache_persistence",
+            services
+                .exchange_rates
+                .as_ref()
+                .map(|service| service.uses_persisted_cache().to_string())
+                .unwrap_or_else(|| "false".to_string()),
         ),
     );
 
@@ -345,6 +362,11 @@ async fn build_bot_runtime_report(
             .len();
 
     let mut report = StartupReport::new("bot");
+    let exchange_cache_status = if let Some(service) = &app_state.services.exchange_rates {
+        Some(service.cache_status().await?)
+    } else {
+        None
+    };
     report.add_phase(
         StartupPhase::new(
             "runtime",
@@ -378,6 +400,35 @@ async fn build_bot_runtime_report(
             } else {
                 "disabled (optional module not enabled)".to_string()
             },
+        )
+        .detail(
+            "exchange_rate_refresh_loop",
+            if app_state.services.exchange_rates.is_some() {
+                format!(
+                    "enabled every {}s",
+                    dynamo_provider_google_finance::cache_refresh_interval_seconds()
+                )
+            } else {
+                "disabled".to_string()
+            },
+        )
+        .detail(
+            "exchange_rate_cache_status",
+            exchange_cache_status
+                .as_ref()
+                .map(|status| {
+                    format!(
+                        "targets={} cached={} persisted={} last_refresh={}",
+                        status.target_currency_count,
+                        status.cached_currency_count,
+                        status.uses_persisted_cache,
+                        status
+                            .last_refresh_at
+                            .map(|value| value.to_rfc3339())
+                            .unwrap_or_else(|| "none".to_string())
+                    )
+                })
+                .unwrap_or_else(|| "not configured".to_string()),
         )
         .detail(
             "sync_target",
@@ -450,6 +501,9 @@ fn collect_service_labels(services: &ServiceRegistry) -> Vec<String> {
     let mut labels = Vec::new();
     if services.stock_quotes.is_some() {
         labels.push("stock_quotes".to_string());
+    }
+    if services.exchange_rates.is_some() {
+        labels.push("exchange_rates".to_string());
     }
     if services.music.is_some() {
         labels.push("music".to_string());
@@ -705,6 +759,36 @@ fn spawn_giveaway_poll_loop(ctx: serenity::Context, data: AppState) {
             tokio::time::sleep(interval).await;
             if let Err(error) = dynamo_module_giveaway::poll_due_giveaways(&ctx, &data).await {
                 warn!(?error, "failed to poll due giveaways");
+            }
+        }
+    });
+}
+
+fn exchange_rate_refresh_started() -> &'static OnceLock<()> {
+    static STARTED: OnceLock<()> = OnceLock::new();
+    &STARTED
+}
+
+fn spawn_exchange_rate_refresh_loop(data: AppState) {
+    if exchange_rate_refresh_started().set(()).is_err() {
+        return;
+    }
+
+    let Some(service) = data.services.exchange_rates.clone() else {
+        return;
+    };
+
+    tokio::spawn(async move {
+        if let Err(error) = service.refresh_cache().await {
+            warn!(?error, "failed to warm exchange-rate cache");
+        }
+
+        let interval =
+            Duration::from_secs(dynamo_provider_google_finance::cache_refresh_interval_seconds());
+        loop {
+            tokio::time::sleep(interval).await;
+            if let Err(error) = service.refresh_cache().await {
+                warn!(?error, "failed to refresh exchange-rate cache");
             }
         }
     });
