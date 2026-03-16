@@ -245,7 +245,7 @@ impl YahooFinanceClient {
         Ok(())
     }
 
-    async fn fetch_chart_internal(&self, symbol: &str) -> Result<Option<ChartMeta>, Error> {
+    async fn fetch_chart_internal(&self, symbol: &str) -> Result<Option<ChartResult>, Error> {
         let url = format!(
             "https://query1.finance.yahoo.com/v8/finance/chart/{symbol}?interval=1d&range=1d&includePrePost=true"
         );
@@ -259,7 +259,7 @@ impl YahooFinanceClient {
         let envelope = response.json::<ChartEnvelope>().await?;
 
         if let Some(result) = envelope.chart.result.and_then(|mut values| values.pop()) {
-            return Ok(Some(result.meta));
+            return Ok(Some(result));
         }
 
         if let Some(error) = envelope.chart.error.and_then(|value| value.description) {
@@ -400,6 +400,28 @@ struct ChartResponse {
 #[derive(Debug, Clone, Deserialize)]
 struct ChartResult {
     meta: ChartMeta,
+    #[serde(default)]
+    timestamp: Vec<i64>,
+    #[serde(default)]
+    indicators: ChartIndicators,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ChartIndicators {
+    #[serde(default)]
+    quote: Vec<ChartQuoteSeries>,
+}
+
+#[derive(Debug, Clone, Deserialize, Default)]
+struct ChartQuoteSeries {
+    #[serde(default)]
+    close: Vec<Option<f64>>,
+    #[serde(default)]
+    high: Vec<Option<f64>>,
+    #[serde(default)]
+    low: Vec<Option<f64>>,
+    #[serde(default)]
+    volume: Vec<Option<f64>>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -712,12 +734,14 @@ fn looks_like_auth_error(error: &Error) -> bool {
         || message.contains("Invalid Cookie")
 }
 
-fn merge_quote(chart: ChartMeta, summary: Option<QuoteSummaryResult>) -> StockQuote {
-    let regular_market_change = match (chart.regular_market_price, chart.chart_previous_close) {
+fn merge_quote(chart: ChartResult, summary: Option<QuoteSummaryResult>) -> StockQuote {
+    let derived = derive_chart_metrics(&chart);
+    let meta = &chart.meta;
+    let regular_market_change = match (meta.regular_market_price, meta.chart_previous_close) {
         (Some(price), Some(previous_close)) => Some(price - previous_close),
         _ => None,
     };
-    let regular_market_change_percent = match (regular_market_change, chart.chart_previous_close) {
+    let regular_market_change_percent = match (regular_market_change, meta.chart_previous_close) {
         (Some(change), Some(previous_close)) if previous_close != 0.0 => {
             Some(change / previous_close)
         }
@@ -740,13 +764,13 @@ fn merge_quote(chart: ChartMeta, summary: Option<QuoteSummaryResult>) -> StockQu
         .and_then(|value| value.financial_data.as_ref());
 
     StockQuote {
-        symbol: chart.symbol,
+        symbol: meta.symbol.clone(),
         short_name: price
             .and_then(|value| value.short_name.clone())
-            .or(chart.short_name),
+            .or_else(|| meta.short_name.clone()),
         long_name: price
             .and_then(|value| value.long_name.clone())
-            .or(chart.long_name),
+            .or_else(|| meta.long_name.clone()),
         quote_type: price
             .and_then(|value| value.quote_type.clone())
             .or_else(|| quote_type.and_then(|value| value.quote_type.clone())),
@@ -755,14 +779,15 @@ fn merge_quote(chart: ChartMeta, summary: Option<QuoteSummaryResult>) -> StockQu
             .or_else(|| quote_type.and_then(|value| value.exchange.clone())),
         currency_label: price
             .and_then(|value| value.currency.clone())
-            .or(chart.currency)
+            .or_else(|| meta.currency.clone())
             .unwrap_or_default(),
         phase: price
             .and_then(|value| value.market_state.as_ref())
             .map(|value| normalize_market_phase(value))
-            .unwrap_or_else(|| infer_market_phase(chart.current_trading_period.as_ref())),
-        regular_market_price: chart
+            .unwrap_or_else(|| infer_market_phase(meta.current_trading_period.as_ref())),
+        regular_market_price: meta
             .regular_market_price
+            .or(derived.regular_market_price)
             .or_else(|| price.and_then(|value| numeric(value.regular_market_price.as_ref())))
             .or_else(|| financial.and_then(|value| numeric(value.current_price.as_ref()))),
         regular_market_change: regular_market_change
@@ -770,17 +795,27 @@ fn merge_quote(chart: ChartMeta, summary: Option<QuoteSummaryResult>) -> StockQu
         regular_market_change_percent: regular_market_change_percent.or_else(|| {
             price.and_then(|value| numeric(value.regular_market_change_percent.as_ref()))
         }),
-        pre_market_price: price.and_then(|value| numeric(value.pre_market_price.as_ref())),
-        pre_market_change: price.and_then(|value| numeric(value.pre_market_change.as_ref())),
+        pre_market_price: price
+            .and_then(|value| numeric(value.pre_market_price.as_ref()))
+            .or(derived.pre_market_price),
+        pre_market_change: price
+            .and_then(|value| numeric(value.pre_market_change.as_ref()))
+            .or(derived.pre_market_change),
         pre_market_change_percent: price
-            .and_then(|value| numeric(value.pre_market_change_percent.as_ref())),
-        post_market_price: price.and_then(|value| numeric(value.post_market_price.as_ref())),
-        post_market_change: price.and_then(|value| numeric(value.post_market_change.as_ref())),
+            .and_then(|value| numeric(value.pre_market_change_percent.as_ref()))
+            .or(derived.pre_market_change_percent),
+        post_market_price: price
+            .and_then(|value| numeric(value.post_market_price.as_ref()))
+            .or(derived.post_market_price),
+        post_market_change: price
+            .and_then(|value| numeric(value.post_market_change.as_ref()))
+            .or(derived.post_market_change),
         post_market_change_percent: price
-            .and_then(|value| numeric(value.post_market_change_percent.as_ref())),
-        regular_market_day_high: chart.regular_market_day_high,
-        regular_market_day_low: chart.regular_market_day_low,
-        regular_market_volume: chart.regular_market_volume,
+            .and_then(|value| numeric(value.post_market_change_percent.as_ref()))
+            .or(derived.post_market_change_percent),
+        regular_market_day_high: meta.regular_market_day_high.or(derived.regular_market_day_high),
+        regular_market_day_low: meta.regular_market_day_low.or(derived.regular_market_day_low),
+        regular_market_volume: meta.regular_market_volume.or(derived.regular_market_volume),
         market_cap: detail
             .and_then(|value| numeric(value.market_cap.as_ref()))
             .or_else(|| price.and_then(|value| numeric(value.market_cap.as_ref()))),
@@ -795,6 +830,134 @@ fn merge_quote(chart: ChartMeta, summary: Option<QuoteSummaryResult>) -> StockQu
         sector: profile.and_then(|value| value.sector.clone()),
         industry: profile.and_then(|value| value.industry.clone()),
     }
+}
+
+#[derive(Debug, Clone, Default)]
+struct DerivedChartMetrics {
+    regular_market_price: Option<f64>,
+    pre_market_price: Option<f64>,
+    pre_market_change: Option<f64>,
+    pre_market_change_percent: Option<f64>,
+    post_market_price: Option<f64>,
+    post_market_change: Option<f64>,
+    post_market_change_percent: Option<f64>,
+    regular_market_day_high: Option<f64>,
+    regular_market_day_low: Option<f64>,
+    regular_market_volume: Option<f64>,
+}
+
+fn derive_chart_metrics(chart: &ChartResult) -> DerivedChartMetrics {
+    let Some(periods) = chart.meta.current_trading_period.as_ref() else {
+        return DerivedChartMetrics::default();
+    };
+    let Some(series) = chart.indicators.quote.first() else {
+        return DerivedChartMetrics::default();
+    };
+
+    let regular_market_price =
+        latest_close_in_period(&chart.timestamp, &series.close, &periods.regular);
+    let pre_market_price = latest_close_in_period(&chart.timestamp, &series.close, &periods.pre);
+    let post_market_price = latest_close_in_period(&chart.timestamp, &series.close, &periods.post);
+    let regular_market_day_high = max_in_period(&chart.timestamp, &series.high, &periods.regular);
+    let regular_market_day_low = min_in_period(&chart.timestamp, &series.low, &periods.regular);
+    let regular_market_volume = sum_in_period(&chart.timestamp, &series.volume, &periods.regular);
+    let previous_close = chart.meta.chart_previous_close;
+
+    let pre_market_change = match (pre_market_price, previous_close) {
+        (Some(price), Some(previous_close)) => Some(price - previous_close),
+        _ => None,
+    };
+    let pre_market_change_percent = match (pre_market_change, previous_close) {
+        (Some(change), Some(previous_close)) if previous_close != 0.0 => Some(change / previous_close),
+        _ => None,
+    };
+    let post_market_change = match (post_market_price, regular_market_price) {
+        (Some(price), Some(regular_price)) => Some(price - regular_price),
+        _ => None,
+    };
+    let post_market_change_percent = match (post_market_change, regular_market_price) {
+        (Some(change), Some(regular_price)) if regular_price != 0.0 => Some(change / regular_price),
+        _ => None,
+    };
+
+    DerivedChartMetrics {
+        regular_market_price,
+        pre_market_price,
+        pre_market_change,
+        pre_market_change_percent,
+        post_market_price,
+        post_market_change,
+        post_market_change_percent,
+        regular_market_day_high,
+        regular_market_day_low,
+        regular_market_volume,
+    }
+}
+
+fn latest_close_in_period(
+    timestamps: &[i64],
+    closes: &[Option<f64>],
+    period: &TradingPeriod,
+) -> Option<f64> {
+    timestamps
+        .iter()
+        .zip(closes.iter())
+        .filter_map(|(timestamp, close)| {
+            ((*timestamp >= period.start) && (*timestamp <= period.end))
+                .then_some(*close)
+                .flatten()
+        })
+        .last()
+}
+
+fn max_in_period(
+    timestamps: &[i64],
+    values: &[Option<f64>],
+    period: &TradingPeriod,
+) -> Option<f64> {
+    timestamps
+        .iter()
+        .zip(values.iter())
+        .filter_map(|(timestamp, value)| {
+            ((*timestamp >= period.start) && (*timestamp <= period.end))
+                .then_some(*value)
+                .flatten()
+        })
+        .reduce(f64::max)
+}
+
+fn min_in_period(
+    timestamps: &[i64],
+    values: &[Option<f64>],
+    period: &TradingPeriod,
+) -> Option<f64> {
+    timestamps
+        .iter()
+        .zip(values.iter())
+        .filter_map(|(timestamp, value)| {
+            ((*timestamp >= period.start) && (*timestamp <= period.end))
+                .then_some(*value)
+                .flatten()
+        })
+        .reduce(f64::min)
+}
+
+fn sum_in_period(
+    timestamps: &[i64],
+    values: &[Option<f64>],
+    period: &TradingPeriod,
+) -> Option<f64> {
+    let mut total = 0.0;
+    let mut count = 0usize;
+    for (timestamp, value) in timestamps.iter().zip(values.iter()) {
+        if *timestamp >= period.start && *timestamp <= period.end {
+            if let Some(value) = value {
+                total += *value;
+                count += 1;
+            }
+        }
+    }
+    (count > 0).then_some(total)
 }
 
 fn numeric(value: Option<&NumericField>) -> Option<f64> {
@@ -835,8 +998,9 @@ fn infer_market_phase(periods: Option<&CurrentTradingPeriod>) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        PROVIDER_ID, PersistedYahooSession, YahooFinanceClient, build_consent_form_body,
-        decode_html_entities,
+        ChartIndicators, ChartMeta, ChartQuoteSeries, ChartResult, CurrentTradingPeriod,
+        PROVIDER_ID, PersistedYahooSession, TradingPeriod, YahooFinanceClient,
+        build_consent_form_body, decode_html_entities, derive_chart_metrics,
     };
     use dynamo_core::StockQuoteService;
     use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
@@ -880,6 +1044,58 @@ mod tests {
             restored.cookies.get("A1").map(String::as_str),
             Some("cookie-value")
         );
+    }
+
+    #[test]
+    fn derives_pre_market_and_regular_session_values_from_chart() {
+        let chart = ChartResult {
+            meta: ChartMeta {
+                symbol: "NVDA".to_string(),
+                short_name: None,
+                long_name: None,
+                currency: Some("USD".to_string()),
+                regular_market_price: None,
+                regular_market_day_high: None,
+                regular_market_day_low: None,
+                regular_market_volume: None,
+                chart_previous_close: Some(180.0),
+                current_trading_period: Some(CurrentTradingPeriod {
+                    pre: TradingPeriod {
+                        start: 100,
+                        end: 199,
+                    },
+                    regular: TradingPeriod {
+                        start: 200,
+                        end: 299,
+                    },
+                    post: TradingPeriod {
+                        start: 300,
+                        end: 399,
+                    },
+                }),
+            },
+            timestamp: vec![110, 120, 210, 220, 310],
+            indicators: ChartIndicators {
+                quote: vec![ChartQuoteSeries {
+                    close: vec![Some(181.0), Some(182.0), Some(183.0), Some(184.0), Some(185.0)],
+                    high: vec![Some(181.5), Some(182.5), Some(183.5), Some(184.5), Some(185.5)],
+                    low: vec![Some(180.5), Some(181.5), Some(182.5), Some(183.5), Some(184.5)],
+                    volume: vec![Some(10.0), Some(20.0), Some(30.0), Some(40.0), Some(50.0)],
+                }],
+            },
+        };
+
+        let derived = derive_chart_metrics(&chart);
+        assert_eq!(derived.pre_market_price, Some(182.0));
+        assert_eq!(derived.regular_market_price, Some(184.0));
+        assert_eq!(derived.post_market_price, Some(185.0));
+        assert_eq!(derived.pre_market_change, Some(2.0));
+        assert_eq!(derived.pre_market_change_percent, Some(2.0 / 180.0));
+        assert_eq!(derived.post_market_change, Some(1.0));
+        assert_eq!(derived.post_market_change_percent, Some(1.0 / 184.0));
+        assert_eq!(derived.regular_market_day_high, Some(184.5));
+        assert_eq!(derived.regular_market_day_low, Some(182.5));
+        assert_eq!(derived.regular_market_volume, Some(70.0));
     }
 
     #[tokio::test]
