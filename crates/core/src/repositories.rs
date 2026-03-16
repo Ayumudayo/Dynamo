@@ -4,8 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::{
-    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery,
-    Error,
+    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery, Error,
     giveaways::GiveawayRecord,
     invite::{InviteLeaderboardEntry, InviteMemberRecord},
     member_stats::MemberStatsRecord,

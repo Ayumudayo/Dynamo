@@ -2,15 +2,15 @@ use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
 use dynamo_core::{
-    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
-    DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditLogRepository,
-    DashboardAuditScope, DeploymentCommandSettings, DeploymentModuleSettings,
-    DeploymentSettings, DeploymentSettingsRepository, Error, GiveawayRecord, GiveawayStatus,
-    GiveawaysRepository, GuildCommandSettings, GuildModuleSettings, GuildSettings,
-    GuildSettingsRepository, InviteCounters, InviteLeaderboardEntry, InviteMemberRecord,
-    InviteRepository, MemberStatsRecord, MemberStatsRepository, ProviderStateRepository,
-    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
-    SuggestionsRepository, WarningLogRecord, WarningLogRepository,
+    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
+    DashboardAuditLogQuery, DashboardAuditLogRepository, DashboardAuditScope,
+    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
+    DeploymentSettingsRepository, Error, GiveawayRecord, GiveawayStatus, GiveawaysRepository,
+    GuildCommandSettings, GuildModuleSettings, GuildSettings, GuildSettingsRepository,
+    InviteCounters, InviteLeaderboardEntry, InviteMemberRecord, InviteRepository,
+    MemberStatsRecord, MemberStatsRepository, ProviderStateRepository, SuggestionRecord,
+    SuggestionStats, SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository,
+    WarningLogRecord, WarningLogRepository,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -636,9 +636,7 @@ impl WarningLogDocument {
 impl DashboardAuditLogDocument {
     fn from_domain(value: DashboardAuditLogEntry) -> Self {
         Self {
-            id: value
-                .id
-                .and_then(|value| ObjectId::parse_str(&value).ok()),
+            id: value.id.and_then(|value| ObjectId::parse_str(&value).ok()),
             timestamp: BsonDateTime::from_millis(value.timestamp.timestamp_millis()),
             actor_user_id: value.actor_user_id.to_string(),
             actor_username: value.actor_username,
@@ -1110,9 +1108,15 @@ impl WarningLogRepository for MongoPersistence {
 
 #[async_trait]
 impl DashboardAuditLogRepository for MongoPersistence {
-    async fn append(&self, record: DashboardAuditLogEntry) -> Result<DashboardAuditLogEntry, Error> {
+    async fn append(
+        &self,
+        record: DashboardAuditLogEntry,
+    ) -> Result<DashboardAuditLogEntry, Error> {
         let mut document = DashboardAuditLogDocument::from_domain(record);
-        let result = self.dashboard_audit_logs.insert_one(document.clone()).await?;
+        let result = self
+            .dashboard_audit_logs
+            .insert_one(document.clone())
+            .await?;
         document.id = result.inserted_id.as_object_id();
         document.into_domain()
     }
@@ -1158,5 +1162,78 @@ impl DashboardAuditLogRepository for MongoPersistence {
             page_size,
             total,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
+    use crate::MongoInitializationReport;
+    use dynamo_core::{
+        DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
+        DashboardAuditLogQuery, DashboardAuditLogRepository, DashboardAuditScope,
+    };
+
+    #[test]
+    fn initialization_report_can_include_dashboard_audit_collection() {
+        let report = MongoInitializationReport {
+            database_name: DEFAULT_DATABASE_NAME.to_string(),
+            existing_collections: vec!["guild_settings".to_string()],
+            created_collections: vec!["dashboard-audit-logs".to_string()],
+            final_collections: vec![
+                "guild_settings".to_string(),
+                "dashboard-audit-logs".to_string(),
+            ],
+            deployment_settings_seeded: false,
+        };
+
+        assert!(
+            report
+                .final_collections
+                .iter()
+                .any(|value| value == "dashboard-audit-logs")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires MongoDB environment and persists test data"]
+    async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
+        let _ = dotenvy::dotenv();
+        let Some(config) = MongoPersistenceConfig::try_from_env()? else {
+            return Ok(());
+        };
+
+        let store = MongoPersistence::connect(config).await?;
+        store.ensure_initialized().await?;
+        let marker = format!("integration::{}", chrono::Utc::now().timestamp_millis());
+        let entry = DashboardAuditLogEntry {
+            id: None,
+            timestamp: chrono::Utc::now(),
+            actor_user_id: 1,
+            actor_username: "integration-test".to_string(),
+            scope: DashboardAuditScope::Guild,
+            guild_id: Some(42),
+            entity_type: DashboardAuditEntityType::Command,
+            entity_id: marker.clone(),
+            action: DashboardAuditAction::SaveSettings,
+            summary: "Saved guild settings for command integration::test.".to_string(),
+        };
+
+        let saved = store.append(entry).await?;
+        assert!(saved.id.is_some());
+
+        let page = store
+            .list(DashboardAuditLogQuery {
+                scope: DashboardAuditScope::Guild,
+                guild_id: Some(42),
+                entity_type: Some(DashboardAuditEntityType::Command),
+                action: Some(DashboardAuditAction::SaveSettings),
+                page: 1,
+                page_size: 10,
+            })
+            .await?;
+
+        assert!(page.entries.iter().any(|row| row.entity_id == marker));
+        Ok(())
     }
 }

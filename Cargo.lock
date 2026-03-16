@@ -1181,11 +1181,13 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
+ "dotenvy",
  "dynamo-core",
  "futures-util",
  "mongodb",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

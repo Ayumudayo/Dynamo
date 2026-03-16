@@ -19,8 +19,8 @@ use dynamo_core::{
     DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog,
     ModuleCatalogEntry, Persistence, ResolvedCommandState, ResolvedModuleState, SettingsField,
     SettingsFieldKind, SettingsSchema, StartupPhase, StartupReport, StartupStatus,
-    catalog_startup_summary, format_preview_kv_list, format_preview_list,
-    resolve_command_states, resolve_module_states,
+    catalog_startup_summary, format_preview_kv_list, format_preview_list, resolve_command_states,
+    resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -918,7 +918,11 @@ async fn guild_page(
         {
             Ok(page) => page,
             Err(error) => {
-                warn!(guild_id, ?error, "failed to load guild dashboard audit logs");
+                warn!(
+                    guild_id,
+                    ?error,
+                    "failed to load guild dashboard audit logs"
+                );
                 DashboardAuditLogPage::empty(log_page, 20)
             }
         }
@@ -2217,7 +2221,11 @@ fn render_audit_logs_section(
     format!(
         "<section class=\"section-block\" data-testid=\"logs-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Logs</p><h2>Dashboard Audit Trail</h2></div></div><form class=\"toolbar compact-toolbar\" method=\"get\" action=\"{base_path}\"><input type=\"hidden\" name=\"tab\" value=\"logs\" /><select name=\"log_entity\" class=\"toolbar-select\" data-testid=\"logs-entity-filter\"><option value=\"\" {all_entity}>All entities</option><option value=\"module\" {module_selected}>Modules</option><option value=\"command\" {command_selected}>Commands</option></select><select name=\"log_action\" class=\"toolbar-select\" data-testid=\"logs-action-filter\"><option value=\"\" {all_action}>All actions</option><option value=\"toggle\" {toggle_selected}>Toggles</option><option value=\"save_settings\" {save_selected}>Settings saves</option></select><button class=\"button button-secondary button-compact\" type=\"submit\">Apply</button></form><div class=\"panel logs-panel\"><table class=\"logs-table\" data-testid=\"logs-table\"><thead><tr><th>Time</th><th>Actor</th><th>Target</th><th>Action</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table></div><div class=\"logs-pagination\"><span class=\"page-count\">Page {page_number} of {page_total}</span><div class=\"actions compact-actions\">{prev_link}{next_link}</div></div></section>",
         base_path = base_path,
-        all_entity = if entity_type.is_none() { "selected" } else { "" },
+        all_entity = if entity_type.is_none() {
+            "selected"
+        } else {
+            ""
+        },
         module_selected = if entity_type == Some(DashboardAuditEntityType::Module) {
             "selected"
         } else {
@@ -3005,7 +3013,10 @@ async fn patch_deployment_command_settings(
         .cloned()
         .unwrap_or_default();
 
-    match repo.upsert_command_settings(&command_id, next.clone()).await {
+    match repo
+        .upsert_command_settings(&command_id, next.clone())
+        .await
+    {
         Ok(settings) => {
             let mut entries = Vec::new();
             if current.installed != next.installed || current.enabled != next.enabled {
@@ -3566,10 +3577,14 @@ async function toggleGuildCommand(guildId, commandId, enabled, input) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardGuild, escape_html, render_field, render_module_runtime_notice,
+        DashboardGuild, audit_action_label, audit_entity_label, escape_html,
+        render_audit_logs_section, render_field, render_module_runtime_notice,
         sanitize_redirect_target, user_can_manage_guild,
     };
-    use dynamo_core::{SettingsField, SettingsFieldKind};
+    use dynamo_core::{
+        DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
+        DashboardAuditLogPage, DashboardAuditScope, SettingsField, SettingsFieldKind,
+    };
 
     #[test]
     fn escapes_html_characters() {
@@ -3652,5 +3667,39 @@ mod tests {
         .expect("dashboard guild");
 
         assert_eq!(guild.id, 110340875107733504);
+    }
+
+    #[test]
+    fn audit_logs_section_renders_compact_table() {
+        let rendered = render_audit_logs_section(
+            "/guild/42",
+            &DashboardAuditLogPage {
+                entries: vec![DashboardAuditLogEntry {
+                    id: Some("abc123".to_string()),
+                    timestamp: chrono::DateTime::parse_from_rfc3339("2026-03-16T08:00:00Z")
+                        .expect("timestamp")
+                        .with_timezone(&chrono::Utc),
+                    actor_user_id: 7,
+                    actor_username: "Tester".to_string(),
+                    scope: DashboardAuditScope::Guild,
+                    guild_id: Some(42),
+                    entity_type: DashboardAuditEntityType::Command,
+                    entity_id: "etf".to_string(),
+                    action: DashboardAuditAction::SaveSettings,
+                    summary: "Saved guild settings for command etf.".to_string(),
+                }],
+                page: 1,
+                page_size: 20,
+                total: 1,
+            },
+            Some(DashboardAuditEntityType::Command),
+            Some(DashboardAuditAction::SaveSettings),
+        );
+
+        assert!(rendered.contains("Dashboard Audit Trail"));
+        assert!(rendered.contains("data-testid=\"logs-table\""));
+        assert!(rendered.contains("Saved guild settings for command etf."));
+        assert!(rendered.contains(audit_entity_label(DashboardAuditEntityType::Command)));
+        assert!(rendered.contains(audit_action_label(DashboardAuditAction::SaveSettings)));
     }
 }

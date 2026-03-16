@@ -1,7 +1,5 @@
 use anyhow::Result;
-use dynamo_core::{
-    StartupPhase, StartupReport, StartupStatus, format_preview_list,
-};
+use dynamo_core::{StartupPhase, StartupReport, StartupStatus, format_preview_list};
 use dynamo_persistence_mongo::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
 
 #[tokio::main]
@@ -71,16 +69,16 @@ async fn main() -> Result<()> {
     println!(
         "Bootstrap summary | database={} | collections={} | created={} | existing={} | deployment_settings={}",
         database_name,
-        initialization.final_collections.join(", "),
+        format_preview_list(&initialization.final_collections, 5),
         if initialization.created_collections.is_empty() {
             "none".to_string()
         } else {
-            initialization.created_collections.join(", ")
+            format_preview_list(&initialization.created_collections, 5)
         },
         if initialization.existing_collections.is_empty() {
             "none".to_string()
         } else {
-            initialization.existing_collections.join(", ")
+            format_preview_list(&initialization.existing_collections, 5)
         },
         if initialization.deployment_settings_seeded {
             "upserted"

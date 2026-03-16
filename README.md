@@ -122,6 +122,7 @@ If `DISCORD_REGISTER_GLOBALLY=false`, commands are registered only in `DISCORD_D
 Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and start the dashboard and bot with log files and pid files under `logs/`.
 They prebuild `dynamo-bootstrap`, `dynamo-dashboard`, and `dynamo-bot` once with a single `cargo build` invocation, then run the shared binaries from `target/debug/`.
 Bot startup logs include the resolved command scope, loaded module count, loaded leaf command count, and loaded module ids. Dashboard startup logs include the listening URL plus loaded module and command counts.
+Long startup lists are compacted as `count + preview` so the report stays readable in terminals and server logs.
 
 PowerShell:
 
@@ -177,11 +178,15 @@ cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to
 The companion dashboard exposes:
 
 - Discord OAuth login with a Dyno-style server selector for guilds you can manage
+- selector pages that show only global navigation until you enter a deployment or guild context
 - deployment-level module install/enable toggles
 - guild-level module enablement and structured settings forms
 - deployment-level and guild-level command toggles for individual leaf slash commands
+- tabbed `Overview`, `Modules`, `Commands`, and `Logs` views for guild and deployment pages
+- dashboard audit logs for dashboard-originated module and command changes
 - effective module state rendering shared with the runtime guard layer
 - runtime notices for modules with known platform limitations, such as the current DAVE restriction on `music`
+- explicit, human-written command descriptions in the dashboard command catalog
 
 Command sync behavior:
 
@@ -211,6 +216,7 @@ Playwright smoke:
 - Then run the smoke suite with:
   - `PLAYWRIGHT_GUILD_ID=<guild_id> PLAYWRIGHT_STORAGE_STATE=output/playwright/dashboard-auth.json npm run dashboard:smoke`
 - Override the dashboard host if needed with `PLAYWRIGHT_BASE_URL`
+- The smoke suite expects the guild page to expose real `Logs` tab entries after a settings save.
 
 ## Smoke Checklist
 

@@ -15,6 +15,7 @@ Run this checklist after major module, persistence, or dashboard changes.
    - `members`
    - `member-stats`
    - `mod-logs`
+   - `dashboard-audit-logs`
 
 ## Startup
 
@@ -39,11 +40,14 @@ Run this checklist after major module, persistence, or dashboard changes.
 3. Open `/deployment` with an admin account and confirm it loads.
 4. Open `/guild/<guild_id>`.
 5. Change one structured field and confirm it persists after reload.
-6. Confirm module and command cards remain compact at `1440`, `1024`, and `768`.
-7. Confirm command category tabs filter the visible command cards.
-8. Disable one leaf command in deployment settings and confirm it disappears or becomes unavailable after the next sync cycle.
-9. Disable one leaf command in guild settings and confirm the guild-specific command set updates after the next sync cycle.
-10. Optional automated smoke:
+6. Confirm the selector page does not show guild-only section links before a server is selected.
+7. Confirm guild and deployment pages show `Overview`, `Modules`, `Commands`, and `Logs` tabs.
+8. Confirm module and command cards remain compact at `1440`, `1024`, and `768`.
+9. Confirm command category tabs filter the visible command cards.
+10. Open the `Logs` tab after a dashboard mutation and confirm a new audit row appears with the correct actor and target.
+11. Disable one leaf command in deployment settings and confirm it disappears or becomes unavailable after the next sync cycle.
+12. Disable one leaf command in guild settings and confirm the guild-specific command set updates after the next sync cycle.
+13. Optional automated smoke:
    - `npm run dashboard:smoke:install`
    - `npm run dashboard:smoke:auth`
    - `PLAYWRIGHT_GUILD_ID=<guild_id> PLAYWRIGHT_STORAGE_STATE=output/playwright/dashboard-auth.json npm run dashboard:smoke`

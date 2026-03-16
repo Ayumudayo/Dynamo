@@ -4,8 +4,8 @@ use dynamo_core::{
     AppConfig, AppState, CommandCatalog, CommandSyncConfig, DeploymentSettings, DiscordConfig,
     Error, GatewayIntents, GuildSettings, ModuleCatalog, OptionalModulesConfig, Persistence,
     ServiceRegistry, StartupPhase, StartupReport, StartupStatus, aggregate_intents,
-    catalog_startup_summary, format_gateway_intents, format_preview_kv_list,
-    format_preview_list, scope_startup_summary,
+    catalog_startup_summary, format_gateway_intents, format_preview_kv_list, format_preview_list,
+    scope_startup_summary,
 };
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use songbird::SerenityInit;
