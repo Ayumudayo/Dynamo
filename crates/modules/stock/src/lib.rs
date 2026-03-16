@@ -172,6 +172,7 @@ impl Default for StockSettings {
     }
 }
 
+/// Show a quote for one stock symbol and keep it refreshable for a short time.
 #[poise::command(slash_command, guild_only, category = "Stock")]
 async fn stock(
     ctx: Context<'_>,
@@ -229,6 +230,7 @@ async fn stock(
     Ok(())
 }
 
+/// Show the configured ETF watchlist for this guild.
 #[poise::command(slash_command, guild_only, category = "Stock")]
 async fn etf(ctx: Context<'_>) -> Result<(), Error> {
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)

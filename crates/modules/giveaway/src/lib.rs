@@ -84,6 +84,7 @@ impl Default for GiveawaySettings {
     }
 }
 
+/// Manage giveaway lifecycle actions for this guild.
 #[poise::command(
     slash_command,
     guild_only,
@@ -103,6 +104,7 @@ async fn giveaway(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Start a new giveaway message in the configured channel.
 #[poise::command(
     slash_command,
     guild_only,
@@ -190,6 +192,7 @@ async fn giveaway_start(
     Ok(())
 }
 
+/// List the giveaways currently tracked in this guild.
 #[poise::command(
     slash_command,
     guild_only,
@@ -237,6 +240,7 @@ async fn giveaway_list(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// End an active giveaway immediately.
 #[poise::command(
     slash_command,
     guild_only,
@@ -265,6 +269,7 @@ async fn giveaway_end(
     Ok(())
 }
 
+/// Pause an active giveaway so no new entries can be accepted.
 #[poise::command(
     slash_command,
     guild_only,
@@ -301,6 +306,7 @@ async fn giveaway_pause(
     Ok(())
 }
 
+/// Resume a paused giveaway and extend its end time by the paused duration.
 #[poise::command(
     slash_command,
     guild_only,
@@ -340,6 +346,7 @@ async fn giveaway_resume(
     Ok(())
 }
 
+/// Pick a fresh set of winners for an already ended giveaway.
 #[poise::command(
     slash_command,
     guild_only,
@@ -382,6 +389,7 @@ async fn giveaway_reroll(
     Ok(())
 }
 
+/// Edit the schedule, prize, or winner count of an active giveaway.
 #[poise::command(
     slash_command,
     guild_only,

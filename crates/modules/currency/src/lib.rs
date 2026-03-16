@@ -157,6 +157,7 @@ struct ExchangeRateApiResponse {
     error_type: Option<String>,
 }
 
+/// Convert one currency amount into another currency.
 #[poise::command(slash_command, category = "Currency")]
 async fn exchange(
     ctx: Context<'_>,
@@ -193,6 +194,7 @@ async fn exchange(
     Ok(())
 }
 
+/// Show the configured exchange-rate board for one base currency.
 #[poise::command(slash_command, category = "Currency")]
 async fn rate(
     ctx: Context<'_>,

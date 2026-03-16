@@ -26,12 +26,14 @@ impl Module for InfoModule {
     }
 }
 
+/// Check whether the bot is alive and responding.
 #[poise::command(slash_command, category = "Info")]
 async fn ping(ctx: Context<'_>) -> Result<(), Error> {
     ctx.say("Pong!").await?;
     Ok(())
 }
 
+/// Show runtime details such as loaded modules, uptime, and persistence status.
 #[poise::command(slash_command, category = "Info")]
 async fn about(ctx: Context<'_>) -> Result<(), Error> {
     let data = ctx.data();

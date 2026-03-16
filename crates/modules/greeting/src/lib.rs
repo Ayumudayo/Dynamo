@@ -152,6 +152,7 @@ struct GreetingSubject {
     is_bot: bool,
 }
 
+/// Manage greeting previews for the configured welcome and farewell templates.
 #[poise::command(
     slash_command,
     guild_only,
@@ -162,6 +163,7 @@ async fn greeting(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Preview a welcome or farewell message using the current guild settings.
 #[poise::command(
     slash_command,
     guild_only,

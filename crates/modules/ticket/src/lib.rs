@@ -140,6 +140,7 @@ struct TicketCategory {
     staff_role_ids: Vec<u64>,
 }
 
+/// Manage the guild's ticket panel, open tickets, and ticket access controls.
 #[poise::command(
     slash_command,
     guild_only,
@@ -158,6 +159,7 @@ async fn ticket(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Post or refresh the ticket creation panel in a target channel.
 #[poise::command(
     slash_command,
     guild_only,
@@ -214,6 +216,7 @@ async fn ticket_setup(
     Ok(())
 }
 
+/// Set or clear the channel that receives ticket transcripts and close logs.
 #[poise::command(
     slash_command,
     guild_only,
@@ -242,6 +245,7 @@ async fn ticket_log(
     Ok(())
 }
 
+/// Set the maximum number of open ticket channels for this guild.
 #[poise::command(
     slash_command,
     guild_only,
@@ -278,6 +282,7 @@ async fn ticket_limit(
     Ok(())
 }
 
+/// Close the current ticket channel and archive its transcript.
 #[poise::command(slash_command, guild_only, rename = "close")]
 async fn ticket_close(
     ctx: Context<'_>,
@@ -324,6 +329,7 @@ async fn ticket_close(
     Ok(())
 }
 
+/// Close every open ticket channel in the current guild.
 #[poise::command(
     slash_command,
     guild_only,
@@ -364,6 +370,7 @@ async fn ticket_closeall(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Grant a user or role access to the current ticket channel.
 #[poise::command(
     slash_command,
     guild_only,
@@ -419,6 +426,7 @@ async fn ticket_add(
     Ok(())
 }
 
+/// Remove a user or role from the current ticket channel.
 #[poise::command(
     slash_command,
     guild_only,

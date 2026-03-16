@@ -111,6 +111,7 @@ struct SuggestionSettings {
     staff_role_ids: Vec<u64>,
 }
 
+/// Submit a new suggestion to the guild suggestion board.
 #[poise::command(slash_command, guild_only, category = "Suggestion")]
 async fn suggest(
     ctx: Context<'_>,

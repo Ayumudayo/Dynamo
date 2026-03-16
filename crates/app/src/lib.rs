@@ -238,3 +238,46 @@ fn filter_command_recursive(
     command.subcommands = filtered_subcommands;
     Some(command)
 }
+
+#[cfg(test)]
+mod tests {
+    use dynamo_core::OptionalModulesConfig;
+
+    use super::{module_registry, module_registry_with_optional};
+
+    #[test]
+    fn default_registry_commands_have_explicit_descriptions() {
+        let registry = module_registry();
+        for entry in &registry.command_catalog().entries {
+            let description = entry
+                .command
+                .description
+                .as_deref()
+                .expect("command description");
+            assert!(
+                !description.starts_with("Command /"),
+                "command `{}` still uses fallback description: {description}",
+                entry.command.id
+            );
+        }
+    }
+
+    #[test]
+    fn optional_registry_commands_have_explicit_descriptions() {
+        let registry = module_registry_with_optional(&OptionalModulesConfig {
+            giveaway_enabled: true,
+        });
+        for entry in &registry.command_catalog().entries {
+            let description = entry
+                .command
+                .description
+                .as_deref()
+                .expect("command description");
+            assert!(
+                !description.starts_with("Command /"),
+                "command `{}` still uses fallback description: {description}",
+                entry.command.id
+            );
+        }
+    }
+}

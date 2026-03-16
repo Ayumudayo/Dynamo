@@ -119,6 +119,7 @@ enum MusicSourceKind {
     Soundcloud,
 }
 
+/// Control the built-in music playback queue for this guild.
 #[poise::command(
     slash_command,
     guild_only,
@@ -139,6 +140,7 @@ async fn music(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Show the configured music backend, runtime health, and current platform limitation.
 #[poise::command(slash_command, guild_only, rename = "status")]
 async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
@@ -209,6 +211,7 @@ async fn music_status(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Join your current voice channel.
 #[poise::command(slash_command, guild_only, rename = "join")]
 async fn music_join(ctx: Context<'_>) -> Result<(), Error> {
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
@@ -262,6 +265,7 @@ async fn music_join(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Leave the current voice channel and clear the active session.
 #[poise::command(slash_command, guild_only, rename = "leave")]
 async fn music_leave(ctx: Context<'_>) -> Result<(), Error> {
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
@@ -294,6 +298,7 @@ async fn music_leave(ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// Add a YouTube URL or search query to the music queue.
 #[poise::command(slash_command, guild_only, rename = "play")]
 async fn music_play(
     ctx: Context<'_>,
@@ -372,26 +377,31 @@ async fn music_play(
     Ok(())
 }
 
+/// Pause the current track.
 #[poise::command(slash_command, guild_only, rename = "pause")]
 async fn music_pause(ctx: Context<'_>) -> Result<(), Error> {
     run_queue_action(ctx, QueueAction::Pause).await
 }
 
+/// Resume the current track.
 #[poise::command(slash_command, guild_only, rename = "resume")]
 async fn music_resume(ctx: Context<'_>) -> Result<(), Error> {
     run_queue_action(ctx, QueueAction::Resume).await
 }
 
+/// Skip the current track and move to the next queue entry.
 #[poise::command(slash_command, guild_only, rename = "skip")]
 async fn music_skip(ctx: Context<'_>) -> Result<(), Error> {
     run_queue_action(ctx, QueueAction::Skip).await
 }
 
+/// Stop playback and clear the queue.
 #[poise::command(slash_command, guild_only, rename = "stop")]
 async fn music_stop(ctx: Context<'_>) -> Result<(), Error> {
     run_queue_action(ctx, QueueAction::Stop).await
 }
 
+/// Show the current queue snapshot for this guild.
 #[poise::command(slash_command, guild_only, rename = "queue")]
 async fn music_queue(ctx: Context<'_>) -> Result<(), Error> {
     run_queue_action(ctx, QueueAction::Queue).await

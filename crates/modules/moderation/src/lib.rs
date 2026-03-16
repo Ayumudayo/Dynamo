@@ -135,6 +135,7 @@ enum MaxWarnAction {
     Ban,
 }
 
+/// Issue a warning to a guild member.
 #[poise::command(
     slash_command,
     guild_only,
@@ -174,6 +175,7 @@ async fn warn(
     Ok(())
 }
 
+/// Manage the stored warning history for a guild member.
 #[poise::command(
     slash_command,
     guild_only,
@@ -185,6 +187,7 @@ async fn warnings(_ctx: Context<'_>) -> Result<(), Error> {
     Ok(())
 }
 
+/// List the warnings currently stored for a guild member.
 #[poise::command(
     slash_command,
     guild_only,
@@ -241,6 +244,7 @@ async fn warnings_list(
     Ok(())
 }
 
+/// Clear all stored warnings for a guild member.
 #[poise::command(
     slash_command,
     guild_only,
@@ -277,6 +281,7 @@ async fn warnings_clear(
     Ok(())
 }
 
+/// Timeout a guild member for a specific duration.
 #[poise::command(
     slash_command,
     guild_only,
@@ -323,6 +328,7 @@ async fn timeout(
     Ok(())
 }
 
+/// Remove an active timeout from a guild member.
 #[poise::command(
     slash_command,
     guild_only,
@@ -361,6 +367,7 @@ async fn untimeout(
     Ok(())
 }
 
+/// Kick a guild member from the server.
 #[poise::command(
     slash_command,
     guild_only,
@@ -399,6 +406,7 @@ async fn kick(
     Ok(())
 }
 
+/// Ban a user from the server.
 #[poise::command(
     slash_command,
     guild_only,
@@ -439,6 +447,7 @@ async fn ban(
     Ok(())
 }
 
+/// Unban a user by their Discord user ID.
 #[poise::command(
     slash_command,
     guild_only,
@@ -476,6 +485,7 @@ async fn unban(
     Ok(())
 }
 
+/// Ban and immediately unban a user to remove recent messages.
 #[poise::command(
     slash_command,
     guild_only,
@@ -516,6 +526,7 @@ async fn softban(
     Ok(())
 }
 
+/// Change or clear a guild member's nickname.
 #[poise::command(
     slash_command,
     guild_only,
