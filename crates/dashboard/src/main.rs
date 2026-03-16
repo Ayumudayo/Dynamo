@@ -260,7 +260,7 @@ fn build_dashboard_startup_report(
             "config",
             StartupStatus::Ok,
             format!(
-                "Dashboard companion configured for '{}' on {}:{}",
+                "app={} host={}:{}",
                 state.app_info.name, state.config.host, state.config.port
             ),
         )
@@ -280,7 +280,7 @@ fn build_dashboard_startup_report(
             "registry",
             StartupStatus::Ok,
             format!(
-                "Discovered {} modules and {} leaf commands",
+                "modules={} leaf_commands={}",
                 catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
             ),
         )
@@ -299,7 +299,7 @@ fn build_dashboard_startup_report(
             "readiness",
             StartupStatus::Ok,
             format!(
-                "Dashboard persistence ready on '{}' with Discord OAuth configured",
+                "db={} oauth=ready session=in-memory",
                 state
                     .persistence
                     .database_name
@@ -329,7 +329,7 @@ fn build_dashboard_startup_report(
         StartupPhase::new(
             "listening",
             StartupStatus::Ok,
-            format!("Dashboard listening on {}", state.config.public_base_url),
+            format!("url={}", state.config.public_base_url),
         )
         .detail("listening_address", address.to_string())
         .detail(

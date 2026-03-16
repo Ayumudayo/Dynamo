@@ -79,45 +79,58 @@ impl StartupReport {
     }
 
     pub fn log(&self) {
-        let overview = format!(
-            "[startup:{}] overall={} phases={}",
-            self.process,
-            self.overall_status(),
-            self.phases.len()
-        );
-
+        let rendered = self.render();
         match self.overall_status() {
-            StartupStatus::Ok => tracing::info!("{overview}"),
-            StartupStatus::Warn => tracing::warn!("{overview}"),
-            StartupStatus::Error => tracing::error!("{overview}"),
+            StartupStatus::Ok => tracing::info!("{rendered}"),
+            StartupStatus::Warn => tracing::warn!("{rendered}"),
+            StartupStatus::Error => tracing::error!("{rendered}"),
         }
+    }
+
+    pub fn render(&self) -> String {
+        let mut lines = vec![
+            format!(
+                "[startup:{}] overall={} phases={}",
+                self.process,
+                self.overall_status(),
+                self.phases.len()
+            ),
+            render_table(
+                &["phase", "stat", "summary"],
+                &self
+                    .phases
+                    .iter()
+                    .map(|phase| {
+                        vec![
+                            phase.name.to_string(),
+                            phase.status.to_string(),
+                            phase.summary.clone(),
+                        ]
+                    })
+                    .collect::<Vec<_>>(),
+                &[14, 7, 84],
+            ),
+        ];
 
         for phase in &self.phases {
-            let summary = format!(
-                "[startup:{}:{}][{}] {}",
-                self.process, phase.name, phase.status, phase.summary
-            );
-            match phase.status {
-                StartupStatus::Ok => tracing::info!("{summary}"),
-                StartupStatus::Warn => tracing::warn!("{summary}"),
-                StartupStatus::Error => tracing::error!("{summary}"),
+            if phase.details.is_empty() {
+                continue;
             }
 
-            if !phase.details.is_empty() {
-                let details = phase
+            lines.push(String::new());
+            lines.push(format!("[{} details]", phase.name));
+            lines.push(render_table(
+                &["key", "value"],
+                &phase
                     .details
                     .iter()
-                    .map(|(key, value)| format!("{key}={value}"))
-                    .collect::<Vec<_>>()
-                    .join(" | ");
-                let detail_line = format!("[startup:{}:{}] {}", self.process, phase.name, details);
-                match phase.status {
-                    StartupStatus::Ok => tracing::info!("{detail_line}"),
-                    StartupStatus::Warn => tracing::warn!("{detail_line}"),
-                    StartupStatus::Error => tracing::error!("{detail_line}"),
-                }
-            }
+                    .map(|(key, value)| vec![key.clone(), value.clone()])
+                    .collect::<Vec<_>>(),
+                &[24, 80],
+            ));
         }
+
+        lines.join("\n")
     }
 }
 
@@ -226,6 +239,158 @@ pub fn format_kv_list(entries: &[(String, usize)]) -> String {
         .map(|(key, value)| format!("{key}:{value}"))
         .collect::<Vec<_>>()
         .join(", ")
+}
+
+fn render_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[usize]) -> String {
+    let column_count = headers.len();
+    let mut widths = headers
+        .iter()
+        .map(|header| header.len())
+        .collect::<Vec<_>>();
+
+    for row in rows {
+        for (index, cell) in row.iter().enumerate().take(column_count) {
+            widths[index] = widths[index].max(cell.chars().count());
+        }
+    }
+
+    for (index, width) in widths.iter_mut().enumerate() {
+        if let Some(max_width) = max_widths.get(index) {
+            *width = (*width).min(*max_width);
+        }
+    }
+
+    let border = format!(
+        "+{}+",
+        widths
+            .iter()
+            .map(|width| "-".repeat(*width + 2))
+            .collect::<Vec<_>>()
+            .join("+")
+    );
+
+    let mut lines = vec![border.clone()];
+    lines.push(render_table_row(
+        &headers
+            .iter()
+            .map(|value| value.to_string())
+            .collect::<Vec<_>>(),
+        &widths,
+    ));
+    lines.push(border.clone());
+    for row in rows {
+        lines.extend(render_wrapped_rows(row, &widths));
+    }
+    lines.push(border);
+    lines.join("\n")
+}
+
+fn render_wrapped_rows(row: &[String], widths: &[usize]) -> Vec<String> {
+    let wrapped_cells = row
+        .iter()
+        .enumerate()
+        .map(|(index, cell)| wrap_cell(cell, widths[index]))
+        .collect::<Vec<_>>();
+    let row_height = wrapped_cells.iter().map(Vec::len).max().unwrap_or(1);
+    let mut lines = Vec::with_capacity(row_height);
+
+    for line_index in 0..row_height {
+        let columns = wrapped_cells
+            .iter()
+            .zip(widths.iter())
+            .map(|(cell_lines, width)| {
+                cell_lines
+                    .get(line_index)
+                    .cloned()
+                    .unwrap_or_else(|| "".to_string())
+                    .chars()
+                    .collect::<String>()
+                    .chars()
+                    .take(*width)
+                    .collect::<String>()
+            })
+            .collect::<Vec<_>>();
+        lines.push(render_table_row(&columns, widths));
+    }
+
+    lines
+}
+
+fn render_table_row(columns: &[String], widths: &[usize]) -> String {
+    let cells = columns
+        .iter()
+        .zip(widths.iter())
+        .map(|(column, width)| format!(" {:width$} ", column, width = *width))
+        .collect::<Vec<_>>()
+        .join("|");
+    format!("|{}|", cells)
+}
+
+fn wrap_cell(value: &str, width: usize) -> Vec<String> {
+    if value.is_empty() {
+        return vec![String::new()];
+    }
+
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for word in value.split(' ') {
+        if current.is_empty() {
+            if word.chars().count() <= width {
+                current.push_str(word);
+            } else {
+                lines.extend(hard_wrap(word, width));
+            }
+            continue;
+        }
+
+        let next_len = current.chars().count() + 1 + word.chars().count();
+        if next_len <= width {
+            current.push(' ');
+            current.push_str(word);
+        } else {
+            lines.push(current);
+            if word.chars().count() <= width {
+                current = word.to_string();
+            } else {
+                lines.extend(hard_wrap(word, width));
+                current = String::new();
+            }
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines
+    }
+}
+
+fn hard_wrap(value: &str, width: usize) -> Vec<String> {
+    let mut lines = Vec::new();
+    let mut current = String::new();
+
+    for ch in value.chars() {
+        current.push(ch);
+        if current.chars().count() >= width {
+            lines.push(current);
+            current = String::new();
+        }
+    }
+
+    if !current.is_empty() {
+        lines.push(current);
+    }
+
+    if lines.is_empty() {
+        vec![String::new()]
+    } else {
+        lines
+    }
 }
 
 pub fn format_gateway_intents(intents: GatewayIntents) -> String {

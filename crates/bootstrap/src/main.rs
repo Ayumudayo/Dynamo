@@ -18,10 +18,7 @@ async fn main() -> Result<()> {
         StartupPhase::new(
             "connection",
             StartupStatus::Ok,
-            format!(
-                "Connected to MongoDB target for database '{}'",
-                initialization.database_name
-            ),
+            format!("db={}", initialization.database_name),
         )
         .detail("connection_target", connection_target)
         .detail("database", initialization.database_name.clone())
@@ -32,7 +29,7 @@ async fn main() -> Result<()> {
             "initialization",
             StartupStatus::Ok,
             format!(
-                "Collections ready: {} total ({} created, {} already existed)",
+                "collections={} created={} existing={}",
                 initialization.final_collections.len(),
                 initialization.created_collections.len(),
                 initialization.existing_collections.len()

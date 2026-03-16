@@ -161,7 +161,8 @@ fn build_bot_preconnect_report(
             "config",
             StartupStatus::Ok,
             format!(
-                "Loaded Discord config for {command_scope} sync with {} aggregated intents",
+                "scope={command_scope} sync={}s intents={}",
+                config.commands.sync_interval_seconds,
                 format_gateway_intents(intents)
             ),
         )
@@ -189,7 +190,7 @@ fn build_bot_preconnect_report(
             "registry",
             StartupStatus::Ok,
             format!(
-                "Discovered {} modules and {} leaf commands",
+                "modules={} leaf_commands={}",
                 catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
             ),
         )
@@ -214,9 +215,18 @@ fn build_bot_preconnect_report(
             "persistence",
             persistence_status,
             if let Some(database_name) = persistence.database_name.as_deref() {
-                format!("MongoDB persistence ready on '{database_name}'")
+                format!(
+                    "db={} repos={} services={}",
+                    database_name,
+                    repositories.len(),
+                    services_wired.len()
+                )
             } else {
-                "MongoDB not configured; continuing in degraded mode".to_string()
+                format!(
+                    "db=none repos={} services={}",
+                    repositories.len(),
+                    services_wired.len()
+                )
             },
         )
         .detail(
@@ -254,8 +264,10 @@ fn build_bot_preconnect_report(
             "sync_target",
             sync_status,
             format!(
-                "{} active leaf commands will sync to {sync_target} ({} filtered)",
-                scope_summary.active_command_count, scope_summary.filtered_command_count
+                "target={sync_target} active={} filtered={} top_level={}",
+                scope_summary.active_command_count,
+                scope_summary.filtered_command_count,
+                submitted_top_level_commands
             ),
         )
         .detail("target", sync_target)
@@ -337,8 +349,13 @@ async fn build_bot_runtime_report(
                 StartupStatus::Warn
             },
             format!(
-                "Discord ready as '{ready_user}' with {} active leaf commands",
-                scope_summary.active_command_count
+                "user={ready_user} active={} giveaway={}",
+                scope_summary.active_command_count,
+                if optional_modules.giveaway_enabled {
+                    "on"
+                } else {
+                    "off"
+                }
             ),
         )
         .detail("ready_user", ready_user)
