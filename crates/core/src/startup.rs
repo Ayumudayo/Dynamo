@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, env, fmt};
+use std::{collections::BTreeMap, fmt};
 
 use crate::{
     CommandCatalog, DeploymentSettings, GatewayIntents, GuildSettings, ModuleCatalog,
@@ -89,14 +89,11 @@ impl StartupReport {
 
     pub fn render(&self) -> String {
         let mut lines = vec![
-            colorize(
-                &format!(
-                    "[startup:{}] overall={} phases={}",
-                    self.process,
-                    self.overall_status(),
-                    self.phases.len()
-                ),
-                Style::Header,
+            format!(
+                "[startup:{}] overall={} phases={}",
+                self.process,
+                self.overall_status(),
+                self.phases.len()
             ),
             render_table(
                 &["phase", "stat", "summary"],
@@ -121,10 +118,7 @@ impl StartupReport {
             }
 
             lines.push(String::new());
-            lines.push(colorize(
-                &format!("[{} details]", phase.name),
-                Style::Section,
-            ));
+            lines.push(format!("[{} details]", phase.name));
             lines.push(render_detail_block(&phase.details));
         }
 
@@ -297,11 +291,7 @@ fn render_detail_block(details: &[(String, String)]) -> String {
         let wrapped = wrap_cell(value, value_width.max(24));
         for (index, line) in wrapped.into_iter().enumerate() {
             if index == 0 {
-                lines.push(format!(
-                    "  {}  {}",
-                    colorize(&format!("{:width$}", key, width = key_width), Style::Key),
-                    line
-                ));
+                lines.push(format!("  {:width$}  {}", key, line, width = key_width));
             } else {
                 lines.push(format!("  {:width$}  {}", "", line, width = key_width));
             }
@@ -417,31 +407,6 @@ fn hard_wrap(value: &str, width: usize) -> Vec<String> {
     } else {
         lines
     }
-}
-
-#[derive(Clone, Copy)]
-enum Style {
-    Header,
-    Section,
-    Key,
-}
-
-fn colorize(value: &str, style: Style) -> String {
-    if !colors_enabled() {
-        return value.to_string();
-    }
-
-    let code = match style {
-        Style::Header => "\x1b[1;36m",
-        Style::Section => "\x1b[1;34m",
-        Style::Key => "\x1b[2;37m",
-    };
-
-    format!("{code}{value}\x1b[0m")
-}
-
-fn colors_enabled() -> bool {
-    env::var_os("NO_COLOR").is_none()
 }
 
 fn visible_width(value: &str) -> usize {
