@@ -177,21 +177,18 @@ async fn exchange(
         }
     };
     let converted = quote.rate * amount;
-    let embed = CreateEmbed::new()
+    let mut embed = CreateEmbed::new()
         .title(format!("Exchange rate from {from} to {to}"))
         .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new(format!(
-            "Data from Google Finance. {}",
-            source_footer_suffix(quote.source_kind)
-        )))
-        .timestamp(Timestamp::from_unix_timestamp(
-            quote.source_timestamp.timestamp(),
-        )?)
+        .footer(CreateEmbedFooter::new("Data from Google Finance."))
+        .timestamp(Timestamp::now())
         .field("From", format!("{} {from}", format_decimal(amount)), false)
-        .field("To", format!("{} {to}", format_decimal(converted)), false)
-        .field("Data Source", source_label(quote.source_kind), true)
-        .field("As of", quote.source_timestamp_text, true);
+        .field("To", format!("{} {to}", format_decimal(converted)), false);
+
+    if quote.source_kind == dynamo_core::ExchangeRateSourceKind::Cache {
+        embed = embed.field("Data Source", source_label(quote.source_kind), false);
+    }
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
@@ -233,23 +230,11 @@ async fn rate(
     });
 
     let responses = join_all(requests).await;
-    let timestamps = responses
-        .iter()
-        .filter_map(|(_, quote)| {
-            quote
-                .as_ref()
-                .map(|quote| quote.source_timestamp_text.clone())
-        })
-        .collect::<Vec<_>>();
-    if timestamps.is_empty() {
+    if responses.iter().all(|(_, quote)| quote.is_none()) {
         ctx.say("Failed to fetch latest exchange data and no cached data is available.")
             .await?;
         return Ok(());
     }
-    let uniform_timestamp = timestamps
-        .first()
-        .filter(|first| timestamps.iter().all(|timestamp| timestamp == *first))
-        .cloned();
     let mut embed = CreateEmbed::new()
         .title(format!(
             "Exchange rate from {} {from}",
@@ -257,10 +242,8 @@ async fn rate(
         ))
         .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new(match uniform_timestamp {
-            Some(timestamp) => format!("Data from Google Finance. As of {timestamp}."),
-            None => "Data from Google Finance. Timestamps vary by row.".to_string(),
-        }));
+        .footer(CreateEmbedFooter::new("Data from Google Finance."))
+        .timestamp(Timestamp::now());
 
     for (currency, rate) in responses {
         let name = match currency.as_str() {
@@ -276,12 +259,12 @@ async fn rate(
         embed = embed.field(
             name,
             rate.map(|quote| {
-                format!(
-                    "{}\n{} · {}",
-                    format_decimal(quote.rate * amount),
-                    source_label(quote.source_kind),
-                    quote.source_timestamp_text
-                )
+                let value = format_decimal(quote.rate * amount);
+                if quote.source_kind == dynamo_core::ExchangeRateSourceKind::Cache {
+                    format!("{value}\nCached fallback")
+                } else {
+                    value
+                }
             })
             .unwrap_or_else(|| "Failed to fetch".to_string()),
             true,
@@ -518,13 +501,6 @@ fn source_label(kind: dynamo_core::ExchangeRateSourceKind) -> &'static str {
     match kind {
         dynamo_core::ExchangeRateSourceKind::Live => "Live",
         dynamo_core::ExchangeRateSourceKind::Cache => "Cached fallback",
-    }
-}
-
-fn source_footer_suffix(kind: dynamo_core::ExchangeRateSourceKind) -> &'static str {
-    match kind {
-        dynamo_core::ExchangeRateSourceKind::Live => "Live quote.",
-        dynamo_core::ExchangeRateSourceKind::Cache => "Cached fallback.",
     }
 }
 
