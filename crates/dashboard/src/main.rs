@@ -1517,7 +1517,7 @@ fn render_guild_module_modal(
         &modal_id_for_module("guild", entry.module.id),
         entry.module.display_name,
         &format!(
-            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchGuildModule(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save</button><span id=\"guild-status-{}\" style=\"margin-left:8px\"></span></form>",
+            "<p class=\"detail-meta\"><strong>Status:</strong> {}</p>{}<form onsubmit=\"return patchGuildModule(event, '{}', '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save</button><span id=\"guild-status-{}\" style=\"margin-left:8px\"></span></form>",
             render_guild_status(resolved),
             runtime_notice,
             guild_id,
@@ -1590,7 +1590,7 @@ fn render_guild_command_modals(
                 &modal_id_for_command("guild", &entry.command.id),
                 &entry.command.display_name,
                 &format!(
-                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchGuildCommand(event, {}, '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{}\" style=\"margin-left:8px\"></span></form>",
+                    "<p class=\"detail-meta\"><strong>Status:</strong> {}</p><form onsubmit=\"return patchGuildCommand(event, '{}', '{}')\"><label><input type=\"checkbox\" name=\"enabled\" {}/> Enabled in guild</label>{}<br/><button type=\"submit\">Save command settings</button><span id=\"guild-command-status-{}\" style=\"margin-left:8px\"></span></form>",
                     resolved
                         .map(render_guild_command_status)
                         .unwrap_or_else(|| "unknown".to_string()),
@@ -1624,13 +1624,13 @@ fn render_module_toggle(
 ) -> String {
     match scope {
         "guild" => format!(
-            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildModule({}, '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
+            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildModule('{}', '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
             if resolved.effective_enabled {
                 "checked"
             } else {
                 ""
             },
-            guild.map(|g| g.guild_id).unwrap_or_default(),
+            guild.map(|g| g.guild_id.to_string()).unwrap_or_default(),
             escape_html(module_id),
         ),
         _ => format!(
@@ -1654,13 +1654,13 @@ fn render_command_toggle(
 ) -> String {
     match scope {
         "guild" => format!(
-            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildCommand({}, '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
+            "<label class=\"toggle-switch\"><input type=\"checkbox\" {} onchange=\"toggleGuildCommand('{}', '{}', this.checked)\" /><span class=\"toggle-slider\"></span></label>",
             if resolved.effective_enabled {
                 "checked"
             } else {
                 ""
             },
-            guild.map(|g| g.guild_id).unwrap_or_default(),
+            guild.map(|g| g.guild_id.to_string()).unwrap_or_default(),
             escape_html(command_id),
         ),
         _ => format!(
