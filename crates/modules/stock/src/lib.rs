@@ -668,6 +668,7 @@ fn market_status_emoji(phase: &str) -> &'static str {
 fn format_money(label: &str, value: Option<f64>) -> String {
     match value {
         Some(value) if label.is_empty() => format!("{value:.2}"),
+        Some(value) if label.eq_ignore_ascii_case("USD") => format!("${value:.2}"),
         Some(value) if label.len() == 3 && label.chars().all(|ch| ch.is_ascii_uppercase()) => {
             format!("{label} {value:.2}")
         }
@@ -1040,7 +1041,9 @@ async fn handle_refresh_button(
 
 #[cfg(test)]
 mod tests {
-    use super::{current_market_data, normalize_symbol, normalize_symbols, total_updates};
+    use super::{
+        current_market_data, format_money, normalize_symbol, normalize_symbols, total_updates,
+    };
     use dynamo_core::StockQuote;
 
     #[test]
@@ -1080,5 +1083,10 @@ mod tests {
         assert_eq!(current.price, Some(101.0));
         assert_eq!(current.change, Some(1.0));
         assert_eq!(current.change_percent, Some(0.01));
+    }
+
+    #[test]
+    fn renders_usd_with_dollar_symbol() {
+        assert_eq!(format_money("USD", Some(50.72)), "$50.72");
     }
 }
