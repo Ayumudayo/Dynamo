@@ -2,18 +2,20 @@ use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
 use dynamo_core::{
-    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
-    DeploymentSettingsRepository, Error, GiveawayRecord, GiveawayStatus, GiveawaysRepository,
-    GuildCommandSettings, GuildModuleSettings, GuildSettings, GuildSettingsRepository,
-    InviteCounters, InviteLeaderboardEntry, InviteMemberRecord, InviteRepository,
-    MemberStatsRecord, MemberStatsRepository, ProviderStateRepository, SuggestionRecord,
-    SuggestionStats, SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository,
-    WarningLogRecord, WarningLogRepository,
+    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
+    DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditLogRepository,
+    DashboardAuditScope, DeploymentCommandSettings, DeploymentModuleSettings,
+    DeploymentSettings, DeploymentSettingsRepository, Error, GiveawayRecord, GiveawayStatus,
+    GiveawaysRepository, GuildCommandSettings, GuildModuleSettings, GuildSettings,
+    GuildSettingsRepository, InviteCounters, InviteLeaderboardEntry, InviteMemberRecord,
+    InviteRepository, MemberStatsRecord, MemberStatsRepository, ProviderStateRepository,
+    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
+    SuggestionsRepository, WarningLogRecord, WarningLogRepository,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
     Client, Collection, Database,
-    bson::{DateTime as BsonDateTime, doc, from_bson, to_bson},
+    bson::{DateTime as BsonDateTime, doc, from_bson, oid::ObjectId, to_bson},
 };
 use serde::{Deserialize, Serialize};
 
@@ -82,6 +84,7 @@ pub struct MongoPersistence {
     invite_members: Collection<InviteMemberDocument>,
     member_stats: Collection<MemberStatsDocument>,
     warning_logs: Collection<WarningLogDocument>,
+    dashboard_audit_logs: Collection<DashboardAuditLogDocument>,
 }
 
 impl MongoPersistence {
@@ -97,6 +100,8 @@ impl MongoPersistence {
         let invite_members = database.collection::<InviteMemberDocument>("members");
         let member_stats = database.collection::<MemberStatsDocument>("member-stats");
         let warning_logs = database.collection::<WarningLogDocument>("mod-logs");
+        let dashboard_audit_logs =
+            database.collection::<DashboardAuditLogDocument>("dashboard-audit-logs");
 
         Ok(Self {
             database,
@@ -108,6 +113,7 @@ impl MongoPersistence {
             invite_members,
             member_stats,
             warning_logs,
+            dashboard_audit_logs,
         })
     }
 
@@ -170,6 +176,16 @@ impl MongoPersistence {
         if !existing_collections.iter().any(|name| name == "mod-logs") {
             self.database.create_collection("mod-logs").await?;
             created_collections.push("mod-logs".to_string());
+        }
+
+        if !existing_collections
+            .iter()
+            .any(|name| name == "dashboard-audit-logs")
+        {
+            self.database
+                .create_collection("dashboard-audit-logs")
+                .await?;
+            created_collections.push("dashboard-audit-logs".to_string());
         }
 
         let deployment_settings_result = self
@@ -395,6 +411,22 @@ struct WarningLogDocument {
     created_at: BsonDateTime,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct DashboardAuditLogDocument {
+    #[serde(rename = "_id", skip_serializing_if = "Option::is_none")]
+    id: Option<ObjectId>,
+    timestamp: BsonDateTime,
+    actor_user_id: String,
+    actor_username: String,
+    scope: DashboardAuditScope,
+    #[serde(default)]
+    guild_id: Option<String>,
+    entity_type: DashboardAuditEntityType,
+    entity_id: String,
+    action: DashboardAuditAction,
+    summary: String,
+}
+
 impl SuggestionDocument {
     fn from_domain(value: SuggestionRecord) -> Self {
         Self {
@@ -597,6 +629,43 @@ impl WarningLogDocument {
             admin_id: parse_snowflake(&self.admin_id, "warning log admin id")?,
             admin_tag: self.admin_tag,
             created_at: self.created_at.to_system_time().into(),
+        })
+    }
+}
+
+impl DashboardAuditLogDocument {
+    fn from_domain(value: DashboardAuditLogEntry) -> Self {
+        Self {
+            id: value
+                .id
+                .and_then(|value| ObjectId::parse_str(&value).ok()),
+            timestamp: BsonDateTime::from_millis(value.timestamp.timestamp_millis()),
+            actor_user_id: value.actor_user_id.to_string(),
+            actor_username: value.actor_username,
+            scope: value.scope,
+            guild_id: value.guild_id.map(|value| value.to_string()),
+            entity_type: value.entity_type,
+            entity_id: value.entity_id,
+            action: value.action,
+            summary: value.summary,
+        }
+    }
+
+    fn into_domain(self) -> Result<DashboardAuditLogEntry, Error> {
+        Ok(DashboardAuditLogEntry {
+            id: self.id.map(|value| value.to_hex()),
+            timestamp: self.timestamp.to_system_time().into(),
+            actor_user_id: parse_snowflake(&self.actor_user_id, "dashboard audit actor user id")?,
+            actor_username: self.actor_username,
+            scope: self.scope,
+            guild_id: self
+                .guild_id
+                .map(|value| parse_snowflake(&value, "dashboard audit guild id"))
+                .transpose()?,
+            entity_type: self.entity_type,
+            entity_id: self.entity_id,
+            action: self.action,
+            summary: self.summary,
         })
     }
 }
@@ -1036,5 +1105,58 @@ impl WarningLogRepository for MongoPersistence {
             })
             .await?;
         Ok(deleted.deleted_count)
+    }
+}
+
+#[async_trait]
+impl DashboardAuditLogRepository for MongoPersistence {
+    async fn append(&self, record: DashboardAuditLogEntry) -> Result<DashboardAuditLogEntry, Error> {
+        let mut document = DashboardAuditLogDocument::from_domain(record);
+        let result = self.dashboard_audit_logs.insert_one(document.clone()).await?;
+        document.id = result.inserted_id.as_object_id();
+        document.into_domain()
+    }
+
+    async fn list(&self, query: DashboardAuditLogQuery) -> Result<DashboardAuditLogPage, Error> {
+        let page = query.page.max(1);
+        let page_size = query.page_size.clamp(1, 100);
+        let skip = page.saturating_sub(1).saturating_mul(page_size);
+
+        let mut filter = doc! {
+            "scope": to_bson(&query.scope)?,
+        };
+        if let Some(guild_id) = query.guild_id {
+            filter.insert("guild_id", guild_id.to_string());
+        }
+        if let Some(entity_type) = query.entity_type {
+            filter.insert("entity_type", to_bson(&entity_type)?);
+        }
+        if let Some(action) = query.action {
+            filter.insert("action", to_bson(&action)?);
+        }
+
+        let total = self
+            .dashboard_audit_logs
+            .count_documents(filter.clone())
+            .await?;
+        let mut cursor = self
+            .dashboard_audit_logs
+            .find(filter)
+            .sort(doc! { "timestamp": -1, "_id": -1 })
+            .skip(skip)
+            .limit(page_size as i64)
+            .await?;
+
+        let mut entries = Vec::new();
+        while let Some(document) = cursor.try_next().await? {
+            entries.push(document.into_domain()?);
+        }
+
+        Ok(DashboardAuditLogPage {
+            entries,
+            page,
+            page_size,
+            total,
+        })
     }
 }

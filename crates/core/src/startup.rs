@@ -233,6 +233,46 @@ pub fn format_kv_list(entries: &[(String, usize)]) -> String {
         .join(", ")
 }
 
+pub fn format_preview_list(entries: &[String], limit: usize) -> String {
+    if entries.is_empty() {
+        return "0 total | none".to_string();
+    }
+
+    let preview = entries
+        .iter()
+        .take(limit.max(1))
+        .cloned()
+        .collect::<Vec<_>>()
+        .join(", ");
+    let suffix = if entries.len() > limit.max(1) {
+        ", ..."
+    } else {
+        ""
+    };
+
+    format!("{} total | {}{}", entries.len(), preview, suffix)
+}
+
+pub fn format_preview_kv_list(entries: &[(String, usize)], limit: usize) -> String {
+    if entries.is_empty() {
+        return "0 total | none".to_string();
+    }
+
+    let preview = entries
+        .iter()
+        .take(limit.max(1))
+        .map(|(key, value)| format!("{key}:{value}"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let suffix = if entries.len() > limit.max(1) {
+        ", ..."
+    } else {
+        ""
+    };
+
+    format!("{} total | {}{}", entries.len(), preview, suffix)
+}
+
 fn render_table(headers: &[&str], rows: &[Vec<String>], max_widths: &[usize]) -> String {
     let column_count = headers.len();
     let mut widths = headers

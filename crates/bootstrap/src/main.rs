@@ -1,5 +1,7 @@
 use anyhow::Result;
-use dynamo_core::{StartupPhase, StartupReport, StartupStatus};
+use dynamo_core::{
+    StartupPhase, StartupReport, StartupStatus, format_preview_list,
+};
 use dynamo_persistence_mongo::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
 
 #[tokio::main]
@@ -40,7 +42,7 @@ async fn main() -> Result<()> {
             if initialization.created_collections.is_empty() {
                 "none".to_string()
             } else {
-                initialization.created_collections.join(", ")
+                format_preview_list(&initialization.created_collections, 5)
             },
         )
         .detail(
@@ -48,12 +50,12 @@ async fn main() -> Result<()> {
             if initialization.existing_collections.is_empty() {
                 "none".to_string()
             } else {
-                initialization.existing_collections.join(", ")
+                format_preview_list(&initialization.existing_collections, 5)
             },
         )
         .detail(
             "final_collections",
-            initialization.final_collections.join(", "),
+            format_preview_list(&initialization.final_collections, 5),
         )
         .detail(
             "deployment_settings",

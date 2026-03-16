@@ -1,4 +1,5 @@
 mod config;
+mod dashboard_audit;
 mod enablement;
 mod giveaways;
 mod guard;
@@ -14,6 +15,10 @@ mod suggestions;
 mod warnings;
 
 pub use config::{AppConfig, CommandSyncConfig, DiscordConfig, OptionalModulesConfig};
+pub use dashboard_audit::{
+    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
+    DashboardAuditLogQuery, DashboardAuditScope,
+};
 pub use enablement::{
     ResolvedCommandState, ResolvedModuleState, resolve_command_state, resolve_command_states,
     resolve_module_state, resolve_module_states,
@@ -35,9 +40,9 @@ pub use module::{
 };
 pub use registry::{AppState, ModuleRegistry, aggregate_intents};
 pub use repositories::{
-    DeploymentSettingsRepository, GiveawaysRepository, GuildSettingsRepository, InviteRepository,
-    MemberStatsRepository, Persistence, ProviderStateRepository, SuggestionsRepository,
-    WarningLogRepository,
+    DashboardAuditLogRepository, DeploymentSettingsRepository, GiveawaysRepository,
+    GuildSettingsRepository, InviteRepository, MemberStatsRepository, Persistence,
+    ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
 };
 pub use services::{
     MusicBackendConfig, MusicBackendKind, MusicBackendStatus, MusicEnqueueResult,
@@ -49,7 +54,8 @@ pub use settings::{
 };
 pub use startup::{
     CatalogStartupSummary, ScopeStartupSummary, StartupPhase, StartupReport, StartupStatus,
-    catalog_startup_summary, format_gateway_intents, format_kv_list, scope_startup_summary,
+    catalog_startup_summary, format_gateway_intents, format_kv_list, format_preview_kv_list,
+    format_preview_list, scope_startup_summary,
 };
 pub use suggestions::{
     SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,

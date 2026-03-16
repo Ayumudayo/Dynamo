@@ -4,6 +4,7 @@ use async_trait::async_trait;
 use serde_json::Value;
 
 use crate::{
+    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery,
     Error,
     giveaways::GiveawayRecord,
     invite::{InviteLeaderboardEntry, InviteMemberRecord},
@@ -117,6 +118,12 @@ pub trait WarningLogRepository: Send + Sync {
     async fn clear_for_member(&self, guild_id: u64, member_id: u64) -> Result<u64, Error>;
 }
 
+#[async_trait]
+pub trait DashboardAuditLogRepository: Send + Sync {
+    async fn append(&self, entry: DashboardAuditLogEntry) -> Result<DashboardAuditLogEntry, Error>;
+    async fn list(&self, query: DashboardAuditLogQuery) -> Result<DashboardAuditLogPage, Error>;
+}
+
 #[derive(Clone, Default)]
 pub struct Persistence {
     pub database_name: Option<String>,
@@ -128,6 +135,7 @@ pub struct Persistence {
     pub invites: Option<Arc<dyn InviteRepository>>,
     pub member_stats: Option<Arc<dyn MemberStatsRepository>>,
     pub warning_logs: Option<Arc<dyn WarningLogRepository>>,
+    pub dashboard_audit_logs: Option<Arc<dyn DashboardAuditLogRepository>>,
 }
 
 impl Persistence {
@@ -141,6 +149,7 @@ impl Persistence {
         invites: Option<Arc<dyn InviteRepository>>,
         member_stats: Option<Arc<dyn MemberStatsRepository>>,
         warning_logs: Option<Arc<dyn WarningLogRepository>>,
+        dashboard_audit_logs: Option<Arc<dyn DashboardAuditLogRepository>>,
     ) -> Self {
         Self {
             database_name,
@@ -152,6 +161,7 @@ impl Persistence {
             invites,
             member_stats,
             warning_logs,
+            dashboard_audit_logs,
         }
     }
 
@@ -245,6 +255,26 @@ impl Persistence {
                 created_at: chrono::Utc::now(),
                 updated_at: chrono::Utc::now(),
             }),
+        }
+    }
+
+    pub async fn append_dashboard_audit_log(
+        &self,
+        entry: DashboardAuditLogEntry,
+    ) -> Result<Option<DashboardAuditLogEntry>, Error> {
+        match &self.dashboard_audit_logs {
+            Some(repo) => repo.append(entry).await.map(Some),
+            None => Ok(None),
+        }
+    }
+
+    pub async fn list_dashboard_audit_logs(
+        &self,
+        query: DashboardAuditLogQuery,
+    ) -> Result<DashboardAuditLogPage, Error> {
+        match &self.dashboard_audit_logs {
+            Some(repo) => repo.list(query).await,
+            None => Ok(DashboardAuditLogPage::empty(query.page, query.page_size)),
         }
     }
 }

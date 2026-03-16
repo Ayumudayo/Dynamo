@@ -4,7 +4,8 @@ use dynamo_core::{
     AppConfig, AppState, CommandCatalog, CommandSyncConfig, DeploymentSettings, DiscordConfig,
     Error, GatewayIntents, GuildSettings, ModuleCatalog, OptionalModulesConfig, Persistence,
     ServiceRegistry, StartupPhase, StartupReport, StartupStatus, aggregate_intents,
-    catalog_startup_summary, format_gateway_intents, format_kv_list, scope_startup_summary,
+    catalog_startup_summary, format_gateway_intents, format_preview_kv_list,
+    format_preview_list, scope_startup_summary,
 };
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use songbird::SerenityInit;
@@ -195,14 +196,17 @@ fn build_bot_preconnect_report(
                 catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
             ),
         )
-        .detail("module_ids", catalog_summary.module_ids.join(", "))
+        .detail(
+            "module_ids",
+            format_preview_list(&catalog_summary.module_ids, 5),
+        )
         .detail(
             "leaf_command_count",
             catalog_summary.discovered_leaf_command_count.to_string(),
         )
         .detail(
             "per_module_command_counts",
-            format_kv_list(&catalog_summary.per_module_command_counts),
+            format_preview_kv_list(&catalog_summary.per_module_command_counts, 5),
         ),
     );
 
@@ -242,7 +246,7 @@ fn build_bot_preconnect_report(
             if repositories.is_empty() {
                 "none".to_string()
             } else {
-                repositories.join(", ")
+                format_preview_list(&repositories, 5)
             },
         )
         .detail(
@@ -250,7 +254,7 @@ fn build_bot_preconnect_report(
             if services_wired.is_empty() {
                 "none".to_string()
             } else {
-                services_wired.join(", ")
+                format_preview_list(&services_wired, 5)
             },
         ),
     );
@@ -293,7 +297,7 @@ fn build_bot_preconnect_report(
             if scope_summary.active_module_ids.is_empty() {
                 "none".to_string()
             } else {
-                scope_summary.active_module_ids.join(", ")
+                format_preview_list(&scope_summary.active_module_ids, 5)
             },
         )
         .detail(
@@ -435,6 +439,9 @@ fn collect_persistence_labels(persistence: &Persistence) -> Vec<String> {
     }
     if persistence.warning_logs.is_some() {
         labels.push("warning_logs".to_string());
+    }
+    if persistence.dashboard_audit_logs.is_some() {
+        labels.push("dashboard_audit_logs".to_string());
     }
     labels
 }

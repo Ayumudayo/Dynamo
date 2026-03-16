@@ -7,19 +7,20 @@ use std::{
 
 use axum::{
     Json, Router,
-    extract::Path,
-    extract::State,
+    extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dynamo_core::{
-    CommandCatalog, CommandCatalogEntry, DeploymentModuleSettings, DeploymentSettings,
-    GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence, ResolvedCommandState,
-    ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, StartupPhase,
-    StartupReport, StartupStatus, catalog_startup_summary, format_kv_list, resolve_command_states,
-    resolve_module_states,
+    CommandCatalog, CommandCatalogEntry, DashboardAuditAction, DashboardAuditEntityType,
+    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditScope,
+    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog,
+    ModuleCatalogEntry, Persistence, ResolvedCommandState, ResolvedModuleState, SettingsField,
+    SettingsFieldKind, SettingsSchema, StartupPhase, StartupReport, StartupStatus,
+    catalog_startup_summary, format_preview_kv_list, format_preview_list,
+    resolve_command_states, resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -218,10 +219,13 @@ fn validate_dashboard_persistence(
                 catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
             ),
         )
-        .detail("module_ids", catalog_summary.module_ids.join(", "))
+        .detail(
+            "module_ids",
+            format_preview_list(&catalog_summary.module_ids, 5),
+        )
         .detail(
             "per_category_command_counts",
-            format_kv_list(&catalog_summary.per_category_command_counts),
+            format_preview_kv_list(&catalog_summary.per_category_command_counts, 5),
         ),
     );
     report.add_phase(
@@ -290,14 +294,17 @@ fn build_dashboard_startup_report(
                 catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
             ),
         )
-        .detail("module_ids", catalog_summary.module_ids.join(", "))
+        .detail(
+            "module_ids",
+            format_preview_list(&catalog_summary.module_ids, 5),
+        )
         .detail(
             "leaf_command_count",
             catalog_summary.discovered_leaf_command_count.to_string(),
         )
         .detail(
             "per_category_command_counts",
-            format_kv_list(&catalog_summary.per_category_command_counts),
+            format_preview_kv_list(&catalog_summary.per_category_command_counts, 5),
         ),
     );
     report.add_phase(
@@ -435,9 +442,64 @@ struct GuildCard {
     invite_url: String,
 }
 
+#[derive(Debug, Deserialize, Clone, Default)]
+struct DashboardPageQuery {
+    tab: Option<String>,
+    log_entity: Option<String>,
+    log_action: Option<String>,
+    log_page: Option<u64>,
+}
+
 #[derive(Debug, Deserialize)]
 struct LoginQuery {
     redirect: Option<String>,
+}
+
+fn normalized_tab(value: Option<&str>) -> &'static str {
+    match value {
+        Some("modules") => "modules",
+        Some("commands") => "commands",
+        Some("logs") => "logs",
+        _ => "overview",
+    }
+}
+
+fn parse_audit_entity_filter(value: Option<&str>) -> Option<DashboardAuditEntityType> {
+    match value {
+        Some("module") => Some(DashboardAuditEntityType::Module),
+        Some("command") => Some(DashboardAuditEntityType::Command),
+        _ => None,
+    }
+}
+
+fn parse_audit_action_filter(value: Option<&str>) -> Option<DashboardAuditAction> {
+    match value {
+        Some("toggle") => Some(DashboardAuditAction::Toggle),
+        Some("save_settings") => Some(DashboardAuditAction::SaveSettings),
+        _ => None,
+    }
+}
+
+fn page_query_for_tab(tab: &str) -> String {
+    format!("?tab={tab}")
+}
+
+fn page_query_for_logs(
+    entity_type: Option<DashboardAuditEntityType>,
+    action: Option<DashboardAuditAction>,
+    page: u64,
+) -> String {
+    let mut params = vec!["tab=logs".to_string()];
+    if let Some(entity_type) = entity_type {
+        params.push(format!("log_entity={}", entity_type.as_str()));
+    }
+    if let Some(action) = action {
+        params.push(format!("log_action={}", action.as_str()));
+    }
+    if page > 1 {
+        params.push(format!("log_page={page}"));
+    }
+    format!("?{}", params.join("&"))
 }
 
 #[derive(Debug, Deserialize)]
@@ -576,7 +638,11 @@ async fn selector(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> R
     Html(render_selector_page(&state, &session, &guild_cards)).into_response()
 }
 
-async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
+async fn deployment_page(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+    Query(query): Query<DashboardPageQuery>,
+) -> Response {
     let Some(session) = load_session(&state, &jar).await else {
         return Redirect::to("/login?redirect=%2Fdeployment").into_response();
     };
@@ -595,6 +661,10 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
         .deployment_settings_or_default()
         .await
         .unwrap_or_default();
+    let active_tab = normalized_tab(query.tab.as_deref());
+    let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
+    let log_action = parse_audit_action_filter(query.log_action.as_deref());
+    let log_page = query.log_page.unwrap_or(1).max(1);
     let resolved_states = resolve_module_states(&state.module_catalog, &settings, None);
     let resolved_command_states = resolve_command_states(
         &state.module_catalog,
@@ -659,13 +729,53 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
             ),
         ],
     );
-    let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Activity</p><h2>Runtime Notes</h2></div></div>{runtime_notices}</section><section id=\"modules\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid\">{command_cards}</div></section>{module_modals}{command_modals}<script>{script}</script>",
-        overview = overview,
-        runtime_notices = render_runtime_notices(&state.module_catalog),
+    let overview_panel = format!(
+        "<section class=\"section-block\" data-testid=\"deployment-overview-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Deployment Summary</h2></div></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Scope</h3><p>Deployment settings define the default module installation and command availability used across every guild.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
+        runtime_notices = render_runtime_notices(&state.module_catalog)
+    );
+    let modules_section = format!(
+        "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section>",
         module_cards = module_cards,
+    );
+    let commands_section = format!(
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
+    );
+    let logs_page = if active_tab == "logs" {
+        match state
+            .persistence
+            .list_dashboard_audit_logs(DashboardAuditLogQuery {
+                scope: DashboardAuditScope::Deployment,
+                guild_id: None,
+                entity_type: log_entity,
+                action: log_action,
+                page: log_page,
+                page_size: 20,
+            })
+            .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                warn!(?error, "failed to load deployment dashboard audit logs");
+                DashboardAuditLogPage::empty(log_page, 20)
+            }
+        }
+    } else {
+        DashboardAuditLogPage::empty(log_page, 20)
+    };
+    let logs_section = render_audit_logs_section("/deployment", &logs_page, log_entity, log_action);
+    let active_section = match active_tab {
+        "modules" => modules_section.as_str(),
+        "commands" => commands_section.as_str(),
+        "logs" => logs_section.as_str(),
+        _ => overview_panel.as_str(),
+    };
+    let content = format!(
+        "{overview}{page_tabs}{active_section}{module_modals}{command_modals}<script>{script}</script>",
+        overview = overview,
+        page_tabs = render_section_tabs("/deployment", active_tab),
+        active_section = active_section,
         module_modals = module_modals,
         command_modals = command_modals,
         script = dashboard_script(),
@@ -677,6 +787,7 @@ async fn deployment_page(jar: CookieJar, State(state): State<Arc<DashboardState>
         "Deployment Settings",
         "Global module installation, enablement, and command controls.",
         Some("/deployment"),
+        Some(active_tab),
         &content,
     ))
     .into_response()
@@ -686,6 +797,7 @@ async fn guild_page(
     jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
     Path(guild_id): Path<u64>,
+    Query(query): Query<DashboardPageQuery>,
 ) -> Response {
     let Some(session) = load_session(&state, &jar).await else {
         return Redirect::to(&format!("/login?redirect=%2Fguild%2F{guild_id}")).into_response();
@@ -718,6 +830,10 @@ async fn guild_page(
         .guild_settings_or_default(guild_id)
         .await
         .unwrap_or_default();
+    let active_tab = normalized_tab(query.tab.as_deref());
+    let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
+    let log_action = parse_audit_action_filter(query.log_action.as_deref());
+    let log_page = query.log_page.unwrap_or(1).max(1);
     let resolved_states =
         resolve_module_states(&state.module_catalog, &deployment, Some(&settings));
     let resolved_command_states = resolve_command_states(
@@ -773,8 +889,56 @@ async fn guild_page(
         &settings,
         &resolved_command_states,
     );
+    let overview_panel = format!(
+        "<section id=\"overview\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
+        guild_id = guild_id,
+        runtime_notices = render_runtime_notices(&state.module_catalog),
+    );
+    let modules_section = format!(
+        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section>",
+        module_cards = module_cards,
+    );
+    let commands_section = format!(
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        command_tabs = render_command_category_tabs(&state.command_catalog),
+        command_cards = command_cards,
+    );
+    let logs_page = if active_tab == "logs" {
+        match state
+            .persistence
+            .list_dashboard_audit_logs(DashboardAuditLogQuery {
+                scope: DashboardAuditScope::Guild,
+                guild_id: Some(guild_id),
+                entity_type: log_entity,
+                action: log_action,
+                page: log_page,
+                page_size: 20,
+            })
+            .await
+        {
+            Ok(page) => page,
+            Err(error) => {
+                warn!(guild_id, ?error, "failed to load guild dashboard audit logs");
+                DashboardAuditLogPage::empty(log_page, 20)
+            }
+        }
+    } else {
+        DashboardAuditLogPage::empty(log_page, 20)
+    };
+    let logs_section = render_audit_logs_section(
+        &format!("/guild/{guild_id}"),
+        &logs_page,
+        log_entity,
+        log_action,
+    );
+    let active_section = match active_tab {
+        "modules" => modules_section.as_str(),
+        "commands" => commands_section.as_str(),
+        "logs" => logs_section.as_str(),
+        _ => overview_panel.as_str(),
+    };
     let content = format!(
-        "{overview}<section id=\"activity\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Runtime</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section><section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section><section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>{module_modals}{command_modals}<script>{script}</script>",
+        "{overview}{page_tabs}{active_section}{module_modals}{command_modals}<script>{script}</script>",
         overview = render_overview_section(
             &card.name,
             "Guild-scoped module and command controls for this server.",
@@ -790,11 +954,8 @@ async fn guild_page(
                 ("Guild ID", guild_id.to_string()),
             ],
         ),
-        guild_id = guild_id,
-        runtime_notices = render_runtime_notices(&state.module_catalog),
-        module_cards = module_cards,
-        command_tabs = render_command_category_tabs(&state.command_catalog),
-        command_cards = command_cards,
+        page_tabs = render_section_tabs(&format!("/guild/{guild_id}"), active_tab),
+        active_section = active_section,
         module_modals = module_modals,
         command_modals = command_modals,
         script = dashboard_script(),
@@ -806,6 +967,7 @@ async fn guild_page(
         &format!("Guild Settings: {}", card.name),
         "Guild-scoped module and command controls for this server.",
         Some(&format!("/guild/{guild_id}")),
+        Some(active_tab),
         &content,
     ))
     .into_response()
@@ -1097,6 +1259,7 @@ fn render_landing_page(state: &DashboardState) -> String {
         &format!("{} Dashboard", state.app_info.name),
         "OAuth-protected control plane for Dynamo.",
         None,
+        None,
         &content,
     )
 }
@@ -1144,6 +1307,7 @@ fn render_selector_page(
         "Server Selector",
         "Pick a guild and move into module-level controls.",
         Some("/selector"),
+        None,
         &content,
     )
 }
@@ -1215,6 +1379,7 @@ fn render_install_required_page(
         &format!("Install Bot: {}", guild.name),
         "This guild is eligible for management, but the bot has not been installed yet.",
         Some("/selector"),
+        None,
         &content,
     )
 }
@@ -1231,7 +1396,7 @@ fn render_error_page(
         message,
     );
 
-    render_document(state, session, title, message, None, &content)
+    render_document(state, session, title, message, None, None, &content)
 }
 
 fn render_document(
@@ -1240,9 +1405,10 @@ fn render_document(
     title: &str,
     subtitle: &str,
     active_path: Option<&str>,
+    active_tab: Option<&str>,
     content: &str,
 ) -> String {
-    let nav = render_nav(state, session, active_path);
+    let nav = render_nav(state, session, active_path, active_tab);
     let session_summary = session.map(render_session_summary).unwrap_or_else(|| {
         "<a class=\"button button-primary\" href=\"/login\">Sign in with Discord</a>".to_string()
     });
@@ -1282,6 +1448,7 @@ fn render_nav(
     state: &DashboardState,
     session: Option<&DashboardSession>,
     active_path: Option<&str>,
+    active_tab: Option<&str>,
 ) -> String {
     let default_dashboard = if session.is_some() { "/selector" } else { "/" };
     let show_section_nav = active_path
@@ -1294,8 +1461,17 @@ fn render_nav(
     )];
     if session.is_some() {
         if show_section_nav {
-            items.push(nav_link("Modules", "#modules", false));
-            items.push(nav_link("Commands", "#commands", false));
+            let base_path = active_path.unwrap_or(default_dashboard);
+            items.push(nav_link(
+                "Modules",
+                &format!("{base_path}{}", page_query_for_tab("modules")),
+                active_tab == Some("modules"),
+            ));
+            items.push(nav_link(
+                "Commands",
+                &format!("{base_path}{}", page_query_for_tab("commands")),
+                active_tab == Some("commands"),
+            ));
         }
         items.push(nav_link(
             "Server Listing",
@@ -1303,7 +1479,12 @@ fn render_nav(
             active_path == Some("/selector"),
         ));
         if show_section_nav {
-            items.push(nav_link("Logs", "#activity", false));
+            let base_path = active_path.unwrap_or(default_dashboard);
+            items.push(nav_link(
+                "Logs",
+                &format!("{base_path}{}", page_query_for_tab("logs")),
+                active_tab == Some("logs"),
+            ));
         }
         if session
             .map(|session| user_is_dashboard_admin(state, &session.user))
@@ -1321,6 +1502,28 @@ fn render_nav(
     }
 
     items.join("")
+}
+
+fn render_section_tabs(base_path: &str, active_tab: &str) -> String {
+    let tabs = [
+        ("overview", "Overview"),
+        ("modules", "Modules"),
+        ("commands", "Commands"),
+        ("logs", "Logs"),
+    ]
+    .into_iter()
+    .map(|(tab, label)| {
+        format!(
+            "<a class=\"tab-button{}\" data-testid=\"page-tab-{tab}\" href=\"{href}\">{label}</a>",
+            if active_tab == tab { " active" } else { "" },
+            href = format!("{base_path}{}", page_query_for_tab(tab)),
+            label = escape_html(label),
+        )
+    })
+    .collect::<Vec<_>>()
+    .join("");
+
+    format!("<div class=\"tab-row page-tab-row\">{tabs}</div>")
 }
 
 fn nav_link(label: &str, href: &str, active: bool) -> String {
@@ -1459,6 +1662,8 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .toolbar-panel, .section-block { margin-bottom: 16px; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .toolbar-search { max-width: 320px; margin: 0; }
+.toolbar-select { width: 180px; margin: 0; }
+.compact-toolbar { justify-content: flex-start; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .compact-search { max-width: 240px; height: 40px; padding: 10px 12px; }
 .section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
 .compact-heading { margin-bottom: 12px; }
@@ -1469,6 +1674,11 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .summary-card-head, .detail-panel-head { display: flex; justify-content: space-between; align-items: start; gap: 12px; }
 .detail-panel-status { display: flex; align-items: center; }
 .summary-card { min-height: 156px; display: flex; flex-direction: column; justify-content: space-between; }
+.summary-card:hover, .guild-card:hover, .info-panel:hover, .logs-panel:hover {
+  border-color: rgba(221,46,83,0.12);
+  background: #1a1f2a;
+  box-shadow: 0 14px 28px rgba(0,0,0,0.18);
+}
 .summary-card h3, .detail-panel h2, .command-detail-card h3 { font-size: 0.95rem; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .summary-card p, .detail-panel p, .command-detail-card p { font-size: 0.88rem; margin: 8px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
 .summary-card-subtitle { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 8px; }
@@ -1483,6 +1693,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .empty-state { min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
 .card-action { margin-top: 10px; }
 .tab-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
+.page-tab-row { margin-bottom: 14px; }
 .tab-button {
   appearance: none; border: 1px solid rgba(255,255,255,0.06); background: var(--panel-strong); color: var(--muted);
   padding: 7px 11px; border-radius: 10px; font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; width: auto; margin: 0; min-height: 38px;
@@ -1529,8 +1740,17 @@ fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; paddin
 .card-status { font-size: 12px; color: var(--muted); min-height: 16px; }
 .compact-actions { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
 .button-compact { padding: 8px 12px; font-size: 0.86rem; }
+.button-disabled { opacity: 0.46; pointer-events: none; cursor: default; }
 .compact-grid-two { gap: 12px; }
 .compact-info-panel { min-height: 120px; }
+.logs-panel { overflow-x: auto; }
+.logs-table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+.logs-table th, .logs-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; font-size: 0.9rem; }
+.logs-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
+.logs-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+.empty-cell { color: var(--muted); text-align: center; padding: 18px 12px !important; }
+.logs-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
+.page-count { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 details summary { cursor: pointer; color: var(--text); font-weight: 600; }
 article { margin-top: 16px; }
 a { color: #ff6b87; }
@@ -1587,7 +1807,7 @@ function filterCommandCards(query) {
 
 function setCommandCategory(category, button) {
   window.__activeCommandCategory = category;
-  document.querySelectorAll('.command-tab, .tab-button').forEach((item) => item.classList.remove('active'));
+  document.querySelectorAll('.command-category-row .command-tab, .command-category-row .tab-button').forEach((item) => item.classList.remove('active'));
   if (button) {
     button.classList.add('active');
   }
@@ -1935,7 +2155,110 @@ fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
         }
     }
 
-    format!("<div class=\"tab-row\">{}</div>", tabs.join(""))
+    format!(
+        "<div class=\"tab-row command-category-row\">{}</div>",
+        tabs.join("")
+    )
+}
+
+fn render_audit_logs_section(
+    base_path: &str,
+    page: &DashboardAuditLogPage,
+    entity_type: Option<DashboardAuditEntityType>,
+    action: Option<DashboardAuditAction>,
+) -> String {
+    let rows = if page.entries.is_empty() {
+        "<tr><td colspan=\"5\" class=\"empty-cell\">No dashboard audit events recorded yet.</td></tr>"
+            .to_string()
+    } else {
+        page.entries
+            .iter()
+            .enumerate()
+            .map(|(index, entry)| {
+                format!(
+                    "<tr data-testid=\"audit-log-row-{index}\"><td>{time}</td><td>{actor}</td><td>{target}</td><td>{action}</td><td>{summary}</td></tr>",
+                    index = index,
+                    time = escape_html(&entry.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+                    actor = escape_html(&format!("{} ({})", entry.actor_username, entry.actor_user_id)),
+                    target = escape_html(&format!(
+                        "{} / {}",
+                        audit_entity_label(entry.entity_type),
+                        entry.entity_id
+                    )),
+                    action = escape_html(audit_action_label(entry.action)),
+                    summary = escape_html(&entry.summary),
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("")
+    };
+
+    let prev_link = if page.has_prev() {
+        format!(
+            "<a class=\"button button-secondary button-compact\" href=\"{base}{query}\" data-testid=\"logs-prev\">Previous</a>",
+            base = base_path,
+            query = page_query_for_logs(entity_type, action, page.page.saturating_sub(1)),
+        )
+    } else {
+        "<span class=\"button button-secondary button-compact button-disabled\">Previous</span>"
+            .to_string()
+    };
+    let next_link = if page.has_next() {
+        format!(
+            "<a class=\"button button-secondary button-compact\" href=\"{base}{query}\" data-testid=\"logs-next\">Next</a>",
+            base = base_path,
+            query = page_query_for_logs(entity_type, action, page.page.saturating_add(1)),
+        )
+    } else {
+        "<span class=\"button button-secondary button-compact button-disabled\">Next</span>"
+            .to_string()
+    };
+
+    format!(
+        "<section class=\"section-block\" data-testid=\"logs-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Logs</p><h2>Dashboard Audit Trail</h2></div></div><form class=\"toolbar compact-toolbar\" method=\"get\" action=\"{base_path}\"><input type=\"hidden\" name=\"tab\" value=\"logs\" /><select name=\"log_entity\" class=\"toolbar-select\" data-testid=\"logs-entity-filter\"><option value=\"\" {all_entity}>All entities</option><option value=\"module\" {module_selected}>Modules</option><option value=\"command\" {command_selected}>Commands</option></select><select name=\"log_action\" class=\"toolbar-select\" data-testid=\"logs-action-filter\"><option value=\"\" {all_action}>All actions</option><option value=\"toggle\" {toggle_selected}>Toggles</option><option value=\"save_settings\" {save_selected}>Settings saves</option></select><button class=\"button button-secondary button-compact\" type=\"submit\">Apply</button></form><div class=\"panel logs-panel\"><table class=\"logs-table\" data-testid=\"logs-table\"><thead><tr><th>Time</th><th>Actor</th><th>Target</th><th>Action</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table></div><div class=\"logs-pagination\"><span class=\"page-count\">Page {page_number} of {page_total}</span><div class=\"actions compact-actions\">{prev_link}{next_link}</div></div></section>",
+        base_path = base_path,
+        all_entity = if entity_type.is_none() { "selected" } else { "" },
+        module_selected = if entity_type == Some(DashboardAuditEntityType::Module) {
+            "selected"
+        } else {
+            ""
+        },
+        command_selected = if entity_type == Some(DashboardAuditEntityType::Command) {
+            "selected"
+        } else {
+            ""
+        },
+        all_action = if action.is_none() { "selected" } else { "" },
+        toggle_selected = if action == Some(DashboardAuditAction::Toggle) {
+            "selected"
+        } else {
+            ""
+        },
+        save_selected = if action == Some(DashboardAuditAction::SaveSettings) {
+            "selected"
+        } else {
+            ""
+        },
+        rows = rows,
+        page_number = page.page,
+        page_total = page.total.max(1).div_ceil(page.page_size.max(1)),
+        prev_link = prev_link,
+        next_link = next_link,
+    )
+}
+
+fn audit_entity_label(entity_type: DashboardAuditEntityType) -> &'static str {
+    match entity_type {
+        DashboardAuditEntityType::Module => "Module",
+        DashboardAuditEntityType::Command => "Command",
+    }
+}
+
+fn audit_action_label(action: DashboardAuditAction) -> &'static str {
+    match action {
+        DashboardAuditAction::Toggle => "Toggle",
+        DashboardAuditAction::SaveSettings => "Save settings",
+    }
 }
 
 fn render_overview_section(title: &str, subtitle: &str, stats: &[(&str, String)]) -> String {
@@ -2441,6 +2764,48 @@ async fn require_api_guild_access(
     }
 }
 
+fn dashboard_actor_label(session: &DashboardSession) -> String {
+    session
+        .user
+        .global_name
+        .clone()
+        .unwrap_or_else(|| session.user.username.clone())
+}
+
+fn build_audit_entry(
+    session: &DashboardSession,
+    scope: DashboardAuditScope,
+    guild_id: Option<u64>,
+    entity_type: DashboardAuditEntityType,
+    entity_id: &str,
+    action: DashboardAuditAction,
+    summary: String,
+) -> DashboardAuditLogEntry {
+    DashboardAuditLogEntry {
+        id: None,
+        timestamp: chrono::Utc::now(),
+        actor_user_id: session.user.id,
+        actor_username: dashboard_actor_label(session),
+        scope,
+        guild_id,
+        entity_type,
+        entity_id: entity_id.to_string(),
+        action,
+        summary,
+    }
+}
+
+async fn record_dashboard_audit_events(
+    state: &DashboardState,
+    entries: Vec<DashboardAuditLogEntry>,
+) {
+    for entry in entries {
+        if let Err(error) = state.persistence.append_dashboard_audit_log(entry).await {
+            warn!(?error, "failed to persist dashboard audit log entry");
+        }
+    }
+}
+
 #[derive(Debug, Deserialize)]
 struct DeploymentModuleSettingsPatch {
     installed: Option<bool>,
@@ -2491,9 +2856,10 @@ async fn patch_deployment_module_settings(
     Path(module_id): Path<String>,
     Json(patch): Json<DeploymentModuleSettingsPatch>,
 ) -> impl IntoResponse {
-    if let Err(response) = require_api_admin(&state, &jar).await {
-        return response;
-    }
+    let session = match require_api_admin(&state, &jar).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
     if !module_exists(&state.module_catalog, &module_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -2538,8 +2904,34 @@ async fn patch_deployment_module_settings(
         next.enabled = enabled;
     }
 
-    match repo.upsert_module_settings(&module_id, next).await {
-        Ok(settings) => Json(settings).into_response(),
+    let current = current_settings
+        .modules
+        .get(&module_id)
+        .cloned()
+        .unwrap_or(DeploymentModuleSettings::default());
+
+    match repo.upsert_module_settings(&module_id, next.clone()).await {
+        Ok(settings) => {
+            if current != next {
+                record_dashboard_audit_events(
+                    &state,
+                    vec![build_audit_entry(
+                        &session,
+                        DashboardAuditScope::Deployment,
+                        None,
+                        DashboardAuditEntityType::Module,
+                        &module_id,
+                        DashboardAuditAction::Toggle,
+                        format!(
+                            "Updated deployment module {module_id}: installed={} enabled={}.",
+                            next.installed, next.enabled
+                        ),
+                    )],
+                )
+                .await;
+            }
+            Json(settings).into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_payload(format!(
@@ -2556,9 +2948,10 @@ async fn patch_deployment_command_settings(
     Path(command_id): Path<String>,
     Json(patch): Json<DeploymentCommandSettingsPatch>,
 ) -> impl IntoResponse {
-    if let Err(response) = require_api_admin(&state, &jar).await {
-        return response;
-    }
+    let session = match require_api_admin(&state, &jar).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
     if !command_exists(&state.command_catalog, &command_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -2606,8 +2999,45 @@ async fn patch_deployment_command_settings(
         next.configuration = configuration;
     }
 
-    match repo.upsert_command_settings(&command_id, next).await {
-        Ok(settings) => Json(settings).into_response(),
+    let current = current_settings
+        .commands
+        .get(&command_id)
+        .cloned()
+        .unwrap_or_default();
+
+    match repo.upsert_command_settings(&command_id, next.clone()).await {
+        Ok(settings) => {
+            let mut entries = Vec::new();
+            if current.installed != next.installed || current.enabled != next.enabled {
+                entries.push(build_audit_entry(
+                    &session,
+                    DashboardAuditScope::Deployment,
+                    None,
+                    DashboardAuditEntityType::Command,
+                    &command_id,
+                    DashboardAuditAction::Toggle,
+                    format!(
+                        "Updated deployment command {command_id}: installed={} enabled={}.",
+                        next.installed, next.enabled
+                    ),
+                ));
+            }
+            if current.configuration != next.configuration {
+                entries.push(build_audit_entry(
+                    &session,
+                    DashboardAuditScope::Deployment,
+                    None,
+                    DashboardAuditEntityType::Command,
+                    &command_id,
+                    DashboardAuditAction::SaveSettings,
+                    format!("Saved deployment settings for command {command_id}."),
+                ));
+            }
+            if !entries.is_empty() {
+                record_dashboard_audit_events(&state, entries).await;
+            }
+            Json(settings).into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_payload(format!(
@@ -2644,9 +3074,10 @@ async fn patch_guild_module_settings(
     Path((guild_id, module_id)): Path<(u64, String)>,
     Json(patch): Json<GuildModuleSettingsPatch>,
 ) -> impl IntoResponse {
-    if let Err(response) = require_api_guild_access(&state, &jar, guild_id).await {
-        return response;
-    }
+    let session = match require_api_guild_access(&state, &jar, guild_id).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
     if !module_exists(&state.module_catalog, &module_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -2691,11 +3122,53 @@ async fn patch_guild_module_settings(
         next.configuration = configuration;
     }
 
+    let current = current_settings
+        .modules
+        .get(&module_id)
+        .cloned()
+        .unwrap_or(GuildModuleSettings::default());
+
     match repo
         .upsert_module_settings(guild_id, &module_id, next)
         .await
     {
-        Ok(settings) => Json(settings).into_response(),
+        Ok(settings) => {
+            let next_state = settings
+                .modules
+                .get(&module_id)
+                .cloned()
+                .unwrap_or_default();
+            let mut entries = Vec::new();
+            if current.enabled != next_state.enabled {
+                entries.push(build_audit_entry(
+                    &session,
+                    DashboardAuditScope::Guild,
+                    Some(guild_id),
+                    DashboardAuditEntityType::Module,
+                    &module_id,
+                    DashboardAuditAction::Toggle,
+                    format!(
+                        "Updated guild module {module_id}: enabled={}.",
+                        next_state.enabled
+                    ),
+                ));
+            }
+            if current.configuration != next_state.configuration {
+                entries.push(build_audit_entry(
+                    &session,
+                    DashboardAuditScope::Guild,
+                    Some(guild_id),
+                    DashboardAuditEntityType::Module,
+                    &module_id,
+                    DashboardAuditAction::SaveSettings,
+                    format!("Saved guild settings for module {module_id}."),
+                ));
+            }
+            if !entries.is_empty() {
+                record_dashboard_audit_events(&state, entries).await;
+            }
+            Json(settings).into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_payload(format!(
@@ -2712,9 +3185,10 @@ async fn patch_guild_command_settings(
     Path((guild_id, command_id)): Path<(u64, String)>,
     Json(patch): Json<GuildCommandSettingsPatch>,
 ) -> impl IntoResponse {
-    if let Err(response) = require_api_guild_access(&state, &jar, guild_id).await {
-        return response;
-    }
+    let session = match require_api_guild_access(&state, &jar, guild_id).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
     if !command_exists(&state.command_catalog, &command_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -2759,11 +3233,53 @@ async fn patch_guild_command_settings(
         next.configuration = configuration;
     }
 
+    let current = current_settings
+        .commands
+        .get(&command_id)
+        .cloned()
+        .unwrap_or_default();
+
     match repo
         .upsert_command_settings(guild_id, &command_id, next)
         .await
     {
-        Ok(settings) => Json(settings).into_response(),
+        Ok(settings) => {
+            let next_state = settings
+                .commands
+                .get(&command_id)
+                .cloned()
+                .unwrap_or_default();
+            let mut entries = Vec::new();
+            if current.enabled != next_state.enabled {
+                entries.push(build_audit_entry(
+                    &session,
+                    DashboardAuditScope::Guild,
+                    Some(guild_id),
+                    DashboardAuditEntityType::Command,
+                    &command_id,
+                    DashboardAuditAction::Toggle,
+                    format!(
+                        "Updated guild command {command_id}: enabled={}.",
+                        next_state.enabled
+                    ),
+                ));
+            }
+            if current.configuration != next_state.configuration {
+                entries.push(build_audit_entry(
+                    &session,
+                    DashboardAuditScope::Guild,
+                    Some(guild_id),
+                    DashboardAuditEntityType::Command,
+                    &command_id,
+                    DashboardAuditAction::SaveSettings,
+                    format!("Saved guild settings for command {command_id}."),
+                ));
+            }
+            if !entries.is_empty() {
+                record_dashboard_audit_events(&state, entries).await;
+            }
+            Json(settings).into_response()
+        }
         Err(error) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(error_payload(format!(

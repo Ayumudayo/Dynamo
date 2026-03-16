@@ -1,11 +1,12 @@
 use std::sync::Arc;
 
 use dynamo_core::{
-    AppState, CommandCatalog, DeploymentSettings, DeploymentSettingsRepository, DiscordCommand,
-    Error, GiveawaysRepository, GuildSettings, GuildSettingsRepository, InviteRepository,
-    MemberStatsRepository, ModuleCatalog, ModuleRegistry, MusicService, OptionalModulesConfig,
-    Persistence, ProviderStateRepository, ServiceRegistry, StockQuoteService,
-    SuggestionsRepository, WarningLogRepository, resolve_command_state,
+    AppState, CommandCatalog, DashboardAuditLogRepository, DeploymentSettings,
+    DeploymentSettingsRepository, DiscordCommand, Error, GiveawaysRepository, GuildSettings,
+    GuildSettingsRepository, InviteRepository, MemberStatsRepository, ModuleCatalog,
+    ModuleRegistry, MusicService, OptionalModulesConfig, Persistence, ProviderStateRepository,
+    ServiceRegistry, StockQuoteService, SuggestionsRepository, WarningLogRepository,
+    resolve_command_state,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
@@ -62,6 +63,7 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
     let invites: Arc<dyn InviteRepository> = store.clone();
     let member_stats: Arc<dyn MemberStatsRepository> = store.clone();
     let warning_logs: Arc<dyn WarningLogRepository> = store.clone();
+    let dashboard_audit_logs: Arc<dyn DashboardAuditLogRepository> = store.clone();
     let provider_state: Arc<dyn ProviderStateRepository> = store;
 
     Ok(Persistence::new(
@@ -74,6 +76,7 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
         Some(invites),
         Some(member_stats),
         Some(warning_logs),
+        Some(dashboard_audit_logs),
     ))
 }
 
