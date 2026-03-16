@@ -93,6 +93,31 @@ resolve_bool_setting() {
   parse_bool_setting "$key" "$raw_value"
 }
 
+dashboard_public_base_url() {
+  local base_url host port
+  base_url="$(dotenv_value "DASHBOARD_BASE_URL" || true)"
+  if [[ -n "$base_url" ]]; then
+    printf '%s\n' "${base_url%/}"
+    return
+  fi
+
+  host="$(dotenv_value "DASHBOARD_HOST" || true)"
+  port="$(dotenv_value "DASHBOARD_PORT" || true)"
+  [[ -z "$host" ]] && host="127.0.0.1"
+  [[ -z "$port" ]] && port="3000"
+  printf 'http://%s:%s\n' "$host" "$port"
+}
+
+dashboard_health_url() {
+  local host port
+  host="$(dotenv_value "DASHBOARD_HOST" || true)"
+  port="$(dotenv_value "DASHBOARD_PORT" || true)"
+  [[ -z "$host" ]] && host="127.0.0.1"
+  [[ "$host" == "0.0.0.0" || "$host" == "::" ]] && host="127.0.0.1"
+  [[ -z "$port" ]] && port="3000"
+  printf 'http://%s:%s/healthz\n' "$host" "$port"
+}
+
 mkdir -p "$LOGS_DIR"
 
 if [[ "$DRY_RUN" != "true" ]] && ! command -v cargo >/dev/null 2>&1; then
@@ -178,12 +203,15 @@ start_process() {
     assert_binary_exists "$crate"
   fi
 
-  stop_managed_process "$name" "$crate"
-
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[dry-run] (cd '$ROOT_DIR' && '$binary') >'$stdout_path' 2>'$stderr_path' &"
+    LAST_START_PID="-"
+    LAST_START_STATUS="dry-run"
+    LAST_START_LOG="$stdout_path"
     return
   fi
+
+  stop_managed_process "$name" "$crate"
 
   (
     cd "$ROOT_DIR"
@@ -212,7 +240,13 @@ start_process() {
         echo "WARNING: Discord bot intents are not enabled in the developer portal. Enable the required privileged intents, especially Server Members Intent." >&2
       fi
     fi
+    LAST_START_STATUS="degraded"
+  else
+    LAST_START_STATUS="ok"
   fi
+
+  LAST_START_PID="$(cat "$pid_path")"
+  LAST_START_LOG="$stdout_path"
 }
 
 run_binary_foreground() {
@@ -225,6 +259,7 @@ run_binary_foreground() {
 
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[dry-run] (cd '$ROOT_DIR' && '$binary')"
+    LAST_RUN_STATUS="dry-run"
     return
   fi
 
@@ -235,6 +270,36 @@ run_binary_foreground() {
     fi
     "$binary"
   )
+  LAST_RUN_STATUS="ok"
+}
+
+test_dashboard_health() {
+  local health_url="$1"
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    DASHBOARD_HEALTH_STATUS="dry-run"
+    return
+  fi
+
+  if command -v curl >/dev/null 2>&1; then
+    if curl -fsS --max-time 5 "$health_url" >/dev/null 2>&1; then
+      DASHBOARD_HEALTH_STATUS="ok"
+    else
+      DASHBOARD_HEALTH_STATUS="degraded"
+    fi
+    return
+  fi
+
+  if command -v wget >/dev/null 2>&1; then
+    if wget -q -T 5 -O /dev/null "$health_url" >/dev/null 2>&1; then
+      DASHBOARD_HEALTH_STATUS="ok"
+    else
+      DASHBOARD_HEALTH_STATUS="degraded"
+    fi
+    return
+  fi
+
+  DASHBOARD_HEALTH_STATUS="degraded"
 }
 
 echo "Repo root: $ROOT_DIR"
@@ -265,6 +330,7 @@ fi
 if [[ "$SKIP_BUILD" != "true" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then
     echo "[dry-run] (cd '$ROOT_DIR' && cargo build -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot)"
+    BUILD_STATUS="dry-run"
   else
     echo "Prebuilding shared Rust artifacts..."
     (
@@ -274,18 +340,46 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
       fi
       cargo build -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot
     )
+    BUILD_STATUS="ok"
   fi
+else
+  BUILD_STATUS="skipped"
 fi
 
 if [[ "$SKIP_BOOTSTRAP" != "true" ]]; then
   echo "Running Mongo bootstrap..."
   run_binary_foreground "dynamo-bootstrap"
+  BOOTSTRAP_STATUS="$LAST_RUN_STATUS"
+else
+  BOOTSTRAP_STATUS="skipped"
 fi
 
 echo "Starting dashboard..."
 start_process "dashboard" "dynamo-dashboard"
+DASHBOARD_PID="$LAST_START_PID"
+DASHBOARD_STATUS="$LAST_START_STATUS"
+DASHBOARD_LOG="$LAST_START_LOG"
 
 echo "Starting bot..."
 start_process "bot" "dynamo-bot"
+BOT_PID="$LAST_START_PID"
+BOT_STATUS="$LAST_START_STATUS"
+BOT_LOG="$LAST_START_LOG"
+
+DASHBOARD_URL="$(dashboard_public_base_url)"
+test_dashboard_health "$(dashboard_health_url)"
+
+OVERALL_STATUS="ok"
+if [[ "$DASHBOARD_STATUS" == "degraded" || "$BOT_STATUS" == "degraded" || "$DASHBOARD_HEALTH_STATUS" == "degraded" ]]; then
+  OVERALL_STATUS="degraded"
+fi
+
+echo
+echo "Startup summary:"
+echo "  artifacts: $ROOT_DIR/target/debug [$BUILD_STATUS]"
+echo "  bootstrap: $BOOTSTRAP_STATUS"
+echo "  dashboard: pid=$DASHBOARD_PID url=$DASHBOARD_URL health=$DASHBOARD_HEALTH_STATUS log=$DASHBOARD_LOG"
+echo "  bot: pid=$BOT_PID scope=$COMMAND_SCOPE log=$BOT_LOG"
+echo "  overall: $OVERALL_STATUS"
 
 echo "Done."

@@ -1,6 +1,11 @@
 use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
-use dynamo_core::{AppConfig, AppState, DiscordConfig, Error, aggregate_intents};
+use dynamo_core::{
+    AppConfig, AppState, CommandCatalog, CommandSyncConfig, DeploymentSettings, DiscordConfig,
+    Error, GatewayIntents, GuildSettings, ModuleCatalog, OptionalModulesConfig, Persistence,
+    ServiceRegistry, StartupPhase, StartupReport, StartupStatus, aggregate_intents,
+    catalog_startup_summary, format_gateway_intents, format_kv_list, scope_startup_summary,
+};
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use songbird::SerenityInit;
 use tokio::sync::Mutex;
@@ -22,35 +27,33 @@ async fn main() -> Result<(), Error> {
     let intents = aggregate_intents(manifests.iter().copied());
     let setup_catalog = registry.catalog().clone();
     let setup_command_catalog = registry.command_catalog().clone();
-    let loaded_modules = setup_catalog
-        .entries
-        .iter()
-        .map(|entry| entry.module.id)
-        .collect::<Vec<_>>()
-        .join(", ");
     let discord_config = config.discord.clone();
     let command_sync_config = config.commands.clone();
     let optional_modules = config.optional_modules.clone();
     let setup_persistence = persistence.clone();
     let setup_services = services.clone();
+    let startup_deployment = persistence.deployment_settings_or_default().await?;
+    let startup_guild_settings = if config.discord.register_globally {
+        None
+    } else {
+        Some(
+            persistence
+                .guild_settings_or_default(config.discord.dev_guild_id.unwrap_or_default())
+                .await?,
+        )
+    };
 
-    if let Some(database_name) = persistence.database_name.as_deref() {
-        info!(database = %database_name, "MongoDB persistence initialized");
-    }
-    info!(
-        command_scope = if config.discord.register_globally {
-            "global"
-        } else {
-            "guild"
-        },
-        dev_guild_id = ?config.discord.dev_guild_id,
-        sync_interval_seconds = config.commands.sync_interval_seconds,
-        module_count = setup_catalog.entries.len(),
-        command_count = setup_command_catalog.entries.len(),
-        modules = %loaded_modules,
-        giveaway_enabled = config.optional_modules.giveaway_enabled,
-        "Bot runtime configured"
-    );
+    build_bot_preconnect_report(
+        &config,
+        &setup_catalog,
+        &setup_command_catalog,
+        intents,
+        &persistence,
+        &services,
+        &startup_deployment,
+        startup_guild_settings.as_ref(),
+    )
+    .log();
 
     let framework = poise::Framework::builder()
         .options(poise::FrameworkOptions {
@@ -70,13 +73,6 @@ async fn main() -> Result<(), Error> {
             let setup_services = setup_services.clone();
 
             Box::pin(async move {
-                info!(
-                    user = %ready.user.name,
-                    modules = setup_catalog.entries.len(),
-                    leaf_command_count = setup_command_catalog.entries.len(),
-                    "Connected to Discord"
-                );
-
                 let app_state = AppState::new(
                     setup_catalog,
                     setup_command_catalog,
@@ -94,6 +90,16 @@ async fn main() -> Result<(), Error> {
                 if optional_modules.giveaway_enabled {
                     spawn_giveaway_poll_loop(ctx.clone(), app_state.clone());
                 }
+
+                build_bot_runtime_report(
+                    &discord_config,
+                    &command_sync_config,
+                    &optional_modules,
+                    &app_state,
+                    &ready.user.name,
+                )
+                .await?
+                .log();
 
                 let _ = framework;
                 Ok(app_state)
@@ -117,6 +123,327 @@ fn init_tracing() {
                 .unwrap_or_else(|_| "dynamo_bot=info,dynamo_core=info,poise=info".into()),
         )
         .try_init();
+}
+
+fn build_bot_preconnect_report(
+    config: &AppConfig,
+    module_catalog: &ModuleCatalog,
+    command_catalog: &CommandCatalog,
+    intents: GatewayIntents,
+    persistence: &Persistence,
+    services: &ServiceRegistry,
+    deployment: &DeploymentSettings,
+    guild: Option<&GuildSettings>,
+) -> StartupReport {
+    let catalog_summary = catalog_startup_summary(module_catalog, command_catalog);
+    let scope_summary = scope_startup_summary(module_catalog, command_catalog, deployment, guild);
+    let submitted_top_level_commands =
+        dynamo_app::create_application_commands_for_scope(deployment, guild).len();
+    let repositories = collect_persistence_labels(persistence);
+    let services_wired = collect_service_labels(services);
+    let command_scope = format_command_scope(&config.discord);
+    let sync_target = if config.discord.register_globally {
+        "global application commands".to_string()
+    } else {
+        format!(
+            "guild {}",
+            config
+                .discord
+                .dev_guild_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        )
+    };
+
+    let mut report = StartupReport::new("bot");
+    report.add_phase(
+        StartupPhase::new(
+            "config",
+            StartupStatus::Ok,
+            format!(
+                "Loaded Discord config for {command_scope} sync with {} aggregated intents",
+                format_gateway_intents(intents)
+            ),
+        )
+        .detail("command_scope", command_scope)
+        .detail(
+            "dev_guild_id",
+            config
+                .discord
+                .dev_guild_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "none".to_string()),
+        )
+        .detail(
+            "sync_interval_seconds",
+            config.commands.sync_interval_seconds.to_string(),
+        )
+        .detail(
+            "optional_module_flags",
+            format!("giveaway={}", config.optional_modules.giveaway_enabled),
+        )
+        .detail("aggregated_intents", format_gateway_intents(intents)),
+    );
+    report.add_phase(
+        StartupPhase::new(
+            "registry",
+            StartupStatus::Ok,
+            format!(
+                "Discovered {} modules and {} leaf commands",
+                catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
+            ),
+        )
+        .detail("module_ids", catalog_summary.module_ids.join(", "))
+        .detail(
+            "leaf_command_count",
+            catalog_summary.discovered_leaf_command_count.to_string(),
+        )
+        .detail(
+            "per_module_command_counts",
+            format_kv_list(&catalog_summary.per_module_command_counts),
+        ),
+    );
+
+    let persistence_status = if persistence.database_name.is_some() {
+        StartupStatus::Ok
+    } else {
+        StartupStatus::Warn
+    };
+    report.add_phase(
+        StartupPhase::new(
+            "persistence",
+            persistence_status,
+            if let Some(database_name) = persistence.database_name.as_deref() {
+                format!("MongoDB persistence ready on '{database_name}'")
+            } else {
+                "MongoDB not configured; continuing in degraded mode".to_string()
+            },
+        )
+        .detail(
+            "database",
+            persistence
+                .database_name
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        )
+        .detail(
+            "repositories_wired",
+            if repositories.is_empty() {
+                "none".to_string()
+            } else {
+                repositories.join(", ")
+            },
+        )
+        .detail(
+            "services_wired",
+            if services_wired.is_empty() {
+                "none".to_string()
+            } else {
+                services_wired.join(", ")
+            },
+        ),
+    );
+
+    let sync_status = if scope_summary.active_command_count == 0 {
+        StartupStatus::Warn
+    } else {
+        StartupStatus::Ok
+    };
+    report.add_phase(
+        StartupPhase::new(
+            "sync_target",
+            sync_status,
+            format!(
+                "{} active leaf commands will sync to {sync_target} ({} filtered)",
+                scope_summary.active_command_count, scope_summary.filtered_command_count
+            ),
+        )
+        .detail("target", sync_target)
+        .detail(
+            "submitted_top_level_commands",
+            submitted_top_level_commands.to_string(),
+        )
+        .detail(
+            "discovered_leaf_commands",
+            scope_summary.discovered_leaf_command_count.to_string(),
+        )
+        .detail(
+            "active_leaf_commands",
+            scope_summary.active_command_count.to_string(),
+        )
+        .detail(
+            "filtered_leaf_commands",
+            scope_summary.filtered_command_count.to_string(),
+        )
+        .detail(
+            "active_modules",
+            if scope_summary.active_module_ids.is_empty() {
+                "none".to_string()
+            } else {
+                scope_summary.active_module_ids.join(", ")
+            },
+        )
+        .detail(
+            "disabled_modules",
+            scope_summary.disabled_module_count.to_string(),
+        )
+        .detail(
+            "disabled_commands",
+            scope_summary.disabled_command_count.to_string(),
+        ),
+    );
+
+    report
+}
+
+async fn build_bot_runtime_report(
+    discord_config: &DiscordConfig,
+    command_sync_config: &CommandSyncConfig,
+    optional_modules: &OptionalModulesConfig,
+    app_state: &AppState,
+    ready_user: &str,
+) -> Result<StartupReport, Error> {
+    let deployment = app_state
+        .persistence
+        .deployment_settings_or_default()
+        .await?;
+    let guild_settings = if discord_config.register_globally {
+        None
+    } else {
+        Some(
+            app_state
+                .persistence
+                .guild_settings_or_default(discord_config.dev_guild_id.unwrap_or_default())
+                .await?,
+        )
+    };
+    let scope_summary = scope_startup_summary(
+        &app_state.module_catalog,
+        &app_state.command_catalog,
+        &deployment,
+        guild_settings.as_ref(),
+    );
+    let submitted_top_level_commands =
+        dynamo_app::create_application_commands_for_scope(&deployment, guild_settings.as_ref())
+            .len();
+
+    let mut report = StartupReport::new("bot");
+    report.add_phase(
+        StartupPhase::new(
+            "runtime",
+            if optional_modules.giveaway_enabled {
+                StartupStatus::Ok
+            } else {
+                StartupStatus::Warn
+            },
+            format!(
+                "Discord ready as '{ready_user}' with {} active leaf commands",
+                scope_summary.active_command_count
+            ),
+        )
+        .detail("ready_user", ready_user)
+        .detail(
+            "command_sync_loop",
+            format!(
+                "enabled every {}s",
+                command_sync_config.sync_interval_seconds.max(5)
+            ),
+        )
+        .detail(
+            "giveaway_poll_loop",
+            if optional_modules.giveaway_enabled {
+                format!("enabled every {}s", GIVEAWAY_POLL_INTERVAL_SECONDS)
+            } else {
+                "disabled (optional module not enabled)".to_string()
+            },
+        )
+        .detail(
+            "sync_target",
+            if discord_config.register_globally {
+                "global application commands".to_string()
+            } else {
+                format!(
+                    "guild {}",
+                    discord_config
+                        .dev_guild_id
+                        .map(|id| id.to_string())
+                        .unwrap_or_else(|| "unknown".to_string())
+                )
+            },
+        )
+        .detail(
+            "submitted_top_level_commands",
+            submitted_top_level_commands.to_string(),
+        )
+        .detail(
+            "active_modules",
+            scope_summary.active_module_count.to_string(),
+        )
+        .detail(
+            "active_leaf_commands",
+            scope_summary.active_command_count.to_string(),
+        )
+        .detail(
+            "filtered_leaf_commands",
+            scope_summary.filtered_command_count.to_string(),
+        ),
+    );
+
+    Ok(report)
+}
+
+fn collect_persistence_labels(persistence: &Persistence) -> Vec<String> {
+    let mut labels = Vec::new();
+    if persistence.guild_settings.is_some() {
+        labels.push("guild_settings".to_string());
+    }
+    if persistence.deployment_settings.is_some() {
+        labels.push("deployment_settings".to_string());
+    }
+    if persistence.provider_state.is_some() {
+        labels.push("provider_state".to_string());
+    }
+    if persistence.suggestions.is_some() {
+        labels.push("suggestions".to_string());
+    }
+    if persistence.giveaways.is_some() {
+        labels.push("giveaways".to_string());
+    }
+    if persistence.invites.is_some() {
+        labels.push("invites".to_string());
+    }
+    if persistence.member_stats.is_some() {
+        labels.push("member_stats".to_string());
+    }
+    if persistence.warning_logs.is_some() {
+        labels.push("warning_logs".to_string());
+    }
+    labels
+}
+
+fn collect_service_labels(services: &ServiceRegistry) -> Vec<String> {
+    let mut labels = Vec::new();
+    if services.stock_quotes.is_some() {
+        labels.push("stock_quotes".to_string());
+    }
+    if services.music.is_some() {
+        labels.push("music".to_string());
+    }
+    labels
+}
+
+fn format_command_scope(discord_config: &DiscordConfig) -> String {
+    if discord_config.register_globally {
+        "global".to_string()
+    } else {
+        format!(
+            "guild {}",
+            discord_config
+                .dev_guild_id
+                .map(|id| id.to_string())
+                .unwrap_or_else(|| "unknown".to_string())
+        )
+    }
 }
 
 fn event_handler<'a>(

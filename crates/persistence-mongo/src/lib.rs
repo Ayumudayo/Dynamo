@@ -21,6 +21,15 @@ const DEPLOYMENT_SETTINGS_ID: &str = "global";
 pub const DEFAULT_DATABASE_NAME: &str = "dynamo-rs";
 
 #[derive(Debug, Clone)]
+pub struct MongoInitializationReport {
+    pub database_name: String,
+    pub existing_collections: Vec<String>,
+    pub created_collections: Vec<String>,
+    pub final_collections: Vec<String>,
+    pub deployment_settings_seeded: bool,
+}
+
+#[derive(Debug, Clone)]
 pub struct MongoPersistenceConfig {
     pub connection_string: String,
     pub database_name: String,
@@ -102,14 +111,16 @@ impl MongoPersistence {
         })
     }
 
-    pub async fn ensure_initialized(&self) -> Result<(), Error> {
+    pub async fn ensure_initialized_report(&self) -> Result<MongoInitializationReport, Error> {
         let existing_collections = self.database.list_collection_names().await?;
+        let mut created_collections = Vec::new();
 
         if !existing_collections
             .iter()
             .any(|name| name == "guild_settings")
         {
             self.database.create_collection("guild_settings").await?;
+            created_collections.push("guild_settings".to_string());
         }
 
         if !existing_collections
@@ -119,6 +130,7 @@ impl MongoPersistence {
             self.database
                 .create_collection("deployment_settings")
                 .await?;
+            created_collections.push("deployment_settings".to_string());
         }
 
         if !existing_collections
@@ -126,6 +138,7 @@ impl MongoPersistence {
             .any(|name| name == "provider_state")
         {
             self.database.create_collection("provider_state").await?;
+            created_collections.push("provider_state".to_string());
         }
 
         if !existing_collections
@@ -133,14 +146,17 @@ impl MongoPersistence {
             .any(|name| name == "suggestions")
         {
             self.database.create_collection("suggestions").await?;
+            created_collections.push("suggestions".to_string());
         }
 
         if !existing_collections.iter().any(|name| name == "giveaways") {
             self.database.create_collection("giveaways").await?;
+            created_collections.push("giveaways".to_string());
         }
 
         if !existing_collections.iter().any(|name| name == "members") {
             self.database.create_collection("members").await?;
+            created_collections.push("members".to_string());
         }
 
         if !existing_collections
@@ -148,13 +164,16 @@ impl MongoPersistence {
             .any(|name| name == "member-stats")
         {
             self.database.create_collection("member-stats").await?;
+            created_collections.push("member-stats".to_string());
         }
 
         if !existing_collections.iter().any(|name| name == "mod-logs") {
             self.database.create_collection("mod-logs").await?;
+            created_collections.push("mod-logs".to_string());
         }
 
-        self.deployment_settings
+        let deployment_settings_result = self
+            .deployment_settings
             .update_one(
                 doc! { "_id": DEPLOYMENT_SETTINGS_ID },
                 doc! {
@@ -167,7 +186,19 @@ impl MongoPersistence {
             .upsert(true)
             .await?;
 
-        Ok(())
+        let final_collections = self.database.list_collection_names().await?;
+
+        Ok(MongoInitializationReport {
+            database_name: self.database.name().to_string(),
+            existing_collections,
+            created_collections,
+            final_collections,
+            deployment_settings_seeded: deployment_settings_result.upserted_id.is_some(),
+        })
+    }
+
+    pub async fn ensure_initialized(&self) -> Result<(), Error> {
+        self.ensure_initialized_report().await.map(|_| ())
     }
 
     pub fn database(&self) -> &Database {

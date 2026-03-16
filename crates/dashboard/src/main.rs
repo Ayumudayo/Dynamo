@@ -17,7 +17,8 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dynamo_core::{
     CommandCatalog, CommandCatalogEntry, DeploymentModuleSettings, DeploymentSettings,
     GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence, ResolvedCommandState,
-    ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, resolve_command_states,
+    ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema, StartupPhase,
+    StartupReport, StartupStatus, catalog_startup_summary, format_kv_list, resolve_command_states,
     resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
@@ -25,7 +26,7 @@ use rand::{Rng, distributions::Alphanumeric};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::Value;
 use tokio::sync::RwLock;
-use tracing::{info, warn};
+use tracing::warn;
 use url::Url;
 
 const MUSIC_RUNTIME_NOTICE: &str = "Regular voice channels currently require Discord DAVE/E2EE support. This stable build does not support DAVE yet, so music commands only work for stage-channel smoke tests.";
@@ -40,35 +41,17 @@ async fn main() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
     init_tracing();
 
+    let config = DashboardConfig::from_env()?;
+    let registry = dynamo_app::module_registry();
+    let module_catalog = registry.catalog().clone();
+    let command_catalog = registry.command_catalog().clone();
+    let catalog_summary = catalog_startup_summary(&module_catalog, &command_catalog);
     let http = reqwest::Client::builder()
         .user_agent("Dynamo Dashboard/0.1.0")
         .build()?;
-    let config = DashboardConfig::from_env()?;
-    let registry = dynamo_app::module_registry();
     let persistence = dynamo_app::persistence_from_env().await?;
+    validate_dashboard_persistence(&config, &module_catalog, &command_catalog, &persistence)?;
     let app_info = fetch_application_info(&http, &config).await?;
-    let module_catalog = registry.catalog().clone();
-    let command_catalog = registry.command_catalog().clone();
-    let loaded_modules = module_catalog
-        .entries
-        .iter()
-        .map(|entry| entry.module.id)
-        .collect::<Vec<_>>()
-        .join(", ");
-    if let Some(database_name) = persistence.database_name.as_deref() {
-        info!(database = %database_name, "Dashboard persistence initialized");
-    }
-    info!(
-        application_id = %app_info.id,
-        application_name = %app_info.name,
-        host = %config.host,
-        port = config.port,
-        public_base_url = %config.public_base_url,
-        module_count = module_catalog.entries.len(),
-        command_count = command_catalog.entries.len(),
-        modules = %loaded_modules,
-        "Dashboard companion configured"
-    );
     let state = Arc::new(DashboardState {
         config,
         http,
@@ -118,7 +101,13 @@ async fn main() -> anyhow::Result<()> {
     let address = SocketAddr::new(state.config.host, state.config.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
 
-    info!(address = %address, url = %format!("http://{address}/"), "Dashboard companion listening");
+    build_dashboard_startup_report(
+        &state,
+        &catalog_summary,
+        address,
+        &format!("{}/healthz", state.config.public_base_url),
+    )
+    .log();
     axum::serve(listener, app).await?;
     Ok(())
 }
@@ -185,6 +174,195 @@ impl DashboardConfig {
             invite_permissions,
             admin_user_ids,
         })
+    }
+}
+
+fn validate_dashboard_persistence(
+    config: &DashboardConfig,
+    module_catalog: &ModuleCatalog,
+    command_catalog: &CommandCatalog,
+    persistence: &Persistence,
+) -> anyhow::Result<()> {
+    let persistence_ready = persistence.database_name.is_some()
+        && persistence.guild_settings.is_some()
+        && persistence.deployment_settings.is_some();
+    if persistence_ready {
+        return Ok(());
+    }
+
+    let catalog_summary = catalog_startup_summary(module_catalog, command_catalog);
+    let mut report = StartupReport::new("dashboard");
+    report.add_phase(
+        StartupPhase::new(
+            "config",
+            StartupStatus::Ok,
+            "Dashboard config resolved but startup cannot continue".to_string(),
+        )
+        .detail("host", config.host.to_string())
+        .detail("port", config.port.to_string())
+        .detail("public_base_url", config.public_base_url.clone())
+        .detail("callback_url", oauth_callback_url(&config.public_base_url)),
+    );
+    report.add_phase(
+        StartupPhase::new(
+            "registry",
+            StartupStatus::Ok,
+            format!(
+                "Discovered {} modules and {} leaf commands",
+                catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
+            ),
+        )
+        .detail("module_ids", catalog_summary.module_ids.join(", "))
+        .detail(
+            "per_category_command_counts",
+            format_kv_list(&catalog_summary.per_category_command_counts),
+        ),
+    );
+    report.add_phase(
+        StartupPhase::new(
+            "readiness",
+            StartupStatus::Error,
+            "Dashboard requires MongoDB persistence and OAuth configuration".to_string(),
+        )
+        .detail(
+            "database",
+            persistence
+                .database_name
+                .clone()
+                .unwrap_or_else(|| "none".to_string()),
+        )
+        .detail(
+            "guild_settings_repo",
+            persistence.guild_settings.is_some().to_string(),
+        )
+        .detail(
+            "deployment_settings_repo",
+            persistence.deployment_settings.is_some().to_string(),
+        )
+        .detail("session_store_mode", "in-memory"),
+    );
+    report.log();
+
+    anyhow::bail!(
+        "Dashboard requires MongoDB persistence (database + guild/deployment settings repositories) and cannot start in degraded mode"
+    );
+}
+
+fn build_dashboard_startup_report(
+    state: &DashboardState,
+    catalog_summary: &dynamo_core::CatalogStartupSummary,
+    address: SocketAddr,
+    health_endpoint: &str,
+) -> StartupReport {
+    let mut report = StartupReport::new("dashboard");
+    report.add_phase(
+        StartupPhase::new(
+            "config",
+            StartupStatus::Ok,
+            format!(
+                "Dashboard companion configured for '{}' on {}:{}",
+                state.app_info.name, state.config.host, state.config.port
+            ),
+        )
+        .detail("application_id", state.app_info.id.clone())
+        .detail("application_name", state.app_info.name.clone())
+        .detail("host", state.config.host.to_string())
+        .detail("port", state.config.port.to_string())
+        .detail("public_base_url", state.config.public_base_url.clone())
+        .detail(
+            "callback_url",
+            oauth_callback_url(&state.config.public_base_url),
+        )
+        .detail("admin_mode", dashboard_admin_mode_summary(state)),
+    );
+    report.add_phase(
+        StartupPhase::new(
+            "registry",
+            StartupStatus::Ok,
+            format!(
+                "Discovered {} modules and {} leaf commands",
+                catalog_summary.module_count, catalog_summary.discovered_leaf_command_count
+            ),
+        )
+        .detail("module_ids", catalog_summary.module_ids.join(", "))
+        .detail(
+            "leaf_command_count",
+            catalog_summary.discovered_leaf_command_count.to_string(),
+        )
+        .detail(
+            "per_category_command_counts",
+            format_kv_list(&catalog_summary.per_category_command_counts),
+        ),
+    );
+    report.add_phase(
+        StartupPhase::new(
+            "readiness",
+            StartupStatus::Ok,
+            format!(
+                "Dashboard persistence ready on '{}' with Discord OAuth configured",
+                state
+                    .persistence
+                    .database_name
+                    .as_deref()
+                    .unwrap_or("unknown")
+            ),
+        )
+        .detail(
+            "database",
+            state
+                .persistence
+                .database_name
+                .clone()
+                .unwrap_or_else(|| "unknown".to_string()),
+        )
+        .detail(
+            "oauth_client_secret",
+            (!state.config.client_secret.is_empty()).to_string(),
+        )
+        .detail(
+            "callback_url_resolved",
+            (!oauth_callback_url(&state.config.public_base_url).is_empty()).to_string(),
+        )
+        .detail("session_store_mode", "in-memory"),
+    );
+    report.add_phase(
+        StartupPhase::new(
+            "listening",
+            StartupStatus::Ok,
+            format!("Dashboard listening on {}", state.config.public_base_url),
+        )
+        .detail("listening_address", address.to_string())
+        .detail(
+            "listening_url",
+            format!("{}/", state.config.public_base_url),
+        )
+        .detail("health_endpoint", health_endpoint.to_string()),
+    );
+    report
+}
+
+fn oauth_callback_url(public_base_url: &str) -> String {
+    format!(
+        "{}/auth/discord/callback",
+        public_base_url.trim_end_matches('/')
+    )
+}
+
+fn dashboard_admin_mode_summary(state: &DashboardState) -> String {
+    match (
+        state.app_info.owner_user_id,
+        state.config.admin_user_ids.is_empty(),
+    ) {
+        (Some(owner_id), true) => format!("owner-only ({owner_id})"),
+        (Some(owner_id), false) => format!(
+            "owner ({owner_id}) + {} explicit admin(s)",
+            state.config.admin_user_ids.len()
+        ),
+        (None, true) => "bot application owner only".to_string(),
+        (None, false) => format!(
+            "application owner + {} explicit admin(s)",
+            state.config.admin_user_ids.len()
+        ),
     }
 }
 

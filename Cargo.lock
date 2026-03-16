@@ -968,6 +968,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
+ "dynamo-core",
  "dynamo-persistence-mongo",
  "tokio",
  "tracing",
@@ -1000,6 +1001,7 @@ dependencies = [
  "poise",
  "serde",
  "serde_json",
+ "tracing",
 ]
 
 [[package]]

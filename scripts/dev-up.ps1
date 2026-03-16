@@ -87,6 +87,40 @@ function Resolve-BoolSetting {
   return ConvertTo-BoolSetting -Key $Key -Value $RawValue
 }
 
+function Get-DashboardPublicBaseUrl {
+  $BaseUrl = Get-DotenvValue -Key "DASHBOARD_BASE_URL"
+  if ($BaseUrl) {
+    return $BaseUrl.TrimEnd('/')
+  }
+
+  $DashboardHost = Get-DotenvValue -Key "DASHBOARD_HOST"
+  if (-not $DashboardHost) {
+    $DashboardHost = "127.0.0.1"
+  }
+  $DashboardPort = Get-DotenvValue -Key "DASHBOARD_PORT"
+  if (-not $DashboardPort) {
+    $DashboardPort = "3000"
+  }
+
+  return "http://$DashboardHost`:$DashboardPort"
+}
+
+function Get-DashboardHealthUrl {
+  $DashboardHost = Get-DotenvValue -Key "DASHBOARD_HOST"
+  if (-not $DashboardHost) {
+    $DashboardHost = "127.0.0.1"
+  }
+  if ($DashboardHost -eq "0.0.0.0" -or $DashboardHost -eq "::") {
+    $DashboardHost = "127.0.0.1"
+  }
+  $DashboardPort = Get-DotenvValue -Key "DASHBOARD_PORT"
+  if (-not $DashboardPort) {
+    $DashboardPort = "3000"
+  }
+
+  return "http://$DashboardHost`:$DashboardPort/healthz"
+}
+
 function Join-CommandParts {
   param([string[]]$Parts)
   return ($Parts -join "; ")
@@ -180,10 +214,17 @@ function Invoke-Build {
 
   if ($DryRun) {
     Write-Host "[dry-run] $($Shell.Source) -NoLogo -NoProfile -Command $Command"
-    return
+    return [pscustomobject]@{
+      Status = "dry-run"
+      ArtifactsPath = (Join-Path $RepoRoot "target\debug")
+    }
   }
 
   & $Shell.Source -NoLogo -NoProfile -Command $Command
+  return [pscustomobject]@{
+    Status = "ok"
+    ArtifactsPath = (Join-Path $RepoRoot "target\debug")
+  }
 }
 
 function Start-RustProcess {
@@ -191,8 +232,6 @@ function Start-RustProcess {
     [string]$Name,
     [string]$Crate
   )
-
-  Stop-ManagedProcess -Name $Name -Crate $Crate
 
   $ConsoleLogPath = Join-Path $LogsDir "$Name.console.log"
   $PidPath = Join-Path $LogsDir "$Name.pid"
@@ -215,8 +254,20 @@ function Start-RustProcess {
 
   if ($DryRun) {
     Write-Host "[dry-run] $($Shell.Source) -NoLogo -NoProfile $($(if ($Headless) { '' } else { '-NoExit ' })) -Command $Command"
-    return
+    return [pscustomobject]@{
+      Name = $Name
+      Crate = $Crate
+      BinaryPath = $BinaryPath
+      Pid = "-"
+      Running = $true
+      LogPath = $ConsoleLogPath
+      StdoutPath = $null
+      StderrPath = $null
+      Status = "dry-run"
+    }
   }
+
+  Stop-ManagedProcess -Name $Name -Crate $Crate
 
   $ArgumentList = @("-NoLogo", "-NoProfile")
   if (-not $Headless) {
@@ -270,6 +321,18 @@ function Start-RustProcess {
       }
     }
   }
+
+  return [pscustomobject]@{
+    Name = $Name
+    Crate = $Crate
+    BinaryPath = $BinaryPath
+    Pid = $Process.Id
+    Running = [bool]$Running
+    LogPath = $(if ($Headless) { $StdoutPath } else { $ConsoleLogPath })
+    StdoutPath = $(if ($Headless) { $StdoutPath } else { $null })
+    StderrPath = $(if ($Headless) { $StderrPath } else { $null })
+    Status = $(if ($Running) { "ok" } else { "degraded" })
+  }
 }
 
 function Invoke-Bootstrap {
@@ -288,10 +351,38 @@ function Invoke-Bootstrap {
 
   if ($DryRun) {
     Write-Host "[dry-run] $($Shell.Source) -NoLogo -NoProfile -Command $Command"
-    return
+    return [pscustomobject]@{ Status = "dry-run" }
   }
 
   & $Shell.Source -NoLogo -NoProfile -Command $Command
+  return [pscustomobject]@{ Status = "ok" }
+}
+
+function Test-DashboardHealth {
+  param([string]$HealthUrl)
+
+  if ($DryRun) {
+    return [pscustomobject]@{
+      Status = "dry-run"
+      Url = $HealthUrl
+      Healthy = $true
+    }
+  }
+
+  try {
+    $Response = Invoke-WebRequest -Uri $HealthUrl -UseBasicParsing -TimeoutSec 5
+    return [pscustomobject]@{
+      Status = if ($Response.StatusCode -eq 200) { "ok" } else { "degraded" }
+      Url = $HealthUrl
+      Healthy = ($Response.StatusCode -eq 200)
+    }
+  } catch {
+    return [pscustomobject]@{
+      Status = "degraded"
+      Url = $HealthUrl
+      Healthy = $false
+    }
+  }
 }
 
 Write-Host "Repo root: $RepoRoot"
@@ -318,18 +409,41 @@ if ($EffectiveGiveaway) {
 
 if (-not $SkipBuild) {
   Write-Host "Prebuilding shared Rust artifacts..."
-  Invoke-Build
+  $BuildResult = Invoke-Build
+} else {
+  $BuildResult = [pscustomobject]@{
+    Status = "skipped"
+    ArtifactsPath = (Join-Path $RepoRoot "target\debug")
+  }
 }
 
 if (-not $SkipBootstrap) {
   Write-Host "Running Mongo bootstrap..."
-  Invoke-Bootstrap
+  $BootstrapResult = Invoke-Bootstrap
+} else {
+  $BootstrapResult = [pscustomobject]@{ Status = "skipped" }
 }
 
 Write-Host "Starting dashboard..."
-Start-RustProcess -Name "dashboard" -Crate "dynamo-dashboard"
+$DashboardResult = Start-RustProcess -Name "dashboard" -Crate "dynamo-dashboard"
 
 Write-Host "Starting bot..."
-Start-RustProcess -Name "bot" -Crate "dynamo-bot"
+$BotResult = Start-RustProcess -Name "bot" -Crate "dynamo-bot"
+
+$DashboardPublicBaseUrl = Get-DashboardPublicBaseUrl
+$DashboardHealth = Test-DashboardHealth -HealthUrl (Get-DashboardHealthUrl)
+$OverallStatus = if ($DashboardResult.Status -eq "degraded" -or $BotResult.Status -eq "degraded" -or $DashboardHealth.Status -eq "degraded") {
+  "degraded"
+} else {
+  "ok"
+}
+
+Write-Host ""
+Write-Host "Startup summary:"
+Write-Host "  artifacts: $($BuildResult.ArtifactsPath) [$($BuildResult.Status)]"
+Write-Host "  bootstrap: $($BootstrapResult.Status)"
+Write-Host "  dashboard: pid=$($DashboardResult.Pid) url=$DashboardPublicBaseUrl health=$($DashboardHealth.Status) log=$($DashboardResult.LogPath)"
+Write-Host "  bot: pid=$($BotResult.Pid) scope=$CommandScope log=$($BotResult.LogPath)"
+Write-Host "  overall: $OverallStatus"
 
 Write-Host "Done."

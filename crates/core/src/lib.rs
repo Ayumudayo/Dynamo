@@ -9,6 +9,7 @@ mod registry;
 mod repositories;
 mod services;
 mod settings;
+mod startup;
 mod suggestions;
 mod warnings;
 
@@ -45,6 +46,10 @@ pub use services::{
 pub use settings::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
     GuildModuleSettings, GuildSettings,
+};
+pub use startup::{
+    CatalogStartupSummary, ScopeStartupSummary, StartupPhase, StartupReport, StartupStatus,
+    catalog_startup_summary, format_gateway_intents, format_kv_list, scope_startup_summary,
 };
 pub use suggestions::{
     SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
