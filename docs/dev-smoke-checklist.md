@@ -1,6 +1,6 @@
 # Dev Smoke Checklist
 
-Run this checklist after major module, persistence, or dashboard changes.
+Run this checklist after major module, persistence, or dashboard changes. This checklist applies to the current repository as the Rust mainline product; JS archive validation is tracked separately in the cutover docs.
 
 ## Bootstrap
 
@@ -64,11 +64,8 @@ Run this checklist after major module, persistence, or dashboard changes.
 ## Currency
 
 1. Run `/exchange` with no arguments and confirm dashboard defaults are applied.
-2. Run `/exchange USD KRW 1` and confirm the embed shows:
-   - `Data Source`
-   - `As of`
-   - a Google Finance backed value
-3. Run `/rate` and confirm each row shows a rate plus live/cached source text.
+2. Run `/exchange USD KRW 1` and confirm the embed shows a Google Finance backed value plus a normal Discord timestamp.
+3. Run `/rate` and confirm each row shows a rate, with cached fallback only appearing when a live lookup fails.
 4. Force or simulate a fetch failure and confirm cached fallback values are shown instead of a hard failure.
 5. Confirm a `provider_state` document exists for the Google Finance exchange cache.
 6. Confirm the bot startup log shows the exchange-rate cache service and 30-minute refresh loop status.
@@ -130,3 +127,16 @@ Run this checklist after major module, persistence, or dashboard changes.
    - `cargo test -p dynamo-provider-yahoo live_quote_summary_enrichment_returns_rich_nvda_quote -- --ignored --nocapture`
    - `cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to_mongodb -- --ignored --nocapture`
 2. Confirm a `provider_state` document exists for Yahoo session persistence.
+
+## Cutover Prep
+
+1. Run `./scripts/export-js-archive.ps1` or `./scripts/export-js-archive.sh`.
+2. Confirm `output/js-archive` contains:
+   - `src/`
+   - `dashboard/`
+   - `bot.js`
+   - `config.js`
+   - `package.json`
+   - `package-lock.json`
+   - `docs/commands`
+3. Confirm the staged archive root README clearly says the archive is read-only and that active development remains in the Rust mainline repository.

@@ -5,25 +5,24 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
-$TemplateRoot = Join-Path $RepoRoot "templates\\rust-template"
+$TemplateRoot = Join-Path $RepoRoot "templates\\js-archive"
 if (-not $OutputDir) {
-  $OutputDir = Join-Path $RepoRoot "output\\rust-template"
+  $OutputDir = Join-Path $RepoRoot "output\\js-archive"
 }
 
 $IncludePaths = @(
-  ".cargo",
-  ".github",
-  "Cargo.toml",
-  "Cargo.lock",
-  "LICENSE",
-  "crates",
-  "docs\\dev-smoke-checklist.md",
-  "playwright.dashboard.config.cjs",
-  "scripts\\dev-up.ps1",
-  "scripts\\dev-down.ps1",
-  "scripts\\dev-up.sh",
-  "scripts\\dev-down.sh",
-  "tests\\playwright"
+  "bot.js",
+  "config.js",
+  "dashboard",
+  "docs\\commands",
+  "jsconfig.json",
+  "package.json",
+  "package-lock.json",
+  "scripts\\db-v4-to-v5.js",
+  "src",
+  ".eslintrc.json",
+  ".prettierrc.json",
+  "LICENSE"
 )
 
 Write-Host "Repo root:   $RepoRoot"
@@ -46,8 +45,6 @@ foreach ($Path in $IncludePaths) {
 }
 
 Copy-Item (Join-Path $TemplateRoot "README.md") (Join-Path $OutputDir "README.md") -Force
-Copy-Item (Join-Path $TemplateRoot ".env.example") (Join-Path $OutputDir ".env.example") -Force
-Copy-Item (Join-Path $TemplateRoot "package.json") (Join-Path $OutputDir "package.json") -Force
 Copy-Item (Join-Path $TemplateRoot ".gitignore") (Join-Path $OutputDir ".gitignore") -Force
 
-Write-Host "Exported fresh Rust-only template staging repo to $OutputDir"
+Write-Host "Exported JS archive staging repo to $OutputDir"

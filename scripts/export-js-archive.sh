@@ -2,23 +2,22 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-TEMPLATE_DIR="$ROOT_DIR/templates/rust-template"
-OUTPUT_DIR="${1:-$ROOT_DIR/output/rust-template}"
+TEMPLATE_DIR="$ROOT_DIR/templates/js-archive"
+OUTPUT_DIR="${1:-$ROOT_DIR/output/js-archive}"
 
 INCLUDE_PATHS=(
-  ".cargo"
-  ".github"
-  "Cargo.toml"
-  "Cargo.lock"
+  "bot.js"
+  "config.js"
+  "dashboard"
+  "docs/commands"
+  "jsconfig.json"
+  "package.json"
+  "package-lock.json"
+  "scripts/db-v4-to-v5.js"
+  "src"
+  ".eslintrc.json"
+  ".prettierrc.json"
   "LICENSE"
-  "crates"
-  "docs/dev-smoke-checklist.md"
-  "playwright.dashboard.config.cjs"
-  "scripts/dev-up.ps1"
-  "scripts/dev-down.ps1"
-  "scripts/dev-up.sh"
-  "scripts/dev-down.sh"
-  "tests/playwright"
 )
 
 echo "Repo root:    $ROOT_DIR"
@@ -39,8 +38,6 @@ for path in "${INCLUDE_PATHS[@]}"; do
 done
 
 cp "$TEMPLATE_DIR/README.md" "$OUTPUT_DIR/README.md"
-cp "$TEMPLATE_DIR/.env.example" "$OUTPUT_DIR/.env.example"
-cp "$TEMPLATE_DIR/package.json" "$OUTPUT_DIR/package.json"
 cp "$TEMPLATE_DIR/.gitignore" "$OUTPUT_DIR/.gitignore"
 
-echo "Exported fresh Rust-only template staging repo to $OUTPUT_DIR"
+echo "Exported JS archive staging repo to $OUTPUT_DIR"

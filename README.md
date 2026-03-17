@@ -2,7 +2,7 @@
 
 `Dynamo` is a slash-first Discord bot template built with `poise + serenity`, MongoDB-backed runtime settings, and a companion dashboard for deployment and guild configuration.
 
-This repository is now the transition workspace and audit source for the Rust cutover. The legacy JavaScript bot remains here as reference material, while the actively developed product lives in the Rust workspace under [`crates/`](./crates). A fresh Rust-only repo export can be staged from this workspace with the export scripts under [`scripts/`](./scripts).
+This repository is the active Rust product line. The legacy JavaScript bot and dashboard still exist here temporarily as migration reference material, but the planned repo split is now the inverse of the earlier approach: the current repository stays as the Rust home, and the legacy JS runtime is exported into a separate read-only archive repository.
 
 ## Workspace Layout
 
@@ -145,24 +145,24 @@ Stop managed dashboard and bot processes:
 
 The launchers print the effective command scope resolved from `.env`.
 
-## Rust-Only Repo Export
+## JS Archive Export
 
-Use the export scripts to stage a fresh Rust-only repo in `output/rust-template/`:
+Use the export scripts to stage a read-only JavaScript archive repo in `output/js-archive/`:
 
 ```powershell
-./scripts/export-rust-template.ps1
+./scripts/export-js-archive.ps1
 ```
 
 ```bash
-./scripts/export-rust-template.sh
+./scripts/export-js-archive.sh
 ```
 
-The staged repo includes the Rust workspace, launcher scripts, CI, dashboard smoke assets, and a minimal Playwright-only `package.json`. It excludes the legacy JS runtime, JS dashboard, and JS bot dependencies.
+The staged archive includes the legacy JS runtime, JS dashboard, package manifests, command docs, and migration helper scripts. It is intended to become a separate archive repository once the split is finalized.
 
 Reference documents for the cutover:
 
-- [`docs/rust-template/js-pattern-audit.md`](./docs/rust-template/js-pattern-audit.md)
-- [`docs/rust-template/cutover-checklist.md`](./docs/rust-template/cutover-checklist.md)
+- [`docs/cutover/js-pattern-audit.md`](./docs/cutover/js-pattern-audit.md)
+- [`docs/cutover/current-repo-rust-cutover-checklist.md`](./docs/cutover/current-repo-rust-cutover-checklist.md)
 
 ## Validation Commands
 
@@ -232,4 +232,4 @@ Use [`docs/dev-smoke-checklist.md`](./docs/dev-smoke-checklist.md) for the manua
 
 ## Current Status
 
-The Rust workspace is the primary architecture target for the future public template. The next repo-level step is exporting a fresh Rust-only repository, while this repository remains the read-only JS/archive reference once that new repo is published.
+The Rust workspace in this repository is the primary product line. The next repo-level step is exporting the legacy JS runtime into its own archive repository, then removing those JS paths from this repository so `main` can become the clean Rust-only public template history going forward.
