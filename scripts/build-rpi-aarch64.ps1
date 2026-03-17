@@ -43,11 +43,12 @@ if (Test-Path $StageDir) {
 New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "target\release") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "scripts") | Out-Null
 
-Copy-Item (Join-Path $RepoRoot "ecosystem.pm2.cjs") (Join-Path $StageDir "ecosystem.pm2.cjs") -Force
+Copy-Item (Join-Path $RepoRoot "ecosystem.config.js") (Join-Path $StageDir "ecosystem.config.js") -Force
 Copy-Item (Join-Path $RepoRoot ".env.example") (Join-Path $StageDir ".env.example") -Force
 Copy-Item (Join-Path $RepoRoot "scripts\prod-bootstrap.sh") (Join-Path $StageDir "scripts\prod-bootstrap.sh") -Force
 Copy-Item (Join-Path $RepoRoot "scripts\prod-dashboard.sh") (Join-Path $StageDir "scripts\prod-dashboard.sh") -Force
 Copy-Item (Join-Path $RepoRoot "scripts\prod-bot.sh") (Join-Path $StageDir "scripts\prod-bot.sh") -Force
+Copy-Item (Join-Path $RepoRoot "scripts\remote-rpi-postdeploy.sh") (Join-Path $StageDir "scripts\remote-rpi-postdeploy.sh") -Force
 Copy-Item (Join-Path $ReleaseDir "dynamo-bootstrap") (Join-Path $StageDir "target\release\dynamo-bootstrap") -Force
 Copy-Item (Join-Path $ReleaseDir "dynamo-dashboard") (Join-Path $StageDir "target\release\dynamo-dashboard") -Force
 Copy-Item (Join-Path $ReleaseDir "dynamo-bot") (Join-Path $StageDir "target\release\dynamo-bot") -Force

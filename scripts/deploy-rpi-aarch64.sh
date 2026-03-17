@@ -83,6 +83,7 @@ rm -f "$ARCHIVE_PATH"
 tar -C "$STAGE_DIR" -cf "$ARCHIVE_PATH" .
 
 scp "${SCP_ARGS[@]}" "$ARCHIVE_PATH" "$RPI_USER@$RPI_HOST:$RPI_APP_DIR.deploy.tar"
+scp "${SCP_ARGS[@]}" "$ROOT_DIR/scripts/remote-rpi-postdeploy.sh" "$RPI_USER@$RPI_HOST:$RPI_APP_DIR.postdeploy.sh"
 
 BOOTSTRAP_MODE="auto"
 if [[ "$SKIP_BOOTSTRAP" == "true" ]]; then
@@ -91,67 +92,8 @@ elif [[ "$FORCE_BOOTSTRAP" == "true" ]]; then
   BOOTSTRAP_MODE="force"
 fi
 
-ssh "${SSH_ARGS[@]}" "$RPI_USER@$RPI_HOST" "bash -s" -- "$RPI_APP_DIR" "$BOOTSTRAP_MODE" "$RPI_APP_DIR.deploy.tar" <<'REMOTE'
-set -euo pipefail
-APP_DIR="$1"
-BOOTSTRAP_MODE="$2"
-ARCHIVE_PATH="$3"
-
-for profile in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
-  if [[ -f "$profile" ]]; then
-    # shellcheck disable=SC1090
-    source "$profile"
-  fi
-done
-
-if ! command -v pm2 >/dev/null 2>&1; then
-  if [[ -d "$HOME/.nvm/versions/node" ]]; then
-    latest_pm2_dir="$(find "$HOME/.nvm/versions/node" -path '*/bin/pm2' -printf '%h\n' 2>/dev/null | sort | tail -n 1 || true)"
-    if [[ -n "$latest_pm2_dir" ]]; then
-      export PATH="$latest_pm2_dir:$PATH"
-    fi
-  fi
-fi
-
-mkdir -p "$APP_DIR" "$APP_DIR/scripts" "$APP_DIR/target/release" "$APP_DIR/logs"
-tar -C "$APP_DIR" -xf "$ARCHIVE_PATH"
-rm -f "$ARCHIVE_PATH"
-
-chmod +x "$APP_DIR"/scripts/*.sh "$APP_DIR"/target/release/dynamo-*
-
-if [[ ! -f "$APP_DIR/.env" ]]; then
-  cp "$APP_DIR/.env.example" "$APP_DIR/.env"
-  echo "Created $APP_DIR/.env from .env.example. Fill it with real values and rerun deployment." >&2
-  exit 1
-fi
-
-cd "$APP_DIR"
-
-if [[ "$BOOTSTRAP_MODE" == "force" ]]; then
-  ./scripts/prod-bootstrap.sh
-  touch .bootstrap.done
-elif [[ "$BOOTSTRAP_MODE" == "auto" && ! -f .bootstrap.done ]]; then
-  ./scripts/prod-bootstrap.sh
-  touch .bootstrap.done
-fi
-
-if ! command -v pm2 >/dev/null 2>&1; then
-  echo "PATH=$PATH" >&2
-  echo "pm2 is not installed on the target host." >&2
-  exit 1
-fi
-
-echo "Using pm2 from: $(command -v pm2)"
-echo "Using node from: $(command -v node || echo missing)"
-if ! pm2 startOrRestart ecosystem.pm2.cjs --update-env; then
-  echo "pm2 startOrRestart failed. Dumping pm2 status and recent logs..." >&2
-  pm2 status || true
-  pm2 logs dynamo-dashboard --lines 80 --nostream || true
-  pm2 logs dynamo-bot --lines 80 --nostream || true
-  exit 1
-fi
-pm2 save
-REMOTE
+ssh "${SSH_ARGS[@]}" "$RPI_USER@$RPI_HOST" \
+  "chmod +x '$RPI_APP_DIR.postdeploy.sh' && bash '$RPI_APP_DIR.postdeploy.sh' '$RPI_APP_DIR' '$BOOTSTRAP_MODE' '$RPI_APP_DIR.deploy.tar'"
 
 rm -f "$ARCHIVE_PATH"
 

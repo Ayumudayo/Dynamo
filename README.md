@@ -164,7 +164,7 @@ For a Raspberry Pi or Ubuntu-style server where you want to keep the bot and das
 3. Start the long-running processes with `pm2`:
 
 ```bash
-pm2 start ecosystem.pm2.cjs
+pm2 start ecosystem.config.js
 pm2 save
 ```
 
@@ -174,8 +174,8 @@ Useful commands:
 pm2 status
 pm2 logs dynamo-dashboard
 pm2 logs dynamo-bot
-pm2 restart ecosystem.pm2.cjs
-pm2 delete ecosystem.pm2.cjs
+pm2 restart ecosystem.config.js
+pm2 delete ecosystem.config.js
 ```
 
 Notes:
@@ -225,7 +225,7 @@ Optional flags:
 - `--app-dir` / `-AppDir`
 - `--key` / `-KeyPath`
 
-The deploy script stages a compact bundle under `output/rpi-aarch64/`, uploads it as a single archive, ensures the remote shell scripts are executable, auto-runs bootstrap only on the first successful deploy after `.env` exists, and then calls `pm2 startOrRestart ecosystem.pm2.cjs --update-env`.
+The deploy script stages a compact bundle under `output/rpi-aarch64/`, uploads it as a single archive, ensures the remote shell scripts are executable, auto-runs bootstrap only on the first successful deploy after `.env` exists, and then calls `pm2 startOrRestart ecosystem.config.js --update-env`.
 If you configure SSH key authentication and pass `--key` / `-KeyPath` (or set `RPI_SSH_KEY`), repeated password prompts are eliminated.
 
 ## Legacy JS Archive

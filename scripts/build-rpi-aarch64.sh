@@ -32,11 +32,12 @@ cargo zigbuild --release --target "$TARGET" -p dynamo-bootstrap -p dynamo-dashbo
 rm -rf "$STAGE_DIR"
 mkdir -p "$STAGE_DIR/target/release" "$STAGE_DIR/scripts"
 
-cp "$ROOT_DIR/ecosystem.pm2.cjs" "$STAGE_DIR/ecosystem.pm2.cjs"
+cp "$ROOT_DIR/ecosystem.config.js" "$STAGE_DIR/ecosystem.config.js"
 cp "$ROOT_DIR/.env.example" "$STAGE_DIR/.env.example"
 cp "$ROOT_DIR/scripts/prod-bootstrap.sh" "$STAGE_DIR/scripts/prod-bootstrap.sh"
 cp "$ROOT_DIR/scripts/prod-dashboard.sh" "$STAGE_DIR/scripts/prod-dashboard.sh"
 cp "$ROOT_DIR/scripts/prod-bot.sh" "$STAGE_DIR/scripts/prod-bot.sh"
+cp "$ROOT_DIR/scripts/remote-rpi-postdeploy.sh" "$STAGE_DIR/scripts/remote-rpi-postdeploy.sh"
 cp "$RELEASE_DIR/dynamo-bootstrap" "$STAGE_DIR/target/release/dynamo-bootstrap"
 cp "$RELEASE_DIR/dynamo-dashboard" "$STAGE_DIR/target/release/dynamo-dashboard"
 cp "$RELEASE_DIR/dynamo-bot" "$STAGE_DIR/target/release/dynamo-bot"
