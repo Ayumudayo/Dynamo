@@ -1,6 +1,6 @@
 # Dev Smoke Checklist
 
-Run this checklist after major module, persistence, or dashboard changes. This checklist applies to the current repository as the Rust mainline product; JS archive validation is tracked separately in the cutover docs.
+Run this checklist after major module, persistence, or dashboard changes. This checklist applies to the current repository as the Rust mainline product.
 
 ## Bootstrap
 
@@ -127,16 +127,3 @@ Run this checklist after major module, persistence, or dashboard changes. This c
    - `cargo test -p dynamo-provider-yahoo live_quote_summary_enrichment_returns_rich_nvda_quote -- --ignored --nocapture`
    - `cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to_mongodb -- --ignored --nocapture`
 2. Confirm a `provider_state` document exists for Yahoo session persistence.
-
-## Cutover Prep
-
-1. Run `./scripts/export-js-archive.ps1` or `./scripts/export-js-archive.sh`.
-2. Confirm `output/Dynamo-JS` contains:
-   - `src/`
-   - `dashboard/`
-   - `bot.js`
-   - `config.js`
-   - `package.json`
-   - `package-lock.json`
-   - `docs/commands`
-3. Confirm the staged archive root README clearly says the archive is read-only and that active development remains in the Rust mainline repository.

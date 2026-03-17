@@ -1,6 +1,6 @@
-# Current Repo Rust Cutover Checklist
+# Current Repo Rust Cutover Status
 
-Use this checklist before splitting the legacy JS runtime into the `Dynamo-JS` archive repository and cleaning this repository into the Rust-only mainline.
+This note records the completed repo split where the current repository became the Rust mainline and the legacy JavaScript runtime moved to [`Dynamo-JS`](https://github.com/Ayumudayo/Dynamo-JS).
 
 ## 1. Product Decisions Locked
 
@@ -10,9 +10,9 @@ Use this checklist before splitting the legacy JS runtime into the `Dynamo-JS` a
 - `music` stays paused and outside the active public template surface.
 - Dashboard OAuth, audit logs, launcher scripts, startup reports, and Playwright smoke remain part of the public template.
 
-## 2. JS Archive Repository Contents
+## 2. Published JS Archive Repository Contents
 
-The staged `Dynamo-JS` archive should include:
+The published `Dynamo-JS` archive includes:
 
 - `src/`
 - `dashboard/`
@@ -25,20 +25,29 @@ The staged `Dynamo-JS` archive should include:
 - `jsconfig.json`
 - lint/format config files needed to inspect the old code
 
-The staged `Dynamo-JS` archive should not be treated as active development output. Its root README should say the archive is read-only and that active development continues in the Rust mainline repository.
+`Dynamo-JS` is read-only. Its root README points back to this repository as the active codebase.
 
-## 3. Current Repo Cleanup After Archive Split
+## 3. Current Repo Cleanup Applied
 
-After the archive repo is published:
+The current repository has removed:
 
-- remove `src/`
-- remove `dashboard/`
-- remove `bot.js`
-- remove `config.js`
-- rewrite the root `package.json` into a Playwright-only smoke manifest
-- keep `crates/`, launcher scripts, CI, dashboard smoke assets, and Rust docs
+- `src/`
+- `dashboard/`
+- `bot.js`
+- `config.js`
+- legacy JS lint/config helper files
+- legacy JS archive export scripts and templates
 
-## 4. Validation Before Cleanup
+The current repository now keeps:
+
+- `crates/`
+- launcher scripts
+- CI
+- dashboard smoke assets
+- Rust docs
+- a Playwright-only root `package.json`
+
+## 4. Validation After Cleanup
 
 - `cargo fmt --all --check`
 - `cargo check`
@@ -46,10 +55,10 @@ After the archive repo is published:
 - dashboard Playwright smoke listing
 - one real OAuth smoke in a dev guild
 - launcher smoke with bootstrap + dashboard + bot
-- `Dynamo-JS` export smoke with both PowerShell and shell scripts
+- `Dynamo-JS` archive export and initial push
 
 ## 5. Final Repo Messaging
 
-- Current repo README must describe this repository as the Rust mainline.
-- Current repo README must point to the `Dynamo-JS` export flow until the split is complete.
-- The eventual `Dynamo-JS` archive repo README must point back to this repository as the active codebase.
+- Current repo README describes this repository as the Rust mainline.
+- Current repo README links to `Dynamo-JS` as the legacy archive.
+- `Dynamo-JS` README points back to this repository as the active codebase.

@@ -2,7 +2,7 @@
 
 `Dynamo` is a slash-first Discord bot template built with `poise + serenity`, MongoDB-backed runtime settings, and a companion dashboard for deployment and guild configuration.
 
-This repository is the active Rust product line. The legacy JavaScript bot and dashboard still exist here temporarily as migration reference material, but the planned repo split is now the inverse of the earlier approach: the current repository stays as the Rust home, and the legacy JS runtime is exported into a separate read-only archive repository named `Dynamo-JS`.
+This repository is the active Rust product line. The legacy JavaScript bot and dashboard have been split into the read-only archive repository [`Dynamo-JS`](https://github.com/Ayumudayo/Dynamo-JS), and this repository now serves as the canonical Rust home.
 
 ## Workspace Layout
 
@@ -185,21 +185,11 @@ Notes:
 - The Rust binaries still load `.env` themselves, so the wrapper scripts only need to `cd` into the repo root before `exec`.
 - On a Raspberry Pi, `cargo build --release` can take noticeably longer than debug builds.
 
-## JS Archive Export
+## Legacy JS Archive
 
-Use the export scripts to stage the `Dynamo-JS` read-only JavaScript archive repo in `output/Dynamo-JS/`:
+The old Discord.js runtime and EJS dashboard now live in the read-only archive repository [`Dynamo-JS`](https://github.com/Ayumudayo/Dynamo-JS).
 
-```powershell
-./scripts/export-js-archive.ps1
-```
-
-```bash
-./scripts/export-js-archive.sh
-```
-
-The staged archive includes the legacy JS runtime, JS dashboard, package manifests, command docs, and migration helper scripts. It is intended to become the `Dynamo-JS` archive repository once the split is finalized.
-
-Reference documents for the cutover:
+Reference notes for the cutover remain here:
 
 - [`docs/cutover/js-pattern-audit.md`](./docs/cutover/js-pattern-audit.md)
 - [`docs/cutover/current-repo-rust-cutover-checklist.md`](./docs/cutover/current-repo-rust-cutover-checklist.md)
@@ -221,6 +211,8 @@ cargo test -p dynamo-provider-yahoo live_quote_summary_enrichment_returns_rich_n
 cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to_mongodb -- --ignored --nocapture
 cargo test -p dynamo-provider-google-finance
 ```
+
+Node tooling at the repository root is now limited to Playwright smoke only. The root `package.json` is no longer a bot runtime manifest.
 
 ## Dashboard
 
@@ -272,4 +264,4 @@ Use [`docs/dev-smoke-checklist.md`](./docs/dev-smoke-checklist.md) for the manua
 
 ## Current Status
 
-The Rust workspace in this repository is the primary product line. The next repo-level step is exporting the legacy JS runtime into the `Dynamo-JS` archive repository, then removing those JS paths from this repository so `main` can become the clean Rust-only public template history going forward.
+This repository is now the Rust mainline. The legacy JS runtime lives in [`Dynamo-JS`](https://github.com/Ayumudayo/Dynamo-JS), while the current root keeps only Rust runtime code, Rust deployment assets, and Playwright dashboard smoke tooling.
