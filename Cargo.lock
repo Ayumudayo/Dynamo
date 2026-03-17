@@ -801,7 +801,6 @@ dependencies = [
  "dynamo-observability",
  "dynamo-ops",
  "dynamo-persistence-api",
- "dynamo-persistence-mongo",
  "dynamo-runtime-api",
  "dynamo-settings",
  "futures-util",

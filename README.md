@@ -29,6 +29,8 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/providers/yahoo`](./crates/providers/yahoo): Yahoo Finance provider with persisted crumb/cookie enrichment
 - [`crates/modules`](./crates/modules): first-party modules
 
+See [`docs/workspace-architecture.md`](./docs/workspace-architecture.md) for the intended dependency boundaries and stacked merge order for the current refactor chain.
+
 ## Included Core Modules
 
 - `currency`: Google Finance backed `/exchange` and `/rate` commands with cached fallback
@@ -251,6 +253,7 @@ These are the baseline checks used during development and CI:
 cargo fmt --all --check
 cargo check
 cargo test --workspace
+bash scripts/check-workspace-structure.sh
 ```
 
 Live network smoke checks for Yahoo enrichment are available but intentionally ignored by default:
