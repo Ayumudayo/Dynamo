@@ -142,7 +142,14 @@ if ! command -v pm2 >/dev/null 2>&1; then
 fi
 
 echo "Using pm2 from: $(command -v pm2)"
-pm2 startOrRestart ecosystem.pm2.cjs --update-env
+echo "Using node from: $(command -v node || echo missing)"
+if ! pm2 startOrRestart ecosystem.pm2.cjs --update-env; then
+  echo "pm2 startOrRestart failed. Dumping pm2 status and recent logs..." >&2
+  pm2 status || true
+  pm2 logs dynamo-dashboard --lines 80 --nostream || true
+  pm2 logs dynamo-bot --lines 80 --nostream || true
+  exit 1
+fi
 pm2 save
 REMOTE
 
