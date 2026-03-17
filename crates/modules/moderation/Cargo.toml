@@ -8,9 +8,9 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
+dynamo-access = { path = "../../access" }
 dynamo-domain-moderation = { path = "../../domain-moderation" }
 dynamo-module-kit = { path = "../../module-kit" }
-dynamo-enablement = { path = "../../enablement" }
 dynamo-runtime-api = { path = "../../runtime-api" }
 humantime.workspace = true
 poise.workspace = true

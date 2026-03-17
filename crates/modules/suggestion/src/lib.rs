@@ -1,8 +1,8 @@
 use chrono::Utc;
+use dynamo_access::module_access_for_context;
 use dynamo_domain_suggestion::{
     SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
 };
-use dynamo_enablement::module_access_for_context;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,

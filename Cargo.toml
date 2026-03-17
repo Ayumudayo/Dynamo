@@ -11,6 +11,7 @@ members = [
   "crates/runtime-api",
   "crates/config",
   "crates/enablement",
+  "crates/access",
   "crates/registry",
   "crates/ops",
   "crates/observability",

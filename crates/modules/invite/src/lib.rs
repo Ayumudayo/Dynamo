@@ -4,8 +4,8 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use dynamo_access::module_access_for_app;
 use dynamo_domain_invite::InviteMemberRecord;
-use dynamo_enablement::module_access_for_app;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,

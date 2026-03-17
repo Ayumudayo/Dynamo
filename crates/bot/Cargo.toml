@@ -9,8 +9,8 @@ authors.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 dynamo-app = { path = "../app" }
+dynamo-access = { path = "../access" }
 dynamo-config = { path = "../config" }
-dynamo-enablement = { path = "../enablement" }
 dynamo-module-giveaway = { path = "../modules/giveaway" }
 dynamo-module-kit = { path = "../module-kit" }
 dynamo-observability = { path = "../observability" }

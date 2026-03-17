@@ -16,7 +16,8 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/service-exchange`](./crates/service-exchange): exchange-rate service contract
 - [`crates/runtime-api`](./crates/runtime-api): shared app state, persistence/service registries, context, and error surface
 - [`crates/config`](./crates/config): runtime configuration loaded from `.env`
-- [`crates/enablement`](./crates/enablement): module/command effective-state resolution and guard helpers
+- [`crates/enablement`](./crates/enablement): pure module/command effective-state resolution
+- [`crates/access`](./crates/access): context-aware module and command guard helpers
 - [`crates/registry`](./crates/registry): module registry, command catalog, and intent aggregation
 - [`crates/ops`](./crates/ops): dashboard audit log and command sync state models
 - [`crates/observability`](./crates/observability): startup reporting and rendering

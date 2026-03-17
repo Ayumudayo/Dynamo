@@ -1,8 +1,8 @@
 use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use chrono::Utc;
+use dynamo_access::command_access_for_context;
 use dynamo_config::{AppConfig, CommandSyncConfig, DiscordConfig};
-use dynamo_enablement::command_access_for_context;
 use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
 use dynamo_observability::{
     StartupPhase, StartupReport, StartupStatus, catalog_startup_summary, format_gateway_intents,

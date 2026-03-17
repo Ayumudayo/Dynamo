@@ -694,6 +694,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-access"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "dynamo-enablement",
+ "dynamo-module-kit",
+ "dynamo-runtime-api",
+ "dynamo-settings",
+]
+
+[[package]]
 name = "dynamo-app"
 version = "0.1.0"
 dependencies = [
@@ -746,9 +757,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "dotenvy",
+ "dynamo-access",
  "dynamo-app",
  "dynamo-config",
- "dynamo-enablement",
  "dynamo-module-giveaway",
  "dynamo-module-kit",
  "dynamo-observability",
@@ -858,9 +869,7 @@ dependencies = [
 name = "dynamo-enablement"
 version = "0.1.0"
 dependencies = [
- "anyhow",
  "dynamo-module-kit",
- "dynamo-runtime-api",
  "dynamo-settings",
  "serde",
  "serde_json",
@@ -871,8 +880,8 @@ name = "dynamo-module-currency"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dynamo-access",
  "dynamo-domain-currency",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "dynamo-settings",
@@ -889,7 +898,7 @@ dependencies = [
  "anyhow",
  "chrono",
  "chrono-tz",
- "dynamo-enablement",
+ "dynamo-access",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "poise",
@@ -909,8 +918,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dynamo-access",
  "dynamo-domain-giveaway",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "humantime",
@@ -925,8 +934,8 @@ name = "dynamo-module-greeting"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "dynamo-access",
  "dynamo-domain-invite",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "poise",
@@ -949,8 +958,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dynamo-access",
  "dynamo-domain-invite",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "poise",
@@ -974,8 +983,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dynamo-access",
  "dynamo-domain-moderation",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "humantime",
@@ -990,8 +999,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "dynamo-access",
  "dynamo-domain-stats",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-repositories",
  "dynamo-runtime-api",
@@ -1005,8 +1014,8 @@ dependencies = [
 name = "dynamo-module-stock"
 version = "0.1.0"
 dependencies = [
+ "dynamo-access",
  "dynamo-domain-stock",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "dynamo-service-stock",
@@ -1022,8 +1031,8 @@ name = "dynamo-module-suggestion"
 version = "0.1.0"
 dependencies = [
  "chrono",
+ "dynamo-access",
  "dynamo-domain-suggestion",
- "dynamo-enablement",
  "dynamo-module-kit",
  "dynamo-repositories",
  "dynamo-runtime-api",
@@ -1038,7 +1047,7 @@ name = "dynamo-module-ticket"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dynamo-enablement",
+ "dynamo-access",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "dynamo-settings",

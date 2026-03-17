@@ -1,6 +1,6 @@
 use chrono::{Duration as ChronoDuration, Utc};
+use dynamo_access::module_access_for_app;
 use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
-use dynamo_enablement::module_access_for_app;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,

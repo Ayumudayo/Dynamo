@@ -1,12 +1,13 @@
 [package]
-name = "dynamo-enablement"
+name = "dynamo-access"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 authors.workspace = true
 
 [dependencies]
+anyhow.workspace = true
+dynamo-enablement = { path = "../enablement" }
 dynamo-module-kit = { path = "../module-kit" }
+dynamo-runtime-api = { path = "../runtime-api" }
 dynamo-settings = { path = "../settings" }
-serde.workspace = true
-serde_json.workspace = true

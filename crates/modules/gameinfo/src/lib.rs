@@ -5,7 +5,7 @@ use std::{
 
 use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Asia::{Seoul, Tokyo};
-use dynamo_enablement::module_access_for_context;
+use dynamo_access::module_access_for_context;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,

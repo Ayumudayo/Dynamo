@@ -9,8 +9,8 @@ authors.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 chrono-tz.workspace = true
+dynamo-access = { path = "../../access" }
 dynamo-module-kit = { path = "../../module-kit" }
-dynamo-enablement = { path = "../../enablement" }
 dynamo-runtime-api = { path = "../../runtime-api" }
 poise.workspace = true
 regex.workspace = true

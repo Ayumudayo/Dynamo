@@ -7,7 +7,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-dynamo-enablement = { path = "../../enablement" }
+dynamo-access = { path = "../../access" }
 dynamo-module-kit = { path = "../../module-kit" }
 dynamo-runtime-api = { path = "../../runtime-api" }
 dynamo-settings = { path = "../../settings" }

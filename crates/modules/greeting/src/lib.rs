@@ -1,5 +1,5 @@
+use dynamo_access::{module_access_for_app, module_access_for_context};
 use dynamo_domain_invite::InviteMemberRecord;
-use dynamo_enablement::{module_access_for_app, module_access_for_context};
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,

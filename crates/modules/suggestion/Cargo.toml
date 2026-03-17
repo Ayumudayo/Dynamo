@@ -7,7 +7,7 @@ authors.workspace = true
 
 [dependencies]
 chrono.workspace = true
-dynamo-enablement = { path = "../../enablement" }
+dynamo-access = { path = "../../access" }
 dynamo-domain-suggestion = { path = "../../domain-suggestion" }
 dynamo-module-kit = { path = "../../module-kit" }
 dynamo-repositories = { path = "../../repositories" }

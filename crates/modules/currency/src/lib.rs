@@ -1,5 +1,5 @@
+use dynamo_access::module_access_for_context;
 use dynamo_domain_currency::{ExchangeRateSourceKind, supported_currency_specs};
-use dynamo_enablement::module_access_for_context;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingOption,
     SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
