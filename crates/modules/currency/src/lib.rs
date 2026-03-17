@@ -246,15 +246,7 @@ async fn rate(
         .timestamp(Timestamp::now());
 
     for (currency, rate) in responses {
-        let name = match currency.as_str() {
-            "USD" => "🇺🇸 USD",
-            "KRW" => "🇰🇷 KRW",
-            "JPY" => "🇯🇵 JPY",
-            "EUR" => "🇪🇺 EUR",
-            "TRY" => "🇹🇷 TRY",
-            "UAH" => "🇺🇦 UAH",
-            _ => currency.as_str(),
-        };
+        let name = currency_display_label(&currency);
 
         embed = embed.field(
             name,
@@ -504,6 +496,31 @@ fn source_label(kind: dynamo_core::ExchangeRateSourceKind) -> &'static str {
     }
 }
 
+fn currency_display_label(currency: &str) -> String {
+    match currency {
+        "USD" => "🇺🇸 USD",
+        "KRW" => "🇰🇷 KRW",
+        "EUR" => "🇪🇺 EUR",
+        "GBP" => "🇬🇧 GBP",
+        "JPY" => "🇯🇵 JPY",
+        "CAD" => "🇨🇦 CAD",
+        "CHF" => "🇨🇭 CHF",
+        "HKD" => "🇭🇰 HKD",
+        "TWD" => "🇹🇼 TWD",
+        "AUD" => "🇦🇺 AUD",
+        "NZD" => "🇳🇿 NZD",
+        "INR" => "🇮🇳 INR",
+        "BRL" => "🇧🇷 BRL",
+        "PLN" => "🇵🇱 PLN",
+        "RUB" => "🇷🇺 RUB",
+        "TRY" => "🇹🇷 TRY",
+        "CNY" => "🇨🇳 CNY",
+        "UAH" => "🇺🇦 UAH",
+        _ => currency,
+    }
+    .to_string()
+}
+
 fn format_decimal(value: f64) -> String {
     let rounded = (value * 100.0).round() / 100.0;
     let sign = if rounded < 0.0 { "-" } else { "" };
@@ -542,7 +559,7 @@ fn format_grouped_integer(value: i64) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{format_decimal, normalize_currency};
+    use super::{EXCHANGE_CHOICES, currency_display_label, format_decimal, normalize_currency};
 
     #[test]
     fn formats_grouped_decimals_like_js_locale_output() {
@@ -554,5 +571,20 @@ mod tests {
     #[test]
     fn normalizes_currency_to_uppercase() {
         assert_eq!(normalize_currency(" krw "), "KRW");
+    }
+
+    #[test]
+    fn all_supported_rate_currencies_have_display_labels() {
+        for currency in EXCHANGE_CHOICES {
+            let label = currency_display_label(currency);
+            assert!(
+                label.ends_with(currency),
+                "display label should end with currency code for {currency}: {label}"
+            );
+            assert_ne!(
+                label, currency,
+                "supported currency should not fall back to bare code: {currency}"
+            );
+        }
     }
 }
