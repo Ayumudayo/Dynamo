@@ -1,5 +1,5 @@
 [package]
-name = "dynamo-contracts"
+name = "dynamo-runtime-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,15 +7,16 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-async-trait.workspace = true
 chrono.workspace = true
-dynamo-domain-currency = { path = "../domain-currency" }
 dynamo-domain-giveaway = { path = "../domain-giveaway" }
 dynamo-domain-invite = { path = "../domain-invite" }
-dynamo-domain-moderation = { path = "../domain-moderation" }
 dynamo-domain-stats = { path = "../domain-stats" }
-dynamo-domain-stock = { path = "../domain-stock" }
 dynamo-domain-suggestion = { path = "../domain-suggestion" }
+dynamo-module-kit = { path = "../module-kit" }
 dynamo-ops = { path = "../ops" }
-serde.workspace = true
+dynamo-repositories = { path = "../repositories" }
+dynamo-service-exchange = { path = "../service-exchange" }
+dynamo-service-stock = { path = "../service-stock" }
+dynamo-settings = { path = "../settings" }
+poise.workspace = true
 serde_json.workspace = true

@@ -8,11 +8,12 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
-use dynamo_contracts::{Error, ExchangeRateService, ProviderStateRepository};
 use dynamo_domain_currency::{
     ExchangeRateCacheStatus, ExchangeRateQuote, ExchangeRateRefreshResult, ExchangeRateSourceKind,
     cached_exchange_currencies,
 };
+use dynamo_repositories::ProviderStateRepository;
+use dynamo_service_exchange::{Error, ExchangeRateService};
 use reqwest::{Client, header::ACCEPT};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};

@@ -1,7 +1,7 @@
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsSchema,
 };
-use dynamo_runtime::{AppState, Context, Error};
+use dynamo_runtime_api::{AppState, Context, Error};
 
 pub struct InfoModule;
 

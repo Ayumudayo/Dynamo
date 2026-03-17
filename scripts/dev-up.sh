@@ -23,10 +23,6 @@ while [[ $# -gt 0 ]]; do
       echo "--enable-giveaway is no longer needed. Giveaway is a built-in module." >&2
       shift
       ;;
-    --enable-music)
-      echo "--enable-music is no longer needed. Music is paused and excluded from the active Rust template path." >&2
-      shift
-      ;;
     --dry-run)
       DRY_RUN=true
       shift

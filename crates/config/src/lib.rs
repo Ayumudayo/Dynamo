@@ -1,6 +1,6 @@
 use std::env;
 
-use crate::Error;
+pub type Error = anyhow::Error;
 
 #[derive(Debug, Clone)]
 pub struct AppConfig {

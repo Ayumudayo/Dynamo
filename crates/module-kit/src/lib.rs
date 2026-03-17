@@ -16,7 +16,6 @@ pub enum ModuleCategory {
     Giveaway,
     GameInfo,
     Stocks,
-    Music,
     Dashboard,
     Operations,
 }

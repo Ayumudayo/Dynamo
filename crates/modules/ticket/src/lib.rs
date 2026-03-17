@@ -1,9 +1,10 @@
-use dynamo_contracts::GuildModuleSettings;
+use dynamo_enablement::module_access_for_context;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
+use dynamo_runtime_api::{AppState, Context, Error};
+use dynamo_settings::GuildModuleSettings;
 use poise::serenity_prelude::{
     ButtonStyle, Channel, ChannelId, ChannelType, ComponentInteraction, CreateActionRow,
     CreateAttachment, CreateButton, CreateChannel, CreateEmbed, CreateEmbedFooter,

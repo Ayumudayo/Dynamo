@@ -1,20 +1,17 @@
-use std::time::Instant;
-
 use dynamo_module_kit::{
     CommandCatalog, CommandCatalogEntry, CommandDescriptor, DiscordCommand, GatewayIntents, Module,
     ModuleCatalog, ModuleCatalogEntry, ModuleManifest,
 };
-
-use crate::{Persistence, ServiceRegistry};
+use dynamo_runtime_api::{AppState, Error};
 
 pub struct ModuleRegistry {
-    modules: Vec<Box<dyn Module<AppState, crate::Error>>>,
+    modules: Vec<Box<dyn Module<AppState, Error>>>,
     catalog: ModuleCatalog,
     command_catalog: CommandCatalog,
 }
 
 impl ModuleRegistry {
-    pub fn new(modules: Vec<Box<dyn Module<AppState, crate::Error>>>) -> Self {
+    pub fn new(modules: Vec<Box<dyn Module<AppState, Error>>>) -> Self {
         let mut command_entries = Vec::new();
         let catalog = ModuleCatalog {
             entries: modules
@@ -48,7 +45,7 @@ impl ModuleRegistry {
         }
     }
 
-    pub fn commands(&self) -> Vec<DiscordCommand<AppState, crate::Error>> {
+    pub fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         self.modules
             .iter()
             .flat_map(|module| module.commands())
@@ -71,32 +68,6 @@ impl ModuleRegistry {
     }
 }
 
-#[derive(Clone)]
-pub struct AppState {
-    pub started_at: Instant,
-    pub module_catalog: ModuleCatalog,
-    pub command_catalog: CommandCatalog,
-    pub persistence: Persistence,
-    pub services: ServiceRegistry,
-}
-
-impl AppState {
-    pub fn new(
-        module_catalog: ModuleCatalog,
-        command_catalog: CommandCatalog,
-        persistence: Persistence,
-        services: ServiceRegistry,
-    ) -> Self {
-        Self {
-            started_at: Instant::now(),
-            module_catalog,
-            command_catalog,
-            persistence,
-            services,
-        }
-    }
-}
-
 pub fn aggregate_intents(manifests: impl IntoIterator<Item = ModuleManifest>) -> GatewayIntents {
     manifests
         .into_iter()
@@ -106,9 +77,9 @@ pub fn aggregate_intents(manifests: impl IntoIterator<Item = ModuleManifest>) ->
 }
 
 fn collect_command_entries(
-    module: &dyn Module<AppState, crate::Error>,
+    module: &dyn Module<AppState, Error>,
     manifest: ModuleManifest,
-    command: &DiscordCommand<AppState, crate::Error>,
+    command: &DiscordCommand<AppState, Error>,
     parent_segments: &mut Vec<String>,
     entries: &mut Vec<CommandCatalogEntry>,
 ) {

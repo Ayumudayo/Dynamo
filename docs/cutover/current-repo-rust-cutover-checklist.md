@@ -7,7 +7,6 @@ This note records the completed repo split where the current repository became t
 - This repository remains the canonical Rust repository.
 - `currency`, `stock`, `gameinfo`, `ticket`, `suggestion`, `greeting`, `invite`, `stats`, `moderation`, `giveaway`, and `dashboard` stay in scope.
 - `giveaway` is a core module.
-- `music` stays paused and outside the active public template surface.
 - Dashboard OAuth, audit logs, launcher scripts, startup reports, and Playwright smoke remain part of the public template.
 
 ## 2. Published JS Archive Repository Contents

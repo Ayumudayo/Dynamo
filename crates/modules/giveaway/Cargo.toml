@@ -9,8 +9,9 @@ authors.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 dynamo-domain-giveaway = { path = "../../domain-giveaway" }
+dynamo-enablement = { path = "../../enablement" }
 dynamo-module-kit = { path = "../../module-kit" }
-dynamo-runtime = { path = "../../runtime" }
+dynamo-runtime-api = { path = "../../runtime-api" }
 humantime.workspace = true
 poise.workspace = true
 rand.workspace = true

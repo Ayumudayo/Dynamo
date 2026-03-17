@@ -1,170 +1,41 @@
-mod config;
-mod enablement;
-mod guard;
-mod registry;
-
 use std::sync::Arc;
 
 use chrono::Utc;
-use dynamo_contracts::{
-    DashboardAuditLogRepository, DeploymentSettings, DeploymentSettingsRepository,
-    ExchangeRateService, GiveawaysRepository, GuildSettings, GuildSettingsRepository,
-    InviteRepository, MemberStatsRepository, ProviderStateRepository, StockQuoteService,
-    SuggestionsRepository, WarningLogRepository,
-};
 use dynamo_domain_giveaway::GiveawayRecord;
 use dynamo_domain_invite::InviteMemberRecord;
 use dynamo_domain_stats::MemberStatsRecord;
 use dynamo_domain_suggestion::SuggestionRecord;
+use dynamo_module_kit::{CommandCatalog, ModuleCatalog};
+use dynamo_ops::{
+    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery,
+    DashboardAuditLogRepository,
+};
+use dynamo_repositories::{
+    DeploymentSettingsRepository, GiveawaysRepository, GuildSettingsRepository, InviteRepository,
+    MemberStatsRepository, ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
+};
+use dynamo_service_exchange::ExchangeRateService;
+use dynamo_service_stock::StockQuoteService;
+use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::Context as PoiseContext;
-use serde::{Deserialize, Serialize};
-
-pub use config::{AppConfig, CommandSyncConfig, DiscordConfig, OptionalModulesConfig};
-pub use enablement::{
-    ResolvedCommandState, ResolvedModuleState, resolve_command_state, resolve_command_states,
-    resolve_module_state, resolve_module_states,
-};
-pub use guard::{
-    CommandAccess, ModuleAccess, command_access_for_app, command_access_for_context,
-    command_access_for_state, module_access_for_app, module_access_for_context,
-    module_access_for_state,
-};
-pub use registry::{AppState, ModuleRegistry, aggregate_intents};
 
 pub type Error = anyhow::Error;
 pub type Context<'a> = PoiseContext<'a, AppState, Error>;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "snake_case")]
-pub enum MusicBackendKind {
-    #[default]
-    Songbird,
-    Lavalink,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MusicBackendStatus {
-    pub backend: MusicBackendKind,
-    pub healthy: bool,
-    pub summary: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MusicBackendConfig {
-    pub backend: MusicBackendKind,
-    pub default_source: String,
-    pub auto_leave_seconds: u64,
-    pub songbird_ytdlp_program: Option<String>,
-    pub lavalink_host: Option<String>,
-    pub lavalink_port: Option<u16>,
-    pub lavalink_password: Option<String>,
-    pub lavalink_secure: bool,
-    pub lavalink_resume_key: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MusicTrack {
-    pub title: String,
-    pub url: Option<String>,
-    pub duration_seconds: Option<u64>,
-    pub requested_by: String,
-    pub source: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Default)]
-pub struct MusicQueueSnapshot {
-    pub backend: MusicBackendKind,
-    pub connected: bool,
-    pub voice_channel_id: Option<u64>,
-    pub text_channel_id: Option<u64>,
-    pub paused: bool,
-    pub current: Option<MusicTrack>,
-    pub upcoming: Vec<MusicTrack>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct MusicEnqueueResult {
-    pub started_immediately: bool,
-    pub track: MusicTrack,
-    pub snapshot: MusicQueueSnapshot,
-}
-
-#[async_trait::async_trait]
-pub trait MusicService: Send + Sync {
-    async fn status(&self, config: &MusicBackendConfig) -> Result<MusicBackendStatus, Error>;
-    async fn join(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        voice_channel_id: u64,
-        text_channel_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicQueueSnapshot, Error>;
-    async fn leave(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<(), Error>;
-    async fn play(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        voice_channel_id: u64,
-        text_channel_id: u64,
-        query: &str,
-        requested_by: &str,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicEnqueueResult, Error>;
-    async fn pause(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicQueueSnapshot, Error>;
-    async fn resume(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicQueueSnapshot, Error>;
-    async fn skip(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicQueueSnapshot, Error>;
-    async fn stop(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicQueueSnapshot, Error>;
-    async fn queue(
-        &self,
-        ctx: &poise::serenity_prelude::Context,
-        guild_id: u64,
-        config: &MusicBackendConfig,
-    ) -> Result<MusicQueueSnapshot, Error>;
-}
 
 #[derive(Clone, Default)]
 pub struct ServiceRegistry {
     pub stock_quotes: Option<Arc<dyn StockQuoteService>>,
     pub exchange_rates: Option<Arc<dyn ExchangeRateService>>,
-    pub music: Option<Arc<dyn MusicService>>,
 }
 
 impl ServiceRegistry {
     pub fn new(
         stock_quotes: Option<Arc<dyn StockQuoteService>>,
         exchange_rates: Option<Arc<dyn ExchangeRateService>>,
-        music: Option<Arc<dyn MusicService>>,
     ) -> Self {
         Self {
             stock_quotes,
             exchange_rates,
-            music,
         }
     }
 }
@@ -184,6 +55,7 @@ pub struct Persistence {
 }
 
 impl Persistence {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         database_name: Option<String>,
         guild_settings: Option<Arc<dyn GuildSettingsRepository>>,
@@ -312,8 +184,8 @@ impl Persistence {
 
     pub async fn append_dashboard_audit_log(
         &self,
-        entry: dynamo_ops::DashboardAuditLogEntry,
-    ) -> Result<Option<dynamo_ops::DashboardAuditLogEntry>, Error> {
+        entry: DashboardAuditLogEntry,
+    ) -> Result<Option<DashboardAuditLogEntry>, Error> {
         match &self.dashboard_audit_logs {
             Some(repo) => repo.append(entry).await.map(Some),
             None => Ok(None),
@@ -322,14 +194,37 @@ impl Persistence {
 
     pub async fn list_dashboard_audit_logs(
         &self,
-        query: dynamo_ops::DashboardAuditLogQuery,
-    ) -> Result<dynamo_ops::DashboardAuditLogPage, Error> {
+        query: DashboardAuditLogQuery,
+    ) -> Result<DashboardAuditLogPage, Error> {
         match &self.dashboard_audit_logs {
             Some(repo) => repo.list(query).await,
-            None => Ok(dynamo_ops::DashboardAuditLogPage::empty(
-                query.page,
-                query.page_size,
-            )),
+            None => Ok(DashboardAuditLogPage::empty(query.page, query.page_size)),
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct AppState {
+    pub started_at: std::time::Instant,
+    pub module_catalog: ModuleCatalog,
+    pub command_catalog: CommandCatalog,
+    pub persistence: Persistence,
+    pub services: ServiceRegistry,
+}
+
+impl AppState {
+    pub fn new(
+        module_catalog: ModuleCatalog,
+        command_catalog: CommandCatalog,
+        persistence: Persistence,
+        services: ServiceRegistry,
+    ) -> Self {
+        Self {
+            started_at: std::time::Instant::now(),
+            module_catalog,
+            command_catalog,
+            persistence,
+            services,
         }
     }
 }

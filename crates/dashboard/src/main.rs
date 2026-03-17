@@ -13,8 +13,8 @@ use axum::{
     routing::{get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use dynamo_contracts::{
-    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
+use dynamo_enablement::{
+    ResolvedCommandState, ResolvedModuleState, resolve_command_states, resolve_module_states,
 };
 use dynamo_module_kit::{
     CommandCatalog, CommandCatalogEntry, ModuleCatalog, ModuleCatalogEntry, SettingsField,
@@ -29,9 +29,9 @@ use dynamo_ops::{
     DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
     DashboardAuditLogQuery, DashboardAuditScope,
 };
-use dynamo_runtime::{
-    Error, Persistence, ResolvedCommandState, ResolvedModuleState, resolve_command_states,
-    resolve_module_states,
+use dynamo_runtime_api::{Error, Persistence};
+use dynamo_settings::{
+    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -40,8 +40,6 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 use url::Url;
-
-const MUSIC_RUNTIME_NOTICE: &str = "Regular voice channels currently require Discord DAVE/E2EE support. This stable build does not support DAVE yet, so music commands only work for stage-channel smoke tests.";
 const SESSION_COOKIE_NAME: &str = "dynamo_dashboard_session";
 const SESSION_TTL_HOURS: i64 = 24 * 14;
 const OAUTH_STATE_TTL_MINUTES: i64 = 15;
@@ -2698,10 +2696,8 @@ fn render_module_runtime_notice(module_id: &str) -> String {
 }
 
 fn runtime_notice_text(module_id: &str) -> Option<&'static str> {
-    match module_id {
-        "music" => Some(MUSIC_RUNTIME_NOTICE),
-        _ => None,
-    }
+    let _ = module_id;
+    None
 }
 
 fn render_structured_fields(entry: &ModuleCatalogEntry, configuration: &Value) -> String {
@@ -3980,8 +3976,7 @@ async function requestGuildCommandSync(guildId) {
 mod tests {
     use super::{
         DashboardGuild, audit_action_label, audit_entity_label, escape_html,
-        render_audit_logs_section, render_field, render_module_runtime_notice,
-        sanitize_redirect_target, user_can_manage_guild,
+        render_audit_logs_section, render_field, sanitize_redirect_target, user_can_manage_guild,
     };
     use dynamo_module_kit::{SettingsField, SettingsFieldKind};
     use dynamo_ops::{
@@ -4011,13 +4006,6 @@ mod tests {
         assert!(rendered.contains("data-setting-key=\"channel_id\""));
         assert!(rendered.contains("data-setting-kind=\"text\""));
         assert!(rendered.contains("value=\"123\""));
-    }
-
-    #[test]
-    fn music_module_renders_runtime_notice() {
-        let rendered = render_module_runtime_notice("music");
-        assert!(rendered.contains("Runtime notice"));
-        assert!(rendered.contains("DAVE/E2EE"));
     }
 
     #[test]

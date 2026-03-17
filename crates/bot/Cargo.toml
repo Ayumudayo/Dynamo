@@ -9,13 +9,16 @@ authors.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 dynamo-app = { path = "../app" }
-dynamo-contracts = { path = "../contracts" }
+dynamo-config = { path = "../config" }
+dynamo-enablement = { path = "../enablement" }
 dynamo-module-giveaway = { path = "../modules/giveaway" }
 dynamo-module-kit = { path = "../module-kit" }
 dynamo-observability = { path = "../observability" }
 dynamo-ops = { path = "../ops" }
 dynamo-provider-google-finance = { path = "../providers/google-finance" }
-dynamo-runtime = { path = "../runtime" }
+dynamo-registry = { path = "../registry" }
+dynamo-runtime-api = { path = "../runtime-api" }
+dynamo-settings = { path = "../settings" }
 dotenvy.workspace = true
 poise.workspace = true
 serde_json.workspace = true

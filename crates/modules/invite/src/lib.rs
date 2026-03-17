@@ -5,11 +5,12 @@ use std::{
 };
 
 use dynamo_domain_invite::InviteMemberRecord;
+use dynamo_enablement::module_access_for_app;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime::{AppState, Error, module_access_for_app};
+use dynamo_runtime_api::{AppState, Error};
 use poise::serenity_prelude::{
     GuildId, InviteCreateEvent, InviteDeleteEvent, RichInvite, RoleId, User, UserId,
 };

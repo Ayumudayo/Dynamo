@@ -6,5 +6,5 @@ pub use command_sync::{
 };
 pub use dashboard_audit::{
     DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
-    DashboardAuditLogQuery, DashboardAuditScope,
+    DashboardAuditLogQuery, DashboardAuditLogRepository, DashboardAuditScope,
 };

@@ -9,13 +9,14 @@ authors.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-dynamo-contracts = { path = "../contracts" }
 dynamo-domain-giveaway = { path = "../domain-giveaway" }
 dynamo-domain-invite = { path = "../domain-invite" }
 dynamo-domain-moderation = { path = "../domain-moderation" }
 dynamo-domain-stats = { path = "../domain-stats" }
 dynamo-domain-suggestion = { path = "../domain-suggestion" }
 dynamo-ops = { path = "../ops" }
+dynamo-repositories = { path = "../repositories" }
+dynamo-settings = { path = "../settings" }
 futures-util.workspace = true
 mongodb.workspace = true
 serde.workspace = true

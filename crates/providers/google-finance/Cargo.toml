@@ -9,8 +9,9 @@ authors.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 chrono.workspace = true
-dynamo-contracts = { path = "../../contracts" }
 dynamo-domain-currency = { path = "../../domain-currency" }
+dynamo-repositories = { path = "../../repositories" }
+dynamo-service-exchange = { path = "../../service-exchange" }
 reqwest.workspace = true
 scraper.workspace = true
 serde.workspace = true

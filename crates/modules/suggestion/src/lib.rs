@@ -1,13 +1,14 @@
 use chrono::Utc;
-use dynamo_contracts::GuildModuleSettings;
 use dynamo_domain_suggestion::{
     SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
 };
+use dynamo_enablement::module_access_for_context;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
+use dynamo_runtime_api::{AppState, Context, Error};
+use dynamo_settings::GuildModuleSettings;
 use poise::serenity_prelude::{
     ActionRowComponent, ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow,
     CreateButton, CreateEmbed, CreateEmbedFooter, CreateInputText, CreateInteractionResponse,
@@ -416,7 +417,7 @@ async fn handle_modal_interaction(
 async fn transition_suggestion(
     ctx: &poise::serenity_prelude::Context,
     data: &AppState,
-    repo: std::sync::Arc<dyn dynamo_contracts::SuggestionsRepository>,
+    repo: std::sync::Arc<dyn dynamo_repositories::SuggestionsRepository>,
     mut record: SuggestionRecord,
     source_message: &Message,
     moderator: &poise::serenity_prelude::Member,
@@ -505,7 +506,7 @@ async fn transition_suggestion(
 
 async fn delete_suggestion(
     ctx: &poise::serenity_prelude::Context,
-    repo: std::sync::Arc<dyn dynamo_contracts::SuggestionsRepository>,
+    repo: std::sync::Arc<dyn dynamo_repositories::SuggestionsRepository>,
     mut record: SuggestionRecord,
     source_message: &Message,
     moderator: &poise::serenity_prelude::Member,

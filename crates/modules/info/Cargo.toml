@@ -7,5 +7,5 @@ authors.workspace = true
 
 [dependencies]
 dynamo-module-kit = { path = "../../module-kit" }
-dynamo-runtime = { path = "../../runtime" }
+dynamo-runtime-api = { path = "../../runtime-api" }
 poise.workspace = true

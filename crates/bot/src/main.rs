@@ -1,17 +1,17 @@
 use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use chrono::Utc;
-use dynamo_contracts::{DeploymentSettings, GuildSettings};
+use dynamo_config::{AppConfig, CommandSyncConfig, DiscordConfig};
+use dynamo_enablement::command_access_for_context;
 use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
 use dynamo_observability::{
     StartupPhase, StartupReport, StartupStatus, catalog_startup_summary, format_gateway_intents,
     format_preview_kv_list, format_preview_list, scope_startup_summary,
 };
 use dynamo_ops::{COMMAND_SYNC_PROVIDER_ID, CommandSyncStateStore};
-use dynamo_runtime::{
-    AppConfig, AppState, CommandSyncConfig, DiscordConfig, Error, Persistence, ServiceRegistry,
-    aggregate_intents, command_access_for_context,
-};
+use dynamo_registry::aggregate_intents;
+use dynamo_runtime_api::{AppState, Error, Persistence, ServiceRegistry};
+use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
@@ -121,7 +121,7 @@ fn init_tracing() {
         .with_writer(std::io::stdout)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dynamo_bot=info,dynamo_runtime=info,poise=info".into()),
+                .unwrap_or_else(|_| "dynamo_bot=info,dynamo_runtime_api=info,poise=info".into()),
         )
         .try_init();
 }

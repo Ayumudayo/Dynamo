@@ -1,17 +1,19 @@
 use std::sync::Arc;
 
-use dynamo_contracts::{
-    DashboardAuditLogRepository, DeploymentSettings, DeploymentSettingsRepository,
-    ExchangeRateService, GiveawaysRepository, GuildSettings, GuildSettingsRepository,
-    InviteRepository, MemberStatsRepository, ProviderStateRepository, StockQuoteService,
-    SuggestionsRepository, WarningLogRepository,
-};
+use dynamo_config::OptionalModulesConfig;
+use dynamo_enablement::resolve_command_state;
 use dynamo_module_kit::{CommandCatalog, DiscordCommand, Module, ModuleCatalog};
+use dynamo_ops::DashboardAuditLogRepository;
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
-use dynamo_runtime::{
-    AppState, Error, ModuleRegistry, OptionalModulesConfig, Persistence, ServiceRegistry,
-    resolve_command_state,
+use dynamo_registry::ModuleRegistry;
+use dynamo_repositories::{
+    DeploymentSettingsRepository, GiveawaysRepository, GuildSettingsRepository, InviteRepository,
+    MemberStatsRepository, ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
 };
+use dynamo_runtime_api::{AppState, Error, Persistence, ServiceRegistry};
+use dynamo_service_exchange::ExchangeRateService;
+use dynamo_service_stock::StockQuoteService;
+use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
 use tracing::info;
 
@@ -91,7 +93,6 @@ pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<Se
     Ok(ServiceRegistry::new(
         Some(stock_quotes),
         Some(exchange_rates),
-        None,
     ))
 }
 
@@ -259,7 +260,7 @@ fn filter_command_recursive(
 
 #[cfg(test)]
 mod tests {
-    use dynamo_runtime::OptionalModulesConfig;
+    use dynamo_config::OptionalModulesConfig;
 
     use super::{module_registry, module_registry_with_optional};
 

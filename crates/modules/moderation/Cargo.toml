@@ -10,7 +10,8 @@ anyhow.workspace = true
 chrono.workspace = true
 dynamo-domain-moderation = { path = "../../domain-moderation" }
 dynamo-module-kit = { path = "../../module-kit" }
-dynamo-runtime = { path = "../../runtime" }
+dynamo-enablement = { path = "../../enablement" }
+dynamo-runtime-api = { path = "../../runtime-api" }
 humantime.workspace = true
 poise.workspace = true
 serde.workspace = true

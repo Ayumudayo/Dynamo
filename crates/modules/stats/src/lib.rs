@@ -5,11 +5,12 @@ use std::{
 };
 
 use dynamo_domain_stats::MemberStatsRecord;
+use dynamo_enablement::module_access_for_app;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime::{AppState, Error, module_access_for_app};
+use dynamo_runtime_api::{AppState, Error};
 use poise::serenity_prelude::{
     ChannelId, CreateMessage, GuildId, Interaction, Message, UserId, VoiceState,
 };
@@ -374,7 +375,7 @@ fn render_level_up_message(
 }
 
 async fn accumulate_voice_time(
-    repo: &dyn dynamo_contracts::MemberStatsRepository,
+    repo: &dyn dynamo_repositories::MemberStatsRepository,
     guild_id: u64,
     member_id: u64,
     key: &str,

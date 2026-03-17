@@ -10,8 +10,14 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/dashboard`](./crates/dashboard): `axum` companion dashboard for deployment and guild settings
 - [`crates/bootstrap`](./crates/bootstrap): MongoDB bootstrap utility
 - [`crates/module-kit`](./crates/module-kit): module trait, manifest, settings schema, command/module catalog descriptors
-- [`crates/contracts`](./crates/contracts): deployment/guild settings plus repository and service traits
-- [`crates/runtime`](./crates/runtime): runtime config, app state, persistence/service registries, enablement, guards
+- [`crates/settings`](./crates/settings): deployment/guild install, enablement, and configuration state
+- [`crates/repositories`](./crates/repositories): repository traits for persisted bot and dashboard state
+- [`crates/service-stock`](./crates/service-stock): stock quote service contract
+- [`crates/service-exchange`](./crates/service-exchange): exchange-rate service contract
+- [`crates/runtime-api`](./crates/runtime-api): shared app state, persistence/service registries, context, and error surface
+- [`crates/config`](./crates/config): runtime configuration loaded from `.env`
+- [`crates/enablement`](./crates/enablement): module/command effective-state resolution and guard helpers
+- [`crates/registry`](./crates/registry): module registry, command catalog, and intent aggregation
 - [`crates/ops`](./crates/ops): dashboard audit log and command sync state models
 - [`crates/observability`](./crates/observability): startup reporting and rendering
 - [`crates/domain-*`](./crates): shared domain crates for currency, stock, giveaway, invite, stats, suggestion, and moderation
@@ -33,11 +39,6 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - `moderation`: warnings, timeout, kick, ban, unban, softban, nickname changes
 - `giveaway`: persisted giveaway workflow with entry buttons and timed completion polling
 - `ticket`: ticket panel, category routing, participant management, transcript logging
-
-## Paused Modules
-
-- `music`: code remains in the workspace for future DAVE work, but it is intentionally not part of the active public template surface.
-- `music` launcher flags, smoke steps, and runtime support are intentionally excluded from the active Rust template path.
 
 ## Runtime Model
 
@@ -72,11 +73,6 @@ Common optional variables:
 - `RUST_LOG`
 
 The checked-in [`.env.example`](./.env.example) uses `DASHBOARD_PORT=4000` and matching `DASHBOARD_BASE_URL` as a sample external dashboard port for home-server deployments. The application defaults are still `3000` unless you set them explicitly.
-
-Paused music notes:
-
-- Music remains out of the active template runtime while DAVE support is unresolved.
-- [`docs/music-lavalink-guide.md`](./docs/music-lavalink-guide.md) is kept only as archived reference material.
 
 ## Discord Intents
 

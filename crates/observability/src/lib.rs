@@ -1,8 +1,8 @@
 use std::{collections::BTreeMap, fmt};
 
-use dynamo_contracts::{DeploymentSettings, GuildSettings};
+use dynamo_enablement::{resolve_command_states, resolve_module_states};
 use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
-use dynamo_runtime::{resolve_command_states, resolve_module_states};
+use dynamo_settings::{DeploymentSettings, GuildSettings};
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum StartupStatus {

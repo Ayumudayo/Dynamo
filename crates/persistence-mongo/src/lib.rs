@@ -1,13 +1,6 @@
 use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
-use dynamo_contracts::{
-    DashboardAuditLogRepository, DeploymentCommandSettings, DeploymentModuleSettings,
-    DeploymentSettings, DeploymentSettingsRepository, Error, GiveawaysRepository,
-    GuildCommandSettings, GuildModuleSettings, GuildSettings, GuildSettingsRepository,
-    InviteRepository, MemberStatsRepository, ProviderStateRepository, SuggestionsRepository,
-    WarningLogRepository,
-};
 use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
 use dynamo_domain_invite::{InviteCounters, InviteLeaderboardEntry, InviteMemberRecord};
 use dynamo_domain_moderation::WarningLogRecord;
@@ -19,7 +12,15 @@ use dynamo_domain_suggestion::{
 };
 use dynamo_ops::{
     DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
-    DashboardAuditLogQuery, DashboardAuditScope,
+    DashboardAuditLogQuery, DashboardAuditLogRepository, DashboardAuditScope,
+};
+use dynamo_repositories::{
+    DeploymentSettingsRepository, GiveawaysRepository, GuildSettingsRepository, InviteRepository,
+    MemberStatsRepository, ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
+};
+use dynamo_settings::{
+    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
+    GuildModuleSettings, GuildSettings,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -27,6 +28,8 @@ use mongodb::{
     bson::{DateTime as BsonDateTime, doc, from_bson, oid::ObjectId, to_bson},
 };
 use serde::{Deserialize, Serialize};
+
+type Error = anyhow::Error;
 
 const DEPLOYMENT_SETTINGS_ID: &str = "global";
 pub const DEFAULT_DATABASE_NAME: &str = "dynamo-rs";
@@ -1178,7 +1181,7 @@ impl DashboardAuditLogRepository for MongoPersistence {
 mod tests {
     use super::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
     use crate::MongoInitializationReport;
-    use dynamo_contracts::DashboardAuditLogRepository;
+    use dynamo_ops::DashboardAuditLogRepository;
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
         DashboardAuditLogQuery, DashboardAuditScope,

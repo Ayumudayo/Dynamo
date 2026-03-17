@@ -4,13 +4,11 @@ use dynamo_domain_invite::{InviteLeaderboardEntry, InviteMemberRecord};
 use dynamo_domain_moderation::WarningLogRecord;
 use dynamo_domain_stats::MemberStatsRecord;
 use dynamo_domain_suggestion::SuggestionRecord;
-use dynamo_ops::{DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery};
-use serde_json::Value;
-
-use crate::settings::{
+use dynamo_settings::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
     GuildModuleSettings, GuildSettings,
 };
+use serde_json::Value;
 
 pub type Error = anyhow::Error;
 
@@ -113,10 +111,4 @@ pub trait WarningLogRepository: Send + Sync {
         member_id: u64,
     ) -> Result<Vec<WarningLogRecord>, Error>;
     async fn clear_for_member(&self, guild_id: u64, member_id: u64) -> Result<u64, Error>;
-}
-
-#[async_trait]
-pub trait DashboardAuditLogRepository: Send + Sync {
-    async fn append(&self, entry: DashboardAuditLogEntry) -> Result<DashboardAuditLogEntry, Error>;
-    async fn list(&self, query: DashboardAuditLogQuery) -> Result<DashboardAuditLogPage, Error>;
 }

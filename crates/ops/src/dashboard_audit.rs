@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
@@ -122,4 +123,12 @@ impl DashboardAuditLogPage {
     pub fn has_next(&self) -> bool {
         self.page.saturating_mul(self.page_size) < self.total
     }
+}
+
+pub type Error = anyhow::Error;
+
+#[async_trait]
+pub trait DashboardAuditLogRepository: Send + Sync {
+    async fn append(&self, entry: DashboardAuditLogEntry) -> Result<DashboardAuditLogEntry, Error>;
+    async fn list(&self, query: DashboardAuditLogQuery) -> Result<DashboardAuditLogPage, Error>;
 }

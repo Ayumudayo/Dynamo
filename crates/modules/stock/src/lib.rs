@@ -4,15 +4,15 @@ use std::{
     time::Duration,
 };
 
-use dynamo_contracts::{
-    DeploymentCommandSettings, GuildCommandSettings, GuildModuleSettings, StockQuoteService,
-};
 use dynamo_domain_stock::StockQuote;
+use dynamo_enablement::module_access_for_context;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
+use dynamo_runtime_api::{AppState, Context, Error};
+use dynamo_service_stock::StockQuoteService;
+use dynamo_settings::{DeploymentCommandSettings, GuildCommandSettings, GuildModuleSettings};
 use poise::serenity_prelude::{
     ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
     CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, EditMessage,

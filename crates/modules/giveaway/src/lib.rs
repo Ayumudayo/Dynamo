@@ -1,10 +1,11 @@
 use chrono::{Duration as ChronoDuration, Utc};
 use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
+use dynamo_enablement::module_access_for_app;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime::{AppState, Context, Error, module_access_for_app};
+use dynamo_runtime_api::{AppState, Context, Error};
 use poise::serenity_prelude::{
     ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
     CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,

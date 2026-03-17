@@ -7,9 +7,10 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-dynamo-contracts = { path = "../../contracts" }
+dynamo-enablement = { path = "../../enablement" }
 dynamo-module-kit = { path = "../../module-kit" }
-dynamo-runtime = { path = "../../runtime" }
+dynamo-runtime-api = { path = "../../runtime-api" }
+dynamo-settings = { path = "../../settings" }
 poise.workspace = true
 serde.workspace = true
 serde_json.workspace = true
