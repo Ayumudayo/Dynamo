@@ -1,0 +1,18 @@
+[package]
+name = "dynamo-bot"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dynamo-app = { path = "../app" }
+dynamo-core = { path = "../core" }
+dynamo-module-giveaway = { path = "../modules/giveaway" }
+dynamo-provider-google-finance = { path = "../providers/google-finance" }
+dotenvy.workspace = true
+poise.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true

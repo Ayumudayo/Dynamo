@@ -1,0 +1,26 @@
+[package]
+name = "dynamo-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dynamo-core = { path = "../core" }
+dynamo-module-currency = { path = "../modules/currency" }
+dynamo-module-gameinfo = { path = "../modules/gameinfo" }
+dynamo-module-giveaway = { path = "../modules/giveaway" }
+dynamo-module-greeting = { path = "../modules/greeting" }
+dynamo-module-info = { path = "../modules/info" }
+dynamo-module-invite = { path = "../modules/invite" }
+dynamo-module-moderation = { path = "../modules/moderation" }
+dynamo-module-suggestion = { path = "../modules/suggestion" }
+dynamo-module-stats = { path = "../modules/stats" }
+dynamo-module-ticket = { path = "../modules/ticket" }
+dynamo-module-stock = { path = "../modules/stock" }
+dynamo-provider-google-finance = { path = "../providers/google-finance" }
+dynamo-persistence-mongo = { path = "../persistence-mongo" }
+dynamo-provider-yahoo = { path = "../providers/yahoo" }
+poise.workspace = true
+tracing.workspace = true

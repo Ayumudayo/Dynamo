@@ -1,0 +1,14 @@
+[package]
+name = "dynamo-module-currency"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+dynamo-core = { path = "../../core" }
+futures-util.workspace = true
+poise.workspace = true
+serde.workspace = true
+serde_json.workspace = true

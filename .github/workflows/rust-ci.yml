@@ -1,0 +1,31 @@
+name: Rust CI
+
+on:
+  push:
+    branches:
+      - main
+      - plan/**
+  pull_request:
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Compile workspace
+        run: cargo check
+
+      - name: Run workspace tests
+        run: cargo test --workspace
