@@ -17,8 +17,9 @@ require_cmd() {
 require_cmd rustup
 require_cmd cargo
 require_cmd zig
+require_cmd cargo-zigbuild
 
-if ! cargo zigbuild --version >/dev/null 2>&1; then
+if ! cargo-zigbuild --version >/dev/null 2>&1; then
   echo "cargo-zigbuild is not installed. Run: cargo install cargo-zigbuild" >&2
   exit 1
 fi
@@ -42,4 +43,3 @@ cp "$RELEASE_DIR/dynamo-bot" "$STAGE_DIR/target/release/dynamo-bot"
 chmod +x "$STAGE_DIR"/scripts/*.sh
 
 echo "Staged Raspberry Pi deployment bundle at $STAGE_DIR"
-

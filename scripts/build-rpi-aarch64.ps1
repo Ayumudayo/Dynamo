@@ -17,8 +17,9 @@ function Require-Command {
 Require-Command rustup
 Require-Command cargo
 Require-Command zig
+Require-Command cargo-zigbuild
 
-& cargo zigbuild --version *> $null
+& cargo-zigbuild --version *> $null
 if ($LASTEXITCODE -ne 0) {
   throw "cargo-zigbuild is not installed. Run: cargo install cargo-zigbuild"
 }
@@ -52,4 +53,3 @@ Copy-Item (Join-Path $ReleaseDir "dynamo-dashboard") (Join-Path $StageDir "targe
 Copy-Item (Join-Path $ReleaseDir "dynamo-bot") (Join-Path $StageDir "target\release\dynamo-bot") -Force
 
 Write-Host "Staged Raspberry Pi deployment bundle at $StageDir"
-
