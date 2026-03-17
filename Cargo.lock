@@ -724,6 +724,7 @@ dependencies = [
  "dynamo-module-suggestion",
  "dynamo-module-ticket",
  "dynamo-ops",
+ "dynamo-persistence-api",
  "dynamo-persistence-mongo",
  "dynamo-provider-google-finance",
  "dynamo-provider-yahoo",
@@ -732,6 +733,7 @@ dependencies = [
  "dynamo-runtime-api",
  "dynamo-service-exchange",
  "dynamo-service-stock",
+ "dynamo-services-api",
  "dynamo-settings",
  "poise",
  "tracing",
@@ -764,9 +766,11 @@ dependencies = [
  "dynamo-module-kit",
  "dynamo-observability",
  "dynamo-ops",
+ "dynamo-persistence-api",
  "dynamo-provider-google-finance",
  "dynamo-registry",
  "dynamo-runtime-api",
+ "dynamo-services-api",
  "dynamo-settings",
  "poise",
  "serde_json",
@@ -796,6 +800,7 @@ dependencies = [
  "dynamo-module-kit",
  "dynamo-observability",
  "dynamo-ops",
+ "dynamo-persistence-api",
  "dynamo-persistence-mongo",
  "dynamo-runtime-api",
  "dynamo-settings",
@@ -1078,6 +1083,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-persistence-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "dynamo-domain-giveaway",
+ "dynamo-domain-invite",
+ "dynamo-domain-stats",
+ "dynamo-domain-suggestion",
+ "dynamo-ops",
+ "dynamo-repositories",
+ "dynamo-settings",
+ "serde_json",
+]
+
+[[package]]
 name = "dynamo-persistence-mongo"
 version = "0.1.0"
 dependencies = [
@@ -1166,19 +1187,10 @@ name = "dynamo-runtime-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "chrono",
- "dynamo-domain-giveaway",
- "dynamo-domain-invite",
- "dynamo-domain-stats",
- "dynamo-domain-suggestion",
  "dynamo-module-kit",
- "dynamo-ops",
- "dynamo-repositories",
- "dynamo-service-exchange",
- "dynamo-service-stock",
- "dynamo-settings",
+ "dynamo-persistence-api",
+ "dynamo-services-api",
  "poise",
- "serde_json",
 ]
 
 [[package]]
@@ -1197,6 +1209,14 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dynamo-domain-stock",
+]
+
+[[package]]
+name = "dynamo-services-api"
+version = "0.1.0"
+dependencies = [
+ "dynamo-service-exchange",
+ "dynamo-service-stock",
 ]
 
 [[package]]

@@ -11,10 +11,12 @@ dynamo-config = { path = "../config" }
 dynamo-enablement = { path = "../enablement" }
 dynamo-module-kit = { path = "../module-kit" }
 dynamo-ops = { path = "../ops" }
+dynamo-persistence-api = { path = "../persistence-api" }
 dynamo-registry = { path = "../registry" }
 dynamo-repositories = { path = "../repositories" }
 dynamo-runtime-api = { path = "../runtime-api" }
 dynamo-service-exchange = { path = "../service-exchange" }
+dynamo-services-api = { path = "../services-api" }
 dynamo-service-stock = { path = "../service-stock" }
 dynamo-settings = { path = "../settings" }
 dynamo-module-currency = { path = "../modules/currency" }

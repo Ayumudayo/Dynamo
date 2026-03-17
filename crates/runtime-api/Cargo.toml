@@ -7,16 +7,7 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-chrono.workspace = true
-dynamo-domain-giveaway = { path = "../domain-giveaway" }
-dynamo-domain-invite = { path = "../domain-invite" }
-dynamo-domain-stats = { path = "../domain-stats" }
-dynamo-domain-suggestion = { path = "../domain-suggestion" }
 dynamo-module-kit = { path = "../module-kit" }
-dynamo-ops = { path = "../ops" }
-dynamo-repositories = { path = "../repositories" }
-dynamo-service-exchange = { path = "../service-exchange" }
-dynamo-service-stock = { path = "../service-stock" }
-dynamo-settings = { path = "../settings" }
+dynamo-persistence-api = { path = "../persistence-api" }
+dynamo-services-api = { path = "../services-api" }
 poise.workspace = true
-serde_json.workspace = true

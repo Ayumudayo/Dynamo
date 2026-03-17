@@ -29,7 +29,8 @@ use dynamo_ops::{
     DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
     DashboardAuditLogQuery, DashboardAuditScope,
 };
-use dynamo_runtime_api::{Error, Persistence};
+use dynamo_persistence_api::Persistence;
+use dynamo_runtime_api::Error;
 use dynamo_settings::{
     DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
 };

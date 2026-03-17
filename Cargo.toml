@@ -8,6 +8,8 @@ members = [
   "crates/repositories",
   "crates/service-stock",
   "crates/service-exchange",
+  "crates/persistence-api",
+  "crates/services-api",
   "crates/runtime-api",
   "crates/config",
   "crates/enablement",

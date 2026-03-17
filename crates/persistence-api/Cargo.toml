@@ -1,0 +1,18 @@
+[package]
+name = "dynamo-persistence-api"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+dynamo-domain-giveaway = { path = "../domain-giveaway" }
+dynamo-domain-invite = { path = "../domain-invite" }
+dynamo-domain-stats = { path = "../domain-stats" }
+dynamo-domain-suggestion = { path = "../domain-suggestion" }
+dynamo-ops = { path = "../ops" }
+dynamo-repositories = { path = "../repositories" }
+dynamo-settings = { path = "../settings" }
+serde_json.workspace = true

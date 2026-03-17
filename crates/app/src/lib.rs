@@ -4,15 +4,17 @@ use dynamo_config::OptionalModulesConfig;
 use dynamo_enablement::resolve_command_state;
 use dynamo_module_kit::{CommandCatalog, DiscordCommand, Module, ModuleCatalog};
 use dynamo_ops::DashboardAuditLogRepository;
+use dynamo_persistence_api::Persistence;
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use dynamo_registry::ModuleRegistry;
 use dynamo_repositories::{
     DeploymentSettingsRepository, GiveawaysRepository, GuildSettingsRepository, InviteRepository,
     MemberStatsRepository, ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
 };
-use dynamo_runtime_api::{AppState, Error, Persistence, ServiceRegistry};
+use dynamo_runtime_api::{AppState, Error};
 use dynamo_service_exchange::ExchangeRateService;
 use dynamo_service_stock::StockQuoteService;
+use dynamo_services_api::ServiceRegistry;
 use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
 use tracing::info;

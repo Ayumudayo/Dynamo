@@ -14,7 +14,9 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/repositories`](./crates/repositories): repository traits for persisted bot and dashboard state
 - [`crates/service-stock`](./crates/service-stock): stock quote service contract
 - [`crates/service-exchange`](./crates/service-exchange): exchange-rate service contract
-- [`crates/runtime-api`](./crates/runtime-api): shared app state, persistence/service registries, context, and error surface
+- [`crates/persistence-api`](./crates/persistence-api): shared persistence registry and persistence-side helper methods
+- [`crates/services-api`](./crates/services-api): shared runtime service registry
+- [`crates/runtime-api`](./crates/runtime-api): shared app state, poise context alias, and error surface
 - [`crates/config`](./crates/config): runtime configuration loaded from `.env`
 - [`crates/enablement`](./crates/enablement): pure module/command effective-state resolution
 - [`crates/access`](./crates/access): context-aware module and command guard helpers

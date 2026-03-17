@@ -15,6 +15,7 @@ dynamo-enablement = { path = "../enablement" }
 dynamo-module-kit = { path = "../module-kit" }
 dynamo-observability = { path = "../observability" }
 dynamo-ops = { path = "../ops" }
+dynamo-persistence-api = { path = "../persistence-api" }
 dynamo-persistence-mongo = { path = "../persistence-mongo" }
 dynamo-runtime-api = { path = "../runtime-api" }
 dynamo-settings = { path = "../settings" }

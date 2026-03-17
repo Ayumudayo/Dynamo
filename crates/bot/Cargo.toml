@@ -15,9 +15,11 @@ dynamo-module-giveaway = { path = "../modules/giveaway" }
 dynamo-module-kit = { path = "../module-kit" }
 dynamo-observability = { path = "../observability" }
 dynamo-ops = { path = "../ops" }
+dynamo-persistence-api = { path = "../persistence-api" }
 dynamo-provider-google-finance = { path = "../providers/google-finance" }
 dynamo-registry = { path = "../registry" }
 dynamo-runtime-api = { path = "../runtime-api" }
+dynamo-services-api = { path = "../services-api" }
 dynamo-settings = { path = "../settings" }
 dotenvy.workspace = true
 poise.workspace = true

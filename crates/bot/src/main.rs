@@ -9,8 +9,10 @@ use dynamo_observability::{
     format_preview_kv_list, format_preview_list, scope_startup_summary,
 };
 use dynamo_ops::{COMMAND_SYNC_PROVIDER_ID, CommandSyncStateStore};
+use dynamo_persistence_api::Persistence;
 use dynamo_registry::aggregate_intents;
-use dynamo_runtime_api::{AppState, Error, Persistence, ServiceRegistry};
+use dynamo_runtime_api::{AppState, Error};
+use dynamo_services_api::ServiceRegistry;
 use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use tokio::sync::Mutex;
