@@ -104,6 +104,15 @@ for profile in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
   fi
 done
 
+if ! command -v pm2 >/dev/null 2>&1; then
+  if [[ -d "$HOME/.nvm/versions/node" ]]; then
+    latest_pm2_dir="$(find "$HOME/.nvm/versions/node" -path '*/bin/pm2' -printf '%h\n' 2>/dev/null | sort | tail -n 1 || true)"
+    if [[ -n "$latest_pm2_dir" ]]; then
+      export PATH="$latest_pm2_dir:$PATH"
+    fi
+  fi
+fi
+
 mkdir -p "$APP_DIR" "$APP_DIR/scripts" "$APP_DIR/target/release" "$APP_DIR/logs"
 tar -C "$APP_DIR" -xf "$ARCHIVE_PATH"
 rm -f "$ARCHIVE_PATH"
