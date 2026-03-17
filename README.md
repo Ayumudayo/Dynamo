@@ -145,6 +145,46 @@ Stop managed dashboard and bot processes:
 
 The launchers print the effective command scope resolved from `.env`.
 
+## Raspberry Pi / PM2
+
+For a Raspberry Pi or Ubuntu-style server where you want to keep the bot and dashboard under `pm2`, use the release wrappers instead of the development launchers.
+
+1. Build the release binaries:
+
+```bash
+./scripts/prod-build.sh
+```
+
+2. Run bootstrap once:
+
+```bash
+./scripts/prod-bootstrap.sh
+```
+
+3. Start the long-running processes with `pm2`:
+
+```bash
+pm2 start ecosystem.pm2.cjs
+pm2 save
+```
+
+Useful commands:
+
+```bash
+pm2 status
+pm2 logs dynamo-dashboard
+pm2 logs dynamo-bot
+pm2 restart ecosystem.pm2.cjs
+pm2 delete ecosystem.pm2.cjs
+```
+
+Notes:
+
+- The PM2 wrappers run the release binaries from `target/release/`.
+- They expect `.env` to exist in the repo root.
+- The Rust binaries still load `.env` themselves, so the wrapper scripts only need to `cd` into the repo root before `exec`.
+- On a Raspberry Pi, `cargo build --release` can take noticeably longer than debug builds.
+
 ## JS Archive Export
 
 Use the export scripts to stage the `Dynamo-JS` read-only JavaScript archive repo in `output/Dynamo-JS/`:
