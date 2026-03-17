@@ -1,4 +1,5 @@
 mod config;
+mod currency;
 mod dashboard_audit;
 mod enablement;
 mod giveaways;
@@ -15,6 +16,10 @@ mod suggestions;
 mod warnings;
 
 pub use config::{AppConfig, CommandSyncConfig, DiscordConfig, OptionalModulesConfig};
+pub use currency::{
+    CACHED_EXCHANGE_CURRENCIES, CurrencySpec, cached_exchange_currencies, currency_display_label,
+    supported_currency_specs,
+};
 pub use dashboard_audit::{
     DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
     DashboardAuditLogQuery, DashboardAuditScope,
