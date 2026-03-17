@@ -1,6 +1,6 @@
 param(
-  [string]$Host = "",
-  [string]$User = "",
+  [string]$RemoteHost = "",
+  [string]$RemoteUser = "",
   [int]$Port = 22,
   [string]$AppDir = "",
   [switch]$SkipBuild,
@@ -12,13 +12,13 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $StageDir = Join-Path $RepoRoot "output\rpi-aarch64"
 
-if (-not $Host) { $Host = $env:RPI_HOST }
-if (-not $User) { $User = $env:RPI_USER }
+if (-not $RemoteHost) { $RemoteHost = $env:RPI_HOST }
+if (-not $RemoteUser) { $RemoteUser = $env:RPI_USER }
 if (-not $AppDir) { $AppDir = $env:RPI_APP_DIR }
-if (-not $AppDir) { $AppDir = "/home/$User/dynamo" }
+if (-not $AppDir -and $RemoteUser) { $AppDir = "/home/$RemoteUser/dynamo" }
 
-if (-not $Host -or -not $User) {
-  throw "Host and User are required. Use -Host/-User or set RPI_HOST and RPI_USER."
+if (-not $RemoteHost -or -not $RemoteUser) {
+  throw "RemoteHost and RemoteUser are required. Use -RemoteHost/-RemoteUser or set RPI_HOST and RPI_USER."
 }
 
 if (-not $SkipBuild) {
@@ -32,7 +32,7 @@ if (-not (Test-Path $StageDir)) {
   throw "Missing staged bundle at $StageDir. Run build-rpi-aarch64 first."
 }
 
-$Target = "$User@$Host"
+$Target = "$RemoteUser@$RemoteHost"
 
 & ssh -p $Port $Target "mkdir -p '$AppDir' '$AppDir/scripts' '$AppDir/target/release' '$AppDir/logs'"
 if ($LASTEXITCODE -ne 0) {

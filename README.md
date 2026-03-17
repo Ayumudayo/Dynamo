@@ -209,7 +209,7 @@ Build a deployment bundle:
 Deploy and restart remotely:
 
 ```powershell
-./scripts/deploy-rpi-aarch64.ps1 -Host <pi-host> -User <pi-user>
+./scripts/deploy-rpi-aarch64.ps1 -RemoteHost <pi-host> -RemoteUser <pi-user>
 ```
 
 ```bash
