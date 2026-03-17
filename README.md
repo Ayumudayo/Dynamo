@@ -185,6 +185,46 @@ Notes:
 - The Rust binaries still load `.env` themselves, so the wrapper scripts only need to `cd` into the repo root before `exec`.
 - On a Raspberry Pi, `cargo build --release` can take noticeably longer than debug builds.
 
+### Cross-build On This PC And Deploy To Raspberry Pi
+
+If you do not want to compile on the Raspberry Pi itself, build `aarch64-unknown-linux-gnu` binaries on this machine and push them over SSH.
+
+Prerequisites on this machine:
+
+- `zig` on `PATH`
+- `cargo-zigbuild` installed:
+  - `cargo install cargo-zigbuild`
+- SSH access to the Raspberry Pi
+
+Build a deployment bundle:
+
+```powershell
+./scripts/build-rpi-aarch64.ps1
+```
+
+```bash
+./scripts/build-rpi-aarch64.sh
+```
+
+Deploy and restart remotely:
+
+```powershell
+./scripts/deploy-rpi-aarch64.ps1 -Host <pi-host> -User <pi-user>
+```
+
+```bash
+./scripts/deploy-rpi-aarch64.sh --host <pi-host> --user <pi-user>
+```
+
+Optional flags:
+
+- `--skip-build` / `-SkipBuild`
+- `--skip-bootstrap` / `-SkipBootstrap`
+- `--port` / `-Port`
+- `--app-dir` / `-AppDir`
+
+The deploy script stages a compact bundle under `output/rpi-aarch64/`, uploads the release binaries plus `ecosystem.pm2.cjs`, ensures the remote shell scripts are executable, optionally runs bootstrap, and then calls `pm2 startOrRestart ecosystem.pm2.cjs --update-env`.
+
 ## Legacy JS Archive
 
 The old Discord.js runtime and EJS dashboard now live in the read-only archive repository [`Dynamo-JS`](https://github.com/Ayumudayo/Dynamo-JS).
