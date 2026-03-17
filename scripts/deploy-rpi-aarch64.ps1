@@ -1,6 +1,6 @@
 param(
-  [string]$RemoteHost = "[REDACTED_HOST]",
-  [string]$RemoteUser = "[REDACTED_USER]",
+  [string]$RemoteHost = "",
+  [string]$RemoteUser = "",
   [int]$Port = 22,
   [string]$AppDir = "",
   [string]$KeyPath = "",
