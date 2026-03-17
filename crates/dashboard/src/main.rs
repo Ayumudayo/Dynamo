@@ -10,17 +10,17 @@ use axum::{
     extract::{Path, Query, State},
     http::StatusCode,
     response::{Html, IntoResponse, Redirect, Response},
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use dynamo_core::{
-    CommandCatalog, CommandCatalogEntry, DashboardAuditAction, DashboardAuditEntityType,
-    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditScope,
-    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, ModuleCatalog,
-    ModuleCatalogEntry, Persistence, ResolvedCommandState, ResolvedModuleState, SettingsField,
-    SettingsFieldKind, SettingsSchema, StartupPhase, StartupReport, StartupStatus,
-    catalog_startup_summary, format_preview_kv_list, format_preview_list, resolve_command_states,
-    resolve_module_states,
+    COMMAND_SYNC_PROVIDER_ID, CommandCatalog, CommandCatalogEntry, CommandSyncResult,
+    CommandSyncStateStore, DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
+    DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditScope, DeploymentModuleSettings,
+    DeploymentSettings, GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence,
+    ResolvedCommandState, ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema,
+    StartupPhase, StartupReport, StartupStatus, catalog_startup_summary, format_preview_kv_list,
+    format_preview_list, resolve_command_states, resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -94,6 +94,10 @@ async fn main() -> anyhow::Result<()> {
             "/api/deployment-command-settings/{command_id}",
             patch(patch_deployment_command_settings),
         )
+        .route(
+            "/api/deployment-command-sync",
+            post(post_deployment_command_sync),
+        )
         .route("/api/guild-settings/{guild_id}", get(get_guild_settings))
         .route(
             "/api/guild-settings/{guild_id}/{module_id}",
@@ -102,6 +106,10 @@ async fn main() -> anyhow::Result<()> {
         .route(
             "/api/guild-command-settings/{guild_id}/{command_id}",
             patch(patch_guild_command_settings),
+        )
+        .route(
+            "/api/guild-command-sync/{guild_id}",
+            post(post_guild_command_sync),
         )
         .with_state(state.clone());
 
@@ -128,6 +136,8 @@ struct DashboardConfig {
     client_secret: String,
     invite_permissions: u64,
     admin_user_ids: Vec<u64>,
+    register_globally: bool,
+    command_sync_interval_seconds: u64,
 }
 
 impl DashboardConfig {
@@ -171,6 +181,25 @@ impl DashboardConfig {
             .unwrap_or(DEFAULT_INVITE_PERMISSIONS);
 
         let admin_user_ids = parse_u64_list_env("DASHBOARD_ADMIN_USER_IDS")?;
+        let dev_guild_id = env::var("DISCORD_DEV_GUILD_ID")
+            .or_else(|_| env::var("GUILD_ID"))
+            .ok()
+            .map(|value| value.parse::<u64>())
+            .transpose()
+            .map_err(|error| {
+                anyhow::anyhow!("DISCORD_DEV_GUILD_ID or GUILD_ID must be a valid u64: {error}")
+            })?;
+        let register_globally = match env::var("DISCORD_REGISTER_GLOBALLY") {
+            Ok(value) => parse_bool_value("DISCORD_REGISTER_GLOBALLY", &value)?,
+            Err(env::VarError::NotPresent) => dev_guild_id.is_none(),
+            Err(error) => {
+                return Err(anyhow::anyhow!(
+                    "DISCORD_REGISTER_GLOBALLY could not be read: {error}"
+                ));
+            }
+        };
+        let command_sync_interval_seconds =
+            parse_u64_env("DISCORD_COMMAND_SYNC_INTERVAL_SECONDS", 15)?;
 
         Ok(Self {
             host,
@@ -180,6 +209,8 @@ impl DashboardConfig {
             client_secret,
             invite_permissions,
             admin_user_ids,
+            register_globally,
+            command_sync_interval_seconds,
         })
     }
 }
@@ -502,6 +533,149 @@ fn page_query_for_logs(
     format!("?{}", params.join("&"))
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum SyncScopeKind {
+    Global,
+    Guild(u64),
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum CommandSyncDisplayState {
+    InSync,
+    Required,
+    Pending,
+    Failed,
+    Unsupported,
+}
+
+#[derive(Debug, Clone)]
+struct CommandSyncPanel {
+    state: CommandSyncDisplayState,
+    title: String,
+    message: String,
+    button_label: Option<String>,
+    button_action: Option<String>,
+    status_text: Option<String>,
+}
+
+async fn load_command_sync_store(persistence: &Persistence) -> CommandSyncStateStore {
+    persistence
+        .load_provider_state(COMMAND_SYNC_PROVIDER_ID)
+        .await
+        .ok()
+        .flatten()
+        .and_then(|value| serde_json::from_value::<CommandSyncStateStore>(value).ok())
+        .unwrap_or_default()
+}
+
+async fn save_command_sync_store(
+    persistence: &Persistence,
+    store: &CommandSyncStateStore,
+) -> Result<(), dynamo_core::Error> {
+    persistence
+        .save_provider_state(COMMAND_SYNC_PROVIDER_ID, serde_json::to_value(store)?)
+        .await
+}
+
+fn build_command_sync_panel(
+    scope: SyncScopeKind,
+    current_fingerprint: &str,
+    scope_state: Option<&dynamo_core::CommandSyncScopeState>,
+    config: &DashboardConfig,
+) -> CommandSyncPanel {
+    let scope_state = scope_state.cloned().unwrap_or_default();
+    let button_label = match scope {
+        SyncScopeKind::Global => Some("Sync Global Commands".to_string()),
+        SyncScopeKind::Guild(_) => Some("Sync Commands".to_string()),
+    };
+    let button_action = match scope {
+        SyncScopeKind::Global => Some("requestDeploymentCommandSync()".to_string()),
+        SyncScopeKind::Guild(guild_id) => Some(format!("requestGuildCommandSync({guild_id})")),
+    };
+
+    if scope_state.has_pending_request() {
+        return CommandSyncPanel {
+            state: CommandSyncDisplayState::Pending,
+            title: "Sync Requested".to_string(),
+            message: format!(
+                "A manual command sync request is queued. The bot will apply it on the next {} second sync cycle.",
+                config.command_sync_interval_seconds.max(5)
+            ),
+            button_label,
+            button_action,
+            status_text: format_sync_status_text(&scope_state),
+        };
+    }
+
+    if scope_state.last_result == Some(CommandSyncResult::Failed) {
+        return CommandSyncPanel {
+            state: CommandSyncDisplayState::Failed,
+            title: "Last Sync Failed".to_string(),
+            message: scope_state
+                .last_error
+                .clone()
+                .unwrap_or_else(|| "The last command sync attempt failed.".to_string()),
+            button_label,
+            button_action,
+            status_text: format_sync_status_text(&scope_state),
+        };
+    }
+
+    if scope_state.is_in_sync_with(current_fingerprint) {
+        return CommandSyncPanel {
+            state: CommandSyncDisplayState::InSync,
+            title: "Commands Are In Sync".to_string(),
+            message: "The command set currently stored in Discord matches the command set resolved from the dashboard settings.".to_string(),
+            button_label,
+            button_action,
+            status_text: format_sync_status_text(&scope_state),
+        };
+    }
+
+    CommandSyncPanel {
+        state: CommandSyncDisplayState::Required,
+        title: "Sync Required".to_string(),
+        message: "Dashboard command settings differ from the last command set synced to Discord. Run a sync to apply the current command layout.".to_string(),
+        button_label,
+        button_action,
+        status_text: format_sync_status_text(&scope_state),
+    }
+}
+
+fn build_unsupported_sync_panel(message: &str) -> CommandSyncPanel {
+    CommandSyncPanel {
+        state: CommandSyncDisplayState::Unsupported,
+        title: "Sync Managed Elsewhere".to_string(),
+        message: message.to_string(),
+        button_label: None,
+        button_action: None,
+        status_text: None,
+    }
+}
+
+fn format_sync_status_text(scope_state: &dynamo_core::CommandSyncScopeState) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(synced_at) = scope_state.last_synced_at {
+        parts.push(format!(
+            "Last synced {}",
+            synced_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
+    }
+    if let Some(command_count) = scope_state.last_submitted_top_level_commands {
+        parts.push(format!("{command_count} top-level commands"));
+    }
+    if let Some(requested_at) = scope_state.requested_at {
+        parts.push(format!(
+            "Last requested {}",
+            requested_at.format("%Y-%m-%d %H:%M:%S UTC")
+        ));
+    }
+    if let Some(requested_by) = &scope_state.requested_by_username {
+        parts.push(format!("Requested by {requested_by}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" | "))
+}
+
 #[derive(Debug, Deserialize)]
 struct DiscordCallbackQuery {
     code: Option<String>,
@@ -661,6 +835,7 @@ async fn deployment_page(
         .deployment_settings_or_default()
         .await
         .unwrap_or_default();
+    let command_sync_store = load_command_sync_store(&state.persistence).await;
     let active_tab = normalized_tab(query.tab.as_deref());
     let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
     let log_action = parse_audit_action_filter(query.log_action.as_deref());
@@ -706,6 +881,20 @@ async fn deployment_page(
         None,
         &resolved_command_states,
     );
+    let (deployment_fingerprint, _) =
+        dynamo_app::application_command_fingerprint_for_scope(&settings, None);
+    let command_sync_panel = if state.config.register_globally {
+        render_command_sync_panel(&build_command_sync_panel(
+            SyncScopeKind::Global,
+            &deployment_fingerprint,
+            Some(&command_sync_store.global),
+            &state.config,
+        ))
+    } else {
+        render_command_sync_panel(&build_unsupported_sync_panel(
+            "Deployment command sync is disabled in guild-scoped mode. Open a guild page and run Sync Commands there.",
+        ))
+    };
     let command_modals = render_deployment_command_modals(
         &state.command_catalog,
         &settings,
@@ -738,7 +927,8 @@ async fn deployment_page(
         module_cards = module_cards,
     );
     let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        sync_panel = command_sync_panel,
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
     );
@@ -825,6 +1015,7 @@ async fn guild_page(
         .deployment_settings_or_default()
         .await
         .unwrap_or_default();
+    let command_sync_store = load_command_sync_store(&state.persistence).await;
     let settings = state
         .persistence
         .guild_settings_or_default(guild_id)
@@ -883,6 +1074,20 @@ async fn guild_page(
         Some(&settings),
         &resolved_command_states,
     );
+    let (guild_fingerprint, _) =
+        dynamo_app::application_command_fingerprint_for_scope(&deployment, Some(&settings));
+    let command_sync_panel = if state.config.register_globally {
+        render_command_sync_panel(&build_unsupported_sync_panel(
+            "This bot is using global command registration. Run Sync Global Commands from the deployment page to refresh Discord.",
+        ))
+    } else {
+        render_command_sync_panel(&build_command_sync_panel(
+            SyncScopeKind::Guild(guild_id),
+            &guild_fingerprint,
+            command_sync_store.guild(guild_id),
+            &state.config,
+        ))
+    };
     let command_modals = render_guild_command_modals(
         guild_id,
         &state.command_catalog,
@@ -899,7 +1104,8 @@ async fn guild_page(
         module_cards = module_cards,
     );
     let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        sync_panel = command_sync_panel,
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
     );
@@ -1703,6 +1909,21 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
   padding: 7px 11px; border-radius: 10px; font: inherit; font-size: 0.85rem; font-weight: 700; cursor: pointer; width: auto; margin: 0; min-height: 38px;
 }
 .tab-button.active, .tab-button:hover { color: var(--text); background: rgba(221, 46, 83, 0.16); border-color: rgba(221,46,83,0.24); }
+.sync-panel {
+  display: flex; justify-content: space-between; align-items: center; gap: 14px;
+  padding: 14px 16px; margin: 0 0 14px; border-radius: 14px;
+  border: 1px solid rgba(255,255,255,0.06); background: var(--panel-strong);
+}
+.sync-panel-copy { min-width: 0; }
+.sync-panel h3 { margin: 0; font-size: 0.98rem; }
+.sync-panel p { margin: 6px 0 0; font-size: 0.88rem; color: var(--muted); line-height: 1.55; }
+.sync-panel-status { margin-top: 8px; font-size: 12px; color: var(--muted-soft); }
+.sync-panel-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+.sync-panel-ok { border-color: rgba(72,229,178,0.18); background: linear-gradient(180deg, rgba(72,229,178,0.08), rgba(21,24,32,0.92)); }
+.sync-panel-warn { border-color: rgba(221,46,83,0.26); background: linear-gradient(180deg, rgba(221,46,83,0.10), rgba(21,24,32,0.92)); }
+.sync-panel-info { border-color: rgba(6,138,221,0.22); background: linear-gradient(180deg, rgba(6,138,221,0.09), rgba(21,24,32,0.92)); }
+.sync-panel-error { border-color: rgba(245,158,11,0.24); background: linear-gradient(180deg, rgba(245,158,11,0.08), rgba(21,24,32,0.92)); }
+.sync-panel-muted { border-color: rgba(255,255,255,0.06); background: rgba(255,255,255,0.02); }
 .toggle-switch { position: relative; display: inline-flex; width: 44px; height: 24px; align-items: center; cursor: pointer; }
 .toggle-switch input { position: absolute; inset: 0; opacity: 0; margin: 0; cursor: pointer; }
 .toggle-slider { width: 44px; height: 24px; border-radius: 999px; background: #2a313e; border: 1px solid rgba(255,255,255,0.06); position: relative; transition: background-color 150ms ease; }
@@ -1829,6 +2050,14 @@ fn initials(name: &str) -> String {
         .to_uppercase()
 }
 
+fn display_name(user: &DashboardUser) -> String {
+    user.global_name
+        .as_ref()
+        .filter(|value| !value.trim().is_empty())
+        .cloned()
+        .unwrap_or_else(|| user.username.clone())
+}
+
 fn count_runtime_notices(catalog: &ModuleCatalog) -> usize {
     catalog
         .entries
@@ -1851,6 +2080,25 @@ fn parse_u64_list_env(key: &str) -> Result<Vec<u64>, anyhow::Error> {
                 .map_err(|error| anyhow::anyhow!("{key} must contain valid u64 values: {error}"))
         })
         .collect()
+}
+
+fn parse_bool_value(key: &str, value: &str) -> Result<bool, anyhow::Error> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "1" | "true" | "yes" | "on" => Ok(true),
+        "0" | "false" | "no" | "off" => Ok(false),
+        _ => anyhow::bail!("{key} must be one of true/false/1/0/yes/no/on/off"),
+    }
+}
+
+fn parse_u64_env(key: &str, default: u64) -> Result<u64, anyhow::Error> {
+    match env::var(key) {
+        Ok(value) => value
+            .trim()
+            .parse::<u64>()
+            .map_err(|error| anyhow::anyhow!("{key} must be a valid u64: {error}")),
+        Err(env::VarError::NotPresent) => Ok(default),
+        Err(error) => Err(anyhow::anyhow!("{key} could not be read: {error}")),
+    }
 }
 
 fn deserialize_u64_from_discord_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
@@ -2162,6 +2410,38 @@ fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
     format!(
         "<div class=\"tab-row command-category-row\">{}</div>",
         tabs.join("")
+    )
+}
+
+fn render_command_sync_panel(panel: &CommandSyncPanel) -> String {
+    let status_class = match panel.state {
+        CommandSyncDisplayState::InSync => "sync-panel sync-panel-ok",
+        CommandSyncDisplayState::Required => "sync-panel sync-panel-warn",
+        CommandSyncDisplayState::Pending => "sync-panel sync-panel-info",
+        CommandSyncDisplayState::Failed => "sync-panel sync-panel-error",
+        CommandSyncDisplayState::Unsupported => "sync-panel sync-panel-muted",
+    };
+    let action = match (&panel.button_label, &panel.button_action) {
+        (Some(label), Some(action)) => format!(
+            "<button class=\"button button-primary button-compact\" type=\"button\" onclick=\"{action}\">{label}</button>",
+            action = action,
+            label = escape_html(label),
+        ),
+        _ => String::new(),
+    };
+    let status_text = panel
+        .status_text
+        .as_ref()
+        .map(|value| escape_html(value))
+        .unwrap_or_default();
+
+    format!(
+        "<div class=\"{status_class}\" data-testid=\"command-sync-panel\"><div class=\"sync-panel-copy\"><h3>{title}</h3><p>{message}</p><p class=\"sync-panel-status\"><span>{status_text}</span><span id=\"command-sync-inline-status\" class=\"card-status\"></span></p></div><div class=\"sync-panel-actions\">{action}</div></div>",
+        status_class = status_class,
+        title = escape_html(&panel.title),
+        message = escape_html(&panel.message),
+        status_text = status_text,
+        action = action,
     )
 }
 
@@ -3301,6 +3581,93 @@ async fn patch_guild_command_settings(
     }
 }
 
+async fn post_deployment_command_sync(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+) -> impl IntoResponse {
+    let session = match require_api_admin(&state, &jar).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
+
+    if !state.config.register_globally {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_payload(
+                "Deployment command sync is only available while DISCORD_REGISTER_GLOBALLY=true."
+                    .to_string(),
+            )),
+        )
+            .into_response();
+    }
+
+    let mut sync_state = load_command_sync_store(&state.persistence).await;
+    sync_state.global.request_sync(
+        chrono::Utc::now(),
+        Some(session.user.id),
+        Some(display_name(&session.user)),
+    );
+
+    match save_command_sync_store(&state.persistence, &sync_state).await {
+        Ok(()) => Json(serde_json::json!({
+            "status": "ok",
+            "message": "Global command sync requested."
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to persist command sync request: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
+async fn post_guild_command_sync(
+    jar: CookieJar,
+    State(state): State<Arc<DashboardState>>,
+    Path(guild_id): Path<u64>,
+) -> impl IntoResponse {
+    let session = match require_api_guild_access(&state, &jar, guild_id).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
+
+    if state.config.register_globally {
+        return (
+            StatusCode::BAD_REQUEST,
+            Json(error_payload(
+                "Guild command sync is unavailable while global command registration is enabled."
+                    .to_string(),
+            )),
+        )
+            .into_response();
+    }
+
+    let mut sync_state = load_command_sync_store(&state.persistence).await;
+    sync_state.guild_mut(guild_id).request_sync(
+        chrono::Utc::now(),
+        Some(session.user.id),
+        Some(display_name(&session.user)),
+    );
+
+    match save_command_sync_store(&state.persistence, &sync_state).await {
+        Ok(()) => Json(serde_json::json!({
+            "status": "ok",
+            "message": "Guild command sync requested."
+        }))
+        .into_response(),
+        Err(error) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(error_payload(format!(
+                "failed to persist command sync request: {error}"
+            ))),
+        )
+            .into_response(),
+    }
+}
+
 fn module_exists(catalog: &ModuleCatalog, module_id: &str) -> bool {
     catalog
         .entries
@@ -3569,6 +3936,30 @@ async function toggleGuildCommand(guildId, commandId, enabled, input) {
   } else {
     setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Saved', 'success');
   }
+}
+
+async function requestDeploymentCommandSync() {
+  const response = await fetch('/api/deployment-command-sync', { method: 'POST' });
+  const output = await response.json();
+  if (!response.ok) {
+    setInlineStatus('command-sync-inline-status', `Error: ${output.message ?? response.status}`, 'error');
+    return false;
+  }
+  setInlineStatus('command-sync-inline-status', 'Sync requested', 'success');
+  window.location.reload();
+  return false;
+}
+
+async function requestGuildCommandSync(guildId) {
+  const response = await fetch(`/api/guild-command-sync/${guildId}`, { method: 'POST' });
+  const output = await response.json();
+  if (!response.ok) {
+    setInlineStatus('command-sync-inline-status', `Error: ${output.message ?? response.status}`, 'error');
+    return false;
+  }
+  setInlineStatus('command-sync-inline-status', 'Sync requested', 'success');
+  window.location.reload();
+  return false;
 }
 
 "#

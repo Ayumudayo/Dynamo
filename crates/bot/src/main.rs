@@ -1,10 +1,12 @@
 use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
+use chrono::Utc;
 use dynamo_core::{
-    AppConfig, AppState, CommandCatalog, CommandSyncConfig, DeploymentSettings, DiscordConfig,
-    Error, GatewayIntents, GuildSettings, ModuleCatalog, Persistence, ServiceRegistry,
-    StartupPhase, StartupReport, StartupStatus, aggregate_intents, catalog_startup_summary,
-    format_gateway_intents, format_preview_kv_list, format_preview_list, scope_startup_summary,
+    AppConfig, AppState, COMMAND_SYNC_PROVIDER_ID, CommandCatalog, CommandSyncConfig,
+    CommandSyncStateStore, DeploymentSettings, DiscordConfig, Error, GatewayIntents, GuildSettings,
+    ModuleCatalog, Persistence, ServiceRegistry, StartupPhase, StartupReport, StartupStatus,
+    aggregate_intents, catalog_startup_summary, format_gateway_intents, format_preview_kv_list,
+    format_preview_list, scope_startup_summary,
 };
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use tokio::sync::Mutex;
@@ -617,18 +619,38 @@ async fn sync_registered_commands(
     data: &AppState,
 ) -> Result<(), Error> {
     let deployment = data.persistence.deployment_settings_or_default().await?;
+    let mut sync_state = load_command_sync_state(&data.persistence).await?;
+    let mut sync_state_dirty = false;
     let all_cached_guilds = ctx.cache.guilds().into_iter().collect::<Vec<_>>();
 
     if discord_config.register_globally {
         let global_commands = dynamo_app::create_application_commands_for_scope(&deployment, None);
         let global_command_count = global_commands.len();
         let global_fingerprint = format!("{global_commands:#?}");
+        let manual_request_pending = sync_state.global.has_pending_request();
 
         {
             let mut fingerprints = command_sync_fingerprints().lock().await;
-            if fingerprints.global.as_ref() != Some(&global_fingerprint) {
-                serenity::Command::set_global_commands(&ctx.http, global_commands).await?;
+            if fingerprints.global.as_ref() != Some(&global_fingerprint) || manual_request_pending {
+                if let Err(error) =
+                    serenity::Command::set_global_commands(&ctx.http, global_commands).await
+                {
+                    sync_state
+                        .global
+                        .mark_failure(Utc::now(), error.to_string());
+                    sync_state_dirty = true;
+                    if sync_state_dirty {
+                        save_command_sync_state(&data.persistence, &sync_state).await?;
+                    }
+                    return Err(error.into());
+                }
                 fingerprints.global = Some(global_fingerprint);
+                sync_state.global.mark_success(
+                    Utc::now(),
+                    fingerprints.global.clone().unwrap_or_default(),
+                    global_command_count,
+                );
+                sync_state_dirty = true;
                 info!(
                     command_count = global_command_count,
                     "Synchronized global application commands"
@@ -665,7 +687,7 @@ async fn sync_registered_commands(
             }
         }
 
-        for guild_id in guild_ids_for_sync(ctx, discord_config) {
+        for guild_id in guild_ids_for_sync(ctx, discord_config, &sync_state) {
             let guild_settings = data
                 .persistence
                 .guild_settings_or_default(guild_id.get())
@@ -676,18 +698,38 @@ async fn sync_registered_commands(
             );
             let guild_command_count = guild_commands.len();
             let guild_fingerprint = format!("{guild_commands:#?}");
+            let manual_request_pending = sync_state
+                .guild(guild_id.get())
+                .map(|state| state.has_pending_request())
+                .unwrap_or(false);
 
             let should_sync = {
                 let fingerprints = command_sync_fingerprints().lock().await;
                 fingerprints.guilds.get(&guild_id.get()) != Some(&guild_fingerprint)
+                    || manual_request_pending
             };
 
             if should_sync {
-                guild_id.set_commands(&ctx.http, guild_commands).await?;
+                if let Err(error) = guild_id.set_commands(&ctx.http, guild_commands).await {
+                    sync_state
+                        .guild_mut(guild_id.get())
+                        .mark_failure(Utc::now(), error.to_string());
+                    sync_state_dirty = true;
+                    if sync_state_dirty {
+                        save_command_sync_state(&data.persistence, &sync_state).await?;
+                    }
+                    return Err(error.into());
+                }
                 let mut fingerprints = command_sync_fingerprints().lock().await;
                 fingerprints
                     .guilds
-                    .insert(guild_id.get(), guild_fingerprint);
+                    .insert(guild_id.get(), guild_fingerprint.clone());
+                sync_state.guild_mut(guild_id.get()).mark_success(
+                    Utc::now(),
+                    guild_fingerprint,
+                    guild_command_count,
+                );
+                sync_state_dirty = true;
                 info!(
                     guild_id = guild_id.get(),
                     command_count = guild_command_count,
@@ -697,22 +739,47 @@ async fn sync_registered_commands(
         }
     }
 
+    if sync_state_dirty {
+        save_command_sync_state(&data.persistence, &sync_state).await?;
+    }
+
     Ok(())
 }
 
 fn guild_ids_for_sync(
     ctx: &serenity::Context,
     discord_config: &DiscordConfig,
+    sync_state: &CommandSyncStateStore,
 ) -> Vec<serenity::GuildId> {
     if !discord_config.register_globally {
-        return discord_config
-            .dev_guild_id
-            .map(serenity::GuildId::new)
-            .into_iter()
-            .collect();
+        let mut guild_ids = std::collections::BTreeSet::new();
+        if let Some(dev_guild_id) = discord_config.dev_guild_id {
+            guild_ids.insert(dev_guild_id);
+        }
+        guild_ids.extend(sync_state.pending_guild_ids());
+        return guild_ids.into_iter().map(serenity::GuildId::new).collect();
     }
 
     ctx.cache.guilds().into_iter().collect()
+}
+
+async fn load_command_sync_state(
+    persistence: &Persistence,
+) -> Result<CommandSyncStateStore, Error> {
+    Ok(persistence
+        .load_provider_state(COMMAND_SYNC_PROVIDER_ID)
+        .await?
+        .and_then(|value| serde_json::from_value::<CommandSyncStateStore>(value).ok())
+        .unwrap_or_default())
+}
+
+async fn save_command_sync_state(
+    persistence: &Persistence,
+    state: &CommandSyncStateStore,
+) -> Result<(), Error> {
+    persistence
+        .save_provider_state(COMMAND_SYNC_PROVIDER_ID, serde_json::to_value(state)?)
+        .await
 }
 
 fn giveaway_poll_started() -> &'static OnceLock<()> {

@@ -106,6 +106,15 @@ pub fn create_application_commands_for_scope(
     poise::builtins::create_application_commands(&filtered_commands)
 }
 
+pub fn application_command_fingerprint_for_scope(
+    deployment: &DeploymentSettings,
+    guild: Option<&GuildSettings>,
+) -> (String, usize) {
+    let commands = create_application_commands_for_scope(deployment, guild);
+    let count = commands.len();
+    (format!("{commands:#?}"), count)
+}
+
 pub async fn handle_framework_event(
     ctx: &Context,
     event: &FullEvent,

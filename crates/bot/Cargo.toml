@@ -7,12 +7,14 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 dynamo-app = { path = "../app" }
 dynamo-core = { path = "../core" }
 dynamo-module-giveaway = { path = "../modules/giveaway" }
 dynamo-provider-google-finance = { path = "../providers/google-finance" }
 dotenvy.workspace = true
 poise.workspace = true
+serde_json.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

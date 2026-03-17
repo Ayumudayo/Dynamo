@@ -1,3 +1,4 @@
+mod command_sync;
 mod config;
 mod currency;
 mod dashboard_audit;
@@ -15,6 +16,9 @@ mod startup;
 mod suggestions;
 mod warnings;
 
+pub use command_sync::{
+    COMMAND_SYNC_PROVIDER_ID, CommandSyncResult, CommandSyncScopeState, CommandSyncStateStore,
+};
 pub use config::{AppConfig, CommandSyncConfig, DiscordConfig, OptionalModulesConfig};
 pub use currency::{
     CACHED_EXCHANGE_CURRENCIES, CurrencySpec, cached_exchange_currencies, currency_display_label,

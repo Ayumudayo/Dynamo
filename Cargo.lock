@@ -969,12 +969,14 @@ name = "dynamo-bot"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dotenvy",
  "dynamo-app",
  "dynamo-core",
  "dynamo-module-giveaway",
  "dynamo-provider-google-finance",
  "poise",
+ "serde_json",
  "tokio",
  "tracing",
  "tracing-subscriber",

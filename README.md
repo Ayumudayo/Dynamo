@@ -266,6 +266,7 @@ The companion dashboard exposes:
 - deployment-level module install/enable toggles
 - guild-level module enablement and structured settings forms
 - deployment-level and guild-level command toggles for individual leaf slash commands
+- deployment-level and guild-level manual command sync buttons with sync status panels
 - tabbed `Overview`, `Modules`, `Commands`, and `Logs` views for guild and deployment pages
 - dashboard audit logs for dashboard-originated module and command changes
 - effective module state rendering shared with the runtime guard layer
@@ -274,6 +275,7 @@ The companion dashboard exposes:
 Command sync behavior:
 
 - Guild command sets are re-synchronized from dashboard settings on a polling loop.
+- The Commands tab can queue a manual sync request when you need an immediate guild or global refresh.
 - Deployment and command toggle changes are reflected in runtime checks immediately after the next sync cycle.
 - Global commands still depend on Discord propagation behavior; guild command sync is the immediate path.
 
