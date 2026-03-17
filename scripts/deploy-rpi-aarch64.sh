@@ -3,12 +3,15 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 STAGE_DIR="$ROOT_DIR/output/rpi-aarch64"
+ARCHIVE_PATH="$ROOT_DIR/output/rpi-aarch64.tar"
 RPI_HOST="${RPI_HOST:-}"
 RPI_USER="${RPI_USER:-}"
 RPI_PORT="${RPI_PORT:-22}"
 RPI_APP_DIR="${RPI_APP_DIR:-}"
+RPI_SSH_KEY="${RPI_SSH_KEY:-}"
 SKIP_BUILD=false
 SKIP_BOOTSTRAP=false
+FORCE_BOOTSTRAP=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,12 +31,20 @@ while [[ $# -gt 0 ]]; do
       RPI_APP_DIR="$2"
       shift 2
       ;;
+    --key)
+      RPI_SSH_KEY="$2"
+      shift 2
+      ;;
     --skip-build)
       SKIP_BUILD=true
       shift
       ;;
     --skip-bootstrap)
       SKIP_BOOTSTRAP=true
+      shift
+      ;;
+    --force-bootstrap)
+      FORCE_BOOTSTRAP=true
       shift
       ;;
     *)
@@ -61,22 +72,36 @@ if [[ ! -d "$STAGE_DIR" ]]; then
   exit 1
 fi
 
-ssh -p "$RPI_PORT" "$RPI_USER@$RPI_HOST" "mkdir -p '$RPI_APP_DIR' '$RPI_APP_DIR/scripts' '$RPI_APP_DIR/target/release' '$RPI_APP_DIR/logs'"
-scp -P "$RPI_PORT" "$STAGE_DIR/ecosystem.pm2.cjs" "$STAGE_DIR/.env.example" "$RPI_USER@$RPI_HOST:$RPI_APP_DIR/"
-scp -P "$RPI_PORT" "$STAGE_DIR/scripts/"* "$RPI_USER@$RPI_HOST:$RPI_APP_DIR/scripts/"
-scp -P "$RPI_PORT" "$STAGE_DIR/target/release/"* "$RPI_USER@$RPI_HOST:$RPI_APP_DIR/target/release/"
-
-BOOTSTRAP_FLAG="true"
-if [[ "$SKIP_BOOTSTRAP" == "true" ]]; then
-  BOOTSTRAP_FLAG="false"
+SSH_ARGS=(-p "$RPI_PORT")
+SCP_ARGS=(-P "$RPI_PORT")
+if [[ -n "$RPI_SSH_KEY" ]]; then
+  SSH_ARGS+=(-i "$RPI_SSH_KEY")
+  SCP_ARGS+=(-i "$RPI_SSH_KEY")
 fi
 
-ssh -p "$RPI_PORT" "$RPI_USER@$RPI_HOST" "bash -s" -- "$RPI_APP_DIR" "$BOOTSTRAP_FLAG" <<'REMOTE'
+rm -f "$ARCHIVE_PATH"
+tar -C "$STAGE_DIR" -cf "$ARCHIVE_PATH" .
+
+scp "${SCP_ARGS[@]}" "$ARCHIVE_PATH" "$RPI_USER@$RPI_HOST:$RPI_APP_DIR.deploy.tar"
+
+BOOTSTRAP_MODE="auto"
+if [[ "$SKIP_BOOTSTRAP" == "true" ]]; then
+  BOOTSTRAP_MODE="skip"
+elif [[ "$FORCE_BOOTSTRAP" == "true" ]]; then
+  BOOTSTRAP_MODE="force"
+fi
+
+ssh "${SSH_ARGS[@]}" "$RPI_USER@$RPI_HOST" "bash -s" -- "$RPI_APP_DIR" "$BOOTSTRAP_MODE" "$RPI_APP_DIR.deploy.tar" <<'REMOTE'
 set -euo pipefail
 APP_DIR="$1"
-RUN_BOOTSTRAP="$2"
+BOOTSTRAP_MODE="$2"
+ARCHIVE_PATH="$3"
 
-chmod +x "$APP_DIR"/scripts/*.sh
+mkdir -p "$APP_DIR" "$APP_DIR/scripts" "$APP_DIR/target/release" "$APP_DIR/logs"
+tar -C "$APP_DIR" -xf "$ARCHIVE_PATH"
+rm -f "$ARCHIVE_PATH"
+
+chmod +x "$APP_DIR"/scripts/*.sh "$APP_DIR"/target/release/dynamo-*
 
 if [[ ! -f "$APP_DIR/.env" ]]; then
   cp "$APP_DIR/.env.example" "$APP_DIR/.env"
@@ -86,8 +111,12 @@ fi
 
 cd "$APP_DIR"
 
-if [[ "$RUN_BOOTSTRAP" == "true" ]]; then
+if [[ "$BOOTSTRAP_MODE" == "force" ]]; then
   ./scripts/prod-bootstrap.sh
+  touch .bootstrap.done
+elif [[ "$BOOTSTRAP_MODE" == "auto" && ! -f .bootstrap.done ]]; then
+  ./scripts/prod-bootstrap.sh
+  touch .bootstrap.done
 fi
 
 if ! command -v pm2 >/dev/null 2>&1; then
@@ -99,5 +128,6 @@ pm2 startOrRestart ecosystem.pm2.cjs --update-env
 pm2 save
 REMOTE
 
-echo "Deployed bundle to $RPI_USER@$RPI_HOST:$RPI_APP_DIR"
+rm -f "$ARCHIVE_PATH"
 
+echo "Deployed bundle to $RPI_USER@$RPI_HOST:$RPI_APP_DIR"

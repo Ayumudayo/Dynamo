@@ -220,10 +220,13 @@ Optional flags:
 
 - `--skip-build` / `-SkipBuild`
 - `--skip-bootstrap` / `-SkipBootstrap`
+- `--force-bootstrap` / `-ForceBootstrap`
 - `--port` / `-Port`
 - `--app-dir` / `-AppDir`
+- `--key` / `-KeyPath`
 
-The deploy script stages a compact bundle under `output/rpi-aarch64/`, uploads the release binaries plus `ecosystem.pm2.cjs`, ensures the remote shell scripts are executable, optionally runs bootstrap, and then calls `pm2 startOrRestart ecosystem.pm2.cjs --update-env`.
+The deploy script stages a compact bundle under `output/rpi-aarch64/`, uploads it as a single archive, ensures the remote shell scripts are executable, auto-runs bootstrap only on the first successful deploy after `.env` exists, and then calls `pm2 startOrRestart ecosystem.pm2.cjs --update-env`.
+If you configure SSH key authentication and pass `--key` / `-KeyPath` (or set `RPI_SSH_KEY`), repeated password prompts are eliminated.
 
 ## Legacy JS Archive
 
