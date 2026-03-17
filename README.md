@@ -2,7 +2,7 @@
 
 `Dynamo` is a slash-first Discord bot template built with `poise + serenity`, MongoDB-backed runtime settings, and a companion dashboard for deployment and guild configuration.
 
-The repository still contains the legacy JavaScript bot while the Rust migration branch is in flight, but the actively developed template lives in the Rust workspace under [`crates/`](./crates).
+This repository is now the transition workspace and audit source for the Rust cutover. The legacy JavaScript bot remains here as reference material, while the actively developed product lives in the Rust workspace under [`crates/`](./crates). A fresh Rust-only repo export can be staged from this workspace with the export scripts under [`scripts/`](./scripts).
 
 ## Workspace Layout
 
@@ -26,22 +26,13 @@ The repository still contains the legacy JavaScript bot while the Rust migration
 - `suggestion`: suggestion board workflow with moderator buttons and modal reasons
 - `stats`: messages, interactions, XP leveling, voice session tracking
 - `moderation`: warnings, timeout, kick, ban, unban, softban, nickname changes
-- `music`: deployment-disabled-by-default module with `Songbird` playback and dashboard-configurable guild toggles
+- `giveaway`: persisted giveaway workflow with entry buttons and timed completion polling
 - `ticket`: ticket panel, category routing, participant management, transcript logging
 
-## Optional First-Party Modules
+## Paused Modules
 
-These are part of the migration plan but are not registered by default in the public v1 template:
-
-- `giveaway`
-
-Enable them explicitly with environment flags:
-
-- `DYNAMO_ENABLE_GIVEAWAY=true`
-
-Current optional-module status:
-
-- `giveaway`: implemented as an opt-in persisted slash workflow with entry buttons and timed completion polling
+- `music`: code remains in the workspace for future DAVE work, but it is intentionally not part of the active public template surface.
+- `music` launcher flags, smoke steps, and runtime support are intentionally excluded from the active Rust template path.
 
 ## Runtime Model
 
@@ -75,12 +66,10 @@ Common optional variables:
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG`
 
-Music runtime notes:
+Paused music notes:
 
-- `Songbird` is the implemented default backend.
-- `yt-dlp` must be available on the host path for YouTube URL/search playback.
-- Discord non-stage voice channels currently require DAVE/E2EE, which this build does not support yet. `/music join` and `/music play` will refuse regular voice channels and point users at this limitation.
-- `Lavalink` is not exposed in the runtime settings UI. If you want to experiment with an external node later, use [`docs/music-lavalink-guide.md`](./docs/music-lavalink-guide.md) as an operational reference only.
+- Music remains out of the active template runtime while DAVE support is unresolved.
+- [`docs/music-lavalink-guide.md`](./docs/music-lavalink-guide.md) is kept only as archived reference material.
 
 ## Discord Intents
 
@@ -141,7 +130,6 @@ Useful flags:
 
 - `--skip-build` / `-SkipBuild`
 - `--skip-bootstrap` / `-SkipBootstrap`
-- `--enable-giveaway` / `-EnableGiveaway`
 - `-Headless` for the PowerShell launcher
 - `--dry-run` / `-DryRun`
 
@@ -155,7 +143,26 @@ Stop managed dashboard and bot processes:
 ./scripts/dev-down.sh
 ```
 
-The launchers print the effective command scope resolved from `.env`. Optional module state is managed from the dashboard rather than the launcher output.
+The launchers print the effective command scope resolved from `.env`.
+
+## Rust-Only Repo Export
+
+Use the export scripts to stage a fresh Rust-only repo in `output/rust-template/`:
+
+```powershell
+./scripts/export-rust-template.ps1
+```
+
+```bash
+./scripts/export-rust-template.sh
+```
+
+The staged repo includes the Rust workspace, launcher scripts, CI, dashboard smoke assets, and a minimal Playwright-only `package.json`. It excludes the legacy JS runtime, JS dashboard, and JS bot dependencies.
+
+Reference documents for the cutover:
+
+- [`docs/rust-template/js-pattern-audit.md`](./docs/rust-template/js-pattern-audit.md)
+- [`docs/rust-template/cutover-checklist.md`](./docs/rust-template/cutover-checklist.md)
 
 ## Validation Commands
 
@@ -187,7 +194,6 @@ The companion dashboard exposes:
 - tabbed `Overview`, `Modules`, `Commands`, and `Logs` views for guild and deployment pages
 - dashboard audit logs for dashboard-originated module and command changes
 - effective module state rendering shared with the runtime guard layer
-- runtime notices for modules with known platform limitations, such as the current DAVE restriction on `music`
 - explicit, human-written command descriptions in the dashboard command catalog
 
 Command sync behavior:
@@ -226,4 +232,4 @@ Use [`docs/dev-smoke-checklist.md`](./docs/dev-smoke-checklist.md) for the manua
 
 ## Current Status
 
-The Rust workspace is now the primary architecture target for the public template. The remaining planned work is mostly optional module work (`giveaway`, `music`) and further UX refinement rather than core bot architecture.
+The Rust workspace is the primary architecture target for the future public template. The next repo-level step is exporting a fresh Rust-only repository, while this repository remains the read-only JS/archive reference once that new repo is published.

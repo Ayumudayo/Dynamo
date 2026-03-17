@@ -2,13 +2,11 @@ use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use dynamo_core::{
     AppConfig, AppState, CommandCatalog, CommandSyncConfig, DeploymentSettings, DiscordConfig,
-    Error, GatewayIntents, GuildSettings, ModuleCatalog, OptionalModulesConfig, Persistence,
-    ServiceRegistry, StartupPhase, StartupReport, StartupStatus, aggregate_intents,
-    catalog_startup_summary, format_gateway_intents, format_preview_kv_list, format_preview_list,
-    scope_startup_summary,
+    Error, GatewayIntents, GuildSettings, ModuleCatalog, Persistence, ServiceRegistry,
+    StartupPhase, StartupReport, StartupStatus, aggregate_intents, catalog_startup_summary,
+    format_gateway_intents, format_preview_kv_list, format_preview_list, scope_startup_summary,
 };
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
-use songbird::SerenityInit;
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
@@ -30,7 +28,6 @@ async fn main() -> Result<(), Error> {
     let setup_command_catalog = registry.command_catalog().clone();
     let discord_config = config.discord.clone();
     let command_sync_config = config.commands.clone();
-    let optional_modules = config.optional_modules.clone();
     let setup_persistence = persistence.clone();
     let setup_services = services.clone();
     let startup_deployment = persistence.deployment_settings_or_default().await?;
@@ -67,7 +64,6 @@ async fn main() -> Result<(), Error> {
         .setup(move |ctx, ready, framework| {
             let discord_config = discord_config.clone();
             let command_sync_config = command_sync_config.clone();
-            let optional_modules = optional_modules.clone();
             let setup_catalog = setup_catalog.clone();
             let setup_command_catalog = setup_command_catalog.clone();
             let setup_persistence = setup_persistence.clone();
@@ -89,14 +85,11 @@ async fn main() -> Result<(), Error> {
                     app_state.clone(),
                 );
                 spawn_exchange_rate_refresh_loop(app_state.clone());
-                if optional_modules.giveaway_enabled {
-                    spawn_giveaway_poll_loop(ctx.clone(), app_state.clone());
-                }
+                spawn_giveaway_poll_loop(ctx.clone(), app_state.clone());
 
                 build_bot_runtime_report(
                     &discord_config,
                     &command_sync_config,
-                    &optional_modules,
                     &app_state,
                     &ready.user.name,
                 )
@@ -109,10 +102,9 @@ async fn main() -> Result<(), Error> {
         })
         .build();
 
-    let mut client_builder = serenity::ClientBuilder::new(config.discord.token, intents);
-    client_builder = client_builder.register_songbird();
-
-    let mut client = client_builder.framework(framework).await?;
+    let mut client = serenity::ClientBuilder::new(config.discord.token, intents)
+        .framework(framework)
+        .await?;
 
     client.start().await?;
     Ok(())
@@ -182,10 +174,7 @@ fn build_bot_preconnect_report(
             "sync_interval_seconds",
             config.commands.sync_interval_seconds.to_string(),
         )
-        .detail(
-            "optional_module_flags",
-            format!("giveaway={}", config.optional_modules.giveaway_enabled),
-        )
+        .detail("optional_module_flags", "none".to_string())
         .detail("aggregated_intents", format_gateway_intents(intents)),
     );
     report.add_phase(
@@ -333,7 +322,6 @@ fn build_bot_preconnect_report(
 async fn build_bot_runtime_report(
     discord_config: &DiscordConfig,
     command_sync_config: &CommandSyncConfig,
-    optional_modules: &OptionalModulesConfig,
     app_state: &AppState,
     ready_user: &str,
 ) -> Result<StartupReport, Error> {
@@ -370,19 +358,10 @@ async fn build_bot_runtime_report(
     report.add_phase(
         StartupPhase::new(
             "runtime",
-            if optional_modules.giveaway_enabled {
-                StartupStatus::Ok
-            } else {
-                StartupStatus::Warn
-            },
+            StartupStatus::Ok,
             format!(
-                "user={ready_user} active={} giveaway={}",
-                scope_summary.active_command_count,
-                if optional_modules.giveaway_enabled {
-                    "on"
-                } else {
-                    "off"
-                }
+                "user={ready_user} active={} giveaway=on",
+                scope_summary.active_command_count
             ),
         )
         .detail("ready_user", ready_user)
@@ -395,11 +374,7 @@ async fn build_bot_runtime_report(
         )
         .detail(
             "giveaway_poll_loop",
-            if optional_modules.giveaway_enabled {
-                format!("enabled every {}s", GIVEAWAY_POLL_INTERVAL_SECONDS)
-            } else {
-                "disabled (optional module not enabled)".to_string()
-            },
+            format!("enabled every {}s", GIVEAWAY_POLL_INTERVAL_SECONDS),
         )
         .detail(
             "exchange_rate_refresh_loop",
@@ -504,9 +479,6 @@ fn collect_service_labels(services: &ServiceRegistry) -> Vec<String> {
     }
     if services.exchange_rates.is_some() {
         labels.push("exchange_rates".to_string());
-    }
-    if services.music.is_some() {
-        labels.push("music".to_string());
     }
     labels
 }

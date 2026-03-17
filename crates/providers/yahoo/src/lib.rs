@@ -813,8 +813,12 @@ fn merge_quote(chart: ChartResult, summary: Option<QuoteSummaryResult>) -> Stock
         post_market_change_percent: price
             .and_then(|value| numeric(value.post_market_change_percent.as_ref()))
             .or(derived.post_market_change_percent),
-        regular_market_day_high: meta.regular_market_day_high.or(derived.regular_market_day_high),
-        regular_market_day_low: meta.regular_market_day_low.or(derived.regular_market_day_low),
+        regular_market_day_high: meta
+            .regular_market_day_high
+            .or(derived.regular_market_day_high),
+        regular_market_day_low: meta
+            .regular_market_day_low
+            .or(derived.regular_market_day_low),
         regular_market_volume: meta.regular_market_volume.or(derived.regular_market_volume),
         market_cap: detail
             .and_then(|value| numeric(value.market_cap.as_ref()))
@@ -868,7 +872,9 @@ fn derive_chart_metrics(chart: &ChartResult) -> DerivedChartMetrics {
         _ => None,
     };
     let pre_market_change_percent = match (pre_market_change, previous_close) {
-        (Some(change), Some(previous_close)) if previous_close != 0.0 => Some(change / previous_close),
+        (Some(change), Some(previous_close)) if previous_close != 0.0 => {
+            Some(change / previous_close)
+        }
         _ => None,
     };
     let post_market_change = match (post_market_price, regular_market_price) {
@@ -1077,9 +1083,27 @@ mod tests {
             timestamp: vec![110, 120, 210, 220, 310],
             indicators: ChartIndicators {
                 quote: vec![ChartQuoteSeries {
-                    close: vec![Some(181.0), Some(182.0), Some(183.0), Some(184.0), Some(185.0)],
-                    high: vec![Some(181.5), Some(182.5), Some(183.5), Some(184.5), Some(185.5)],
-                    low: vec![Some(180.5), Some(181.5), Some(182.5), Some(183.5), Some(184.5)],
+                    close: vec![
+                        Some(181.0),
+                        Some(182.0),
+                        Some(183.0),
+                        Some(184.0),
+                        Some(185.0),
+                    ],
+                    high: vec![
+                        Some(181.5),
+                        Some(182.5),
+                        Some(183.5),
+                        Some(184.5),
+                        Some(185.5),
+                    ],
+                    low: vec![
+                        Some(180.5),
+                        Some(181.5),
+                        Some(182.5),
+                        Some(183.5),
+                        Some(184.5),
+                    ],
                     volume: vec![Some(10.0), Some(20.0), Some(30.0), Some(40.0), Some(50.0)],
                 }],
             },

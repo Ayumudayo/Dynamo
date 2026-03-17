@@ -128,6 +128,7 @@ fabric.properties
 ### Node ###
 # Logs
 logs
+output/
 *.log
 npm-debug.log*
 yarn-debug.log*

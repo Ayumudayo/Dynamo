@@ -13,7 +13,6 @@ dynamo-module-giveaway = { path = "../modules/giveaway" }
 dynamo-provider-google-finance = { path = "../providers/google-finance" }
 dotenvy.workspace = true
 poise.workspace = true
-songbird.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true

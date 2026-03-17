@@ -1,0 +1,9 @@
+target/
+node_modules/
+logs/
+output/
+.env
+.sisyphus/
+.codex/
+.idea/
+.vscode/

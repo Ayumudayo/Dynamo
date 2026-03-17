@@ -4,9 +4,8 @@ use dynamo_core::{
     AppState, CommandCatalog, DashboardAuditLogRepository, DeploymentSettings,
     DeploymentSettingsRepository, DiscordCommand, Error, ExchangeRateService, GiveawaysRepository,
     GuildSettings, GuildSettingsRepository, InviteRepository, MemberStatsRepository, ModuleCatalog,
-    ModuleRegistry, MusicService, OptionalModulesConfig, Persistence, ProviderStateRepository,
-    ServiceRegistry, StockQuoteService, SuggestionsRepository, WarningLogRepository,
-    resolve_command_state,
+    ModuleRegistry, OptionalModulesConfig, Persistence, ProviderStateRepository, ServiceRegistry,
+    StockQuoteService, SuggestionsRepository, WarningLogRepository, resolve_command_state,
 };
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
@@ -17,24 +16,20 @@ pub fn module_registry() -> ModuleRegistry {
     module_registry_with_optional(&optional_modules)
 }
 
-pub fn module_registry_with_optional(optional_modules: &OptionalModulesConfig) -> ModuleRegistry {
-    let mut modules: Vec<Box<dyn dynamo_core::Module>> = vec![
+pub fn module_registry_with_optional(_optional_modules: &OptionalModulesConfig) -> ModuleRegistry {
+    let modules: Vec<Box<dyn dynamo_core::Module>> = vec![
         Box::new(dynamo_module_currency::CurrencyModule),
+        Box::new(dynamo_module_giveaway::GiveawayModule),
         Box::new(dynamo_module_info::InfoModule),
         Box::new(dynamo_module_gameinfo::GameInfoModule),
         Box::new(dynamo_module_greeting::GreetingModule),
         Box::new(dynamo_module_invite::InviteModule),
         Box::new(dynamo_module_moderation::ModerationModule),
-        Box::new(dynamo_module_music::MusicModule),
         Box::new(dynamo_module_suggestion::SuggestionModule),
         Box::new(dynamo_module_stats::StatsModule),
         Box::new(dynamo_module_ticket::TicketModule),
         Box::new(dynamo_module_stock::StockModule),
     ];
-
-    if optional_modules.giveaway_enabled {
-        modules.push(Box::new(dynamo_module_giveaway::GiveawayModule));
-    }
 
     ModuleRegistry::new(modules)
 }
@@ -89,12 +84,10 @@ pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<Se
             persistence.provider_state.clone(),
         )?,
     );
-    let music: Arc<dyn MusicService> =
-        Arc::new(dynamo_provider_music_songbird::SongbirdMusicService::new());
     Ok(ServiceRegistry::new(
         Some(stock_quotes),
         Some(exchange_rates),
-        Some(music),
+        None,
     ))
 }
 
@@ -276,9 +269,7 @@ mod tests {
 
     #[test]
     fn optional_registry_commands_have_explicit_descriptions() {
-        let registry = module_registry_with_optional(&OptionalModulesConfig {
-            giveaway_enabled: true,
-        });
+        let registry = module_registry_with_optional(&OptionalModulesConfig);
         for entry in &registry.command_catalog().entries {
             let description = entry
                 .command

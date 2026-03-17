@@ -25,9 +25,6 @@ if (-not $Shell) {
 }
 
 $EnvOverrides = @{}
-if ($EnableGiveaway) {
-  $EnvOverrides["DYNAMO_ENABLE_GIVEAWAY"] = "true"
-}
 
 function Get-DotenvValue {
   param([string]$Key)
@@ -389,7 +386,9 @@ function Test-DashboardHealth {
 Write-Host "Repo root: $RepoRoot"
 Write-Host "Logs dir:  $LogsDir"
 Write-Host "Mode:      $($(if ($Headless) { 'headless' } else { 'visible windows' }))"
-$EffectiveGiveaway = Resolve-BoolSetting -Key "DYNAMO_ENABLE_GIVEAWAY" -Default $false -CliEnable $EnableGiveaway.IsPresent
+if ($EnableGiveaway) {
+  Write-Warning "-EnableGiveaway is no longer needed. Giveaway is a built-in core module."
+}
 $DevGuildId = Get-DotenvValue -Key "DISCORD_DEV_GUILD_ID"
 if (-not $DevGuildId) {
   $DevGuildId = Get-DotenvValue -Key "GUILD_ID"
@@ -404,9 +403,6 @@ $CommandScope = if ($RegisterGlobally) {
   "guild (missing DISCORD_DEV_GUILD_ID/GUILD_ID)"
 }
 Write-Host "Command scope: $CommandScope"
-if ($EffectiveGiveaway) {
-  Write-Host "Giveaway module override: enabled"
-}
 
 if (-not $SkipBuild) {
   Write-Host "Prebuilding shared Rust artifacts..."

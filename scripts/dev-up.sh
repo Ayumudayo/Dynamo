@@ -7,7 +7,6 @@ LOGS_DIR="$ROOT_DIR/logs"
 
 SKIP_BOOTSTRAP=false
 SKIP_BUILD=false
-ENABLE_GIVEAWAY=false
 DRY_RUN=false
 
 while [[ $# -gt 0 ]]; do
@@ -21,11 +20,11 @@ while [[ $# -gt 0 ]]; do
       shift
       ;;
     --enable-giveaway)
-      ENABLE_GIVEAWAY=true
+      echo "--enable-giveaway is no longer needed. Giveaway is a built-in module." >&2
       shift
       ;;
     --enable-music)
-      echo "--enable-music is no longer needed. Music is a built-in module; use dashboard deployment/guild toggles." >&2
+      echo "--enable-music is no longer needed. Music is paused and excluded from the active Rust template path." >&2
       shift
       ;;
     --dry-run)
@@ -215,9 +214,6 @@ start_process() {
 
   (
     cd "$ROOT_DIR"
-    if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
-      export DYNAMO_ENABLE_GIVEAWAY=true
-    fi
     echo "[launcher] starting $name from $binary"
     nohup "$binary" >"$stdout_path" 2>"$stderr_path" &
     echo $! >"$pid_path"
@@ -266,9 +262,6 @@ run_binary_foreground() {
 
   (
     cd "$ROOT_DIR"
-    if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
-      export DYNAMO_ENABLE_GIVEAWAY=true
-    fi
     "$binary"
   )
   LAST_RUN_STATUS="ok"
@@ -322,11 +315,7 @@ if [[ "$REGISTER_GLOBALLY" != "true" ]]; then
     COMMAND_SCOPE="guild (missing DISCORD_DEV_GUILD_ID/GUILD_ID)"
   fi
 fi
-EFFECTIVE_GIVEAWAY="$(resolve_bool_setting "DYNAMO_ENABLE_GIVEAWAY" "false" "$ENABLE_GIVEAWAY")"
 echo "Command scope: $COMMAND_SCOPE"
-if [[ "$EFFECTIVE_GIVEAWAY" == "true" ]]; then
-  echo "Giveaway module override: enabled"
-fi
 
 if [[ "$SKIP_BUILD" != "true" ]]; then
   if [[ "$DRY_RUN" == "true" ]]; then
@@ -336,9 +325,6 @@ if [[ "$SKIP_BUILD" != "true" ]]; then
     echo "Prebuilding shared Rust artifacts..."
     (
       cd "$ROOT_DIR"
-      if [[ "$ENABLE_GIVEAWAY" == "true" ]]; then
-        export DYNAMO_ENABLE_GIVEAWAY=true
-      fi
       cargo build -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot
     )
     BUILD_STATUS="ok"

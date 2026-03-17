@@ -66,23 +66,11 @@ pub struct CommandSyncConfig {
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct OptionalModulesConfig {
-    pub giveaway_enabled: bool,
-}
+pub struct OptionalModulesConfig;
 
 impl OptionalModulesConfig {
     pub fn from_env() -> Result<Self, Error> {
-        Ok(Self {
-            giveaway_enabled: parse_bool_env("DYNAMO_ENABLE_GIVEAWAY", false)?,
-        })
-    }
-}
-
-fn parse_bool_env(key: &str, default: bool) -> Result<bool, Error> {
-    match env::var(key) {
-        Ok(value) => parse_bool_value(key, &value),
-        Err(env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(anyhow::anyhow!("{key} could not be read: {error}")),
+        Ok(Self)
     }
 }
 

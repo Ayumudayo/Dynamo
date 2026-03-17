@@ -93,21 +93,12 @@ Run this checklist after major module, persistence, or dashboard changes.
 
 ## Giveaway
 
-1. Enable `DYNAMO_ENABLE_GIVEAWAY=true`.
-2. Configure the giveaway default channel or pass a channel explicitly.
-3. Run `/giveaway start`.
-4. Use the entry button from multiple users.
-5. Run `/giveaway pause`, `/giveaway resume`, `/giveaway edit`, and `/giveaway list`.
-6. Run `/giveaway end` or wait for the poller to finish it automatically.
-7. Run `/giveaway reroll` after completion.
-
-## Music
-
-1. Enable the `music` module from `/deployment`, then from `/guild/<guild_id>` if you want guild-specific enablement.
-2. Ensure `yt-dlp` is available on the host path.
-3. Run `/music status` and confirm `Songbird` is shown as the configured backend and the DAVE limitation note is visible.
-4. Confirm `/music join` and `/music play` refuse regular voice channels with an explanatory message.
-5. Use a stage channel for smoke tests and run `/music join`, `/music play`, `/music pause`, `/music resume`, `/music skip`, `/music stop`, `/music leave`, and `/music queue`.
+1. Configure the giveaway default channel or pass a channel explicitly.
+2. Run `/giveaway start`.
+3. Use the entry button from multiple users.
+4. Run `/giveaway pause`, `/giveaway resume`, `/giveaway edit`, and `/giveaway list`.
+5. Run `/giveaway end` or wait for the poller to finish it automatically.
+6. Run `/giveaway reroll` after completion.
 
 ## Ticket
 
