@@ -5,7 +5,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use dynamo_core::{
+use dynamo_runtime::{
     Error, MusicBackendConfig, MusicBackendKind, MusicBackendStatus, MusicEnqueueResult,
     MusicQueueSnapshot, MusicService, MusicTrack,
 };

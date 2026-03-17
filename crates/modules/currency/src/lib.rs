@@ -1,8 +1,10 @@
-use dynamo_core::{
-    Context, DeploymentCommandSettings, DiscordCommand, Error, GatewayIntents,
-    GuildCommandSettings, Module, ModuleCategory, ModuleManifest, SettingOption, SettingsField,
-    SettingsFieldKind, SettingsSchema, SettingsSection, module_access_for_context,
+use dynamo_contracts::{DeploymentCommandSettings, GuildCommandSettings};
+use dynamo_domain_currency::{ExchangeRateSourceKind, supported_currency_specs};
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingOption,
+    SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
 use futures_util::future::join_all;
 use poise::serenity_prelude::{CreateEmbed, CreateEmbedFooter, Timestamp};
 use serde::{Deserialize, Serialize};
@@ -17,7 +19,7 @@ const DEFAULT_EXCHANGE_AMOUNT: f64 = 1.0;
 
 pub struct CurrencyModule;
 
-impl Module for CurrencyModule {
+impl Module<AppState, Error> for CurrencyModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -29,7 +31,7 @@ impl Module for CurrencyModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![exchange(), rate()]
     }
 
@@ -182,7 +184,7 @@ async fn exchange(
         .field("From", format!("{} {from}", format_decimal(amount)), false)
         .field("To", format!("{} {to}", format_decimal(converted)), false);
 
-    if quote.source_kind == dynamo_core::ExchangeRateSourceKind::Cache {
+    if quote.source_kind == ExchangeRateSourceKind::Cache {
         embed = embed.field("Data Source", source_label(quote.source_kind), false);
     }
 
@@ -248,7 +250,7 @@ async fn rate(
             name,
             rate.map(|quote| {
                 let value = format_decimal(quote.rate * amount);
-                if quote.source_kind == dynamo_core::ExchangeRateSourceKind::Cache {
+                if quote.source_kind == ExchangeRateSourceKind::Cache {
                     format!("{value}\nCached fallback")
                 } else {
                     value
@@ -475,7 +477,7 @@ fn currency_select_options(include_blank: bool) -> Vec<SettingOption> {
         });
     }
     options.extend(
-        dynamo_core::supported_currency_specs()
+        supported_currency_specs()
             .iter()
             .map(|currency| SettingOption {
                 label: currency_option_label(currency.code),
@@ -649,16 +651,16 @@ fn normalize_currency(input: &str) -> String {
     input.trim().to_ascii_uppercase()
 }
 
-fn source_label(kind: dynamo_core::ExchangeRateSourceKind) -> &'static str {
+fn source_label(kind: ExchangeRateSourceKind) -> &'static str {
     match kind {
-        dynamo_core::ExchangeRateSourceKind::Live => "Live",
-        dynamo_core::ExchangeRateSourceKind::Cache => "Cached fallback",
+        ExchangeRateSourceKind::Live => "Live",
+        ExchangeRateSourceKind::Cache => "Cached fallback",
     }
 }
 
 fn currency_display_label(currency: &str) -> String {
     let normalized = normalize_currency(currency);
-    dynamo_core::currency_display_label(&normalized)
+    dynamo_domain_currency::currency_display_label(&normalized)
         .map(str::to_string)
         .unwrap_or_else(|| format!("🌐 {normalized}"))
 }
@@ -704,6 +706,7 @@ mod tests {
     use super::{
         currency_display_label, currency_option_label, format_decimal, normalize_currency,
     };
+    use dynamo_domain_currency::supported_currency_specs;
 
     #[test]
     fn formats_grouped_decimals_like_js_locale_output() {
@@ -719,7 +722,7 @@ mod tests {
 
     #[test]
     fn all_supported_rate_currencies_have_display_labels() {
-        for currency in dynamo_core::supported_currency_specs() {
+        for currency in supported_currency_specs() {
             let code = currency.code;
             let label = currency_display_label(code);
             assert!(

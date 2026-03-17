@@ -4,11 +4,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use dynamo_core::{
-    AppState, DiscordCommand, Error, GatewayIntents, MemberStatsRecord, Module, ModuleCategory,
-    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
-    module_access_for_app,
+use dynamo_domain_stats::MemberStatsRecord;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Error, module_access_for_app};
 use poise::serenity_prelude::{
     ChannelId, CreateMessage, GuildId, Interaction, Message, UserId, VoiceState,
 };
@@ -31,7 +32,7 @@ fn voice_sessions() -> &'static Mutex<HashMap<String, i64>> {
 
 pub struct StatsModule;
 
-impl Module for StatsModule {
+impl Module<AppState, Error> for StatsModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -46,7 +47,7 @@ impl Module for StatsModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         Vec::new()
     }
 
@@ -373,7 +374,7 @@ fn render_level_up_message(
 }
 
 async fn accumulate_voice_time(
-    repo: &dyn dynamo_core::MemberStatsRepository,
+    repo: &dyn dynamo_contracts::MemberStatsRepository,
     guild_id: u64,
     member_id: u64,
     key: &str,
@@ -440,7 +441,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::{StatsSettings, maybe_level_up};
-    use dynamo_core::MemberStatsRecord;
+    use dynamo_domain_stats::MemberStatsRecord;
 
     #[test]
     fn stats_settings_accepts_nested_xp_shape() {

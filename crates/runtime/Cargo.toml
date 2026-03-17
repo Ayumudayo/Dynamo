@@ -1,0 +1,22 @@
+[package]
+name = "dynamo-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+dynamo-contracts = { path = "../contracts" }
+dynamo-domain-giveaway = { path = "../domain-giveaway" }
+dynamo-domain-invite = { path = "../domain-invite" }
+dynamo-domain-stats = { path = "../domain-stats" }
+dynamo-domain-suggestion = { path = "../domain-suggestion" }
+dynamo-module-kit = { path = "../module-kit" }
+dynamo-ops = { path = "../ops" }
+poise.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true

@@ -932,13 +932,14 @@ name = "dynamo-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dynamo-core",
+ "dynamo-contracts",
  "dynamo-module-currency",
  "dynamo-module-gameinfo",
  "dynamo-module-giveaway",
  "dynamo-module-greeting",
  "dynamo-module-info",
  "dynamo-module-invite",
+ "dynamo-module-kit",
  "dynamo-module-moderation",
  "dynamo-module-stats",
  "dynamo-module-stock",
@@ -947,6 +948,7 @@ dependencies = [
  "dynamo-persistence-mongo",
  "dynamo-provider-google-finance",
  "dynamo-provider-yahoo",
+ "dynamo-runtime",
  "poise",
  "tracing",
 ]
@@ -957,7 +959,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "dotenvy",
- "dynamo-core",
+ "dynamo-observability",
  "dynamo-persistence-mongo",
  "tokio",
  "tracing",
@@ -972,9 +974,13 @@ dependencies = [
  "chrono",
  "dotenvy",
  "dynamo-app",
- "dynamo-core",
+ "dynamo-contracts",
  "dynamo-module-giveaway",
+ "dynamo-module-kit",
+ "dynamo-observability",
+ "dynamo-ops",
  "dynamo-provider-google-finance",
+ "dynamo-runtime",
  "poise",
  "serde_json",
  "tokio",
@@ -983,16 +989,22 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-core"
+name = "dynamo-contracts"
 version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "poise",
+ "dynamo-domain-currency",
+ "dynamo-domain-giveaway",
+ "dynamo-domain-invite",
+ "dynamo-domain-moderation",
+ "dynamo-domain-stats",
+ "dynamo-domain-stock",
+ "dynamo-domain-suggestion",
+ "dynamo-ops",
  "serde",
  "serde_json",
- "tracing",
 ]
 
 [[package]]
@@ -1005,8 +1017,12 @@ dependencies = [
  "chrono",
  "dotenvy",
  "dynamo-app",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-module-kit",
+ "dynamo-observability",
+ "dynamo-ops",
  "dynamo-persistence-mongo",
+ "dynamo-runtime",
  "futures-util",
  "rand 0.8.5",
  "reqwest",
@@ -1019,11 +1035,69 @@ dependencies = [
 ]
 
 [[package]]
+name = "dynamo-domain-currency"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
+name = "dynamo-domain-giveaway"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
+name = "dynamo-domain-invite"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
+name = "dynamo-domain-moderation"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
+name = "dynamo-domain-stats"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
+name = "dynamo-domain-stock"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "dynamo-domain-suggestion"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
+]
+
+[[package]]
 name = "dynamo-module-currency"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-currency",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "futures-util",
  "poise",
  "serde",
@@ -1037,7 +1111,9 @@ dependencies = [
  "anyhow",
  "chrono",
  "chrono-tz",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "regex",
  "reqwest",
@@ -1055,7 +1131,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dynamo-core",
+ "dynamo-domain-giveaway",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "humantime",
  "poise",
  "rand 0.8.5",
@@ -1068,7 +1146,10 @@ name = "dynamo-module-greeting"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-invite",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
@@ -1078,7 +1159,8 @@ dependencies = [
 name = "dynamo-module-info"
 version = "0.1.0"
 dependencies = [
- "dynamo-core",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
 ]
 
@@ -1088,11 +1170,22 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dynamo-core",
+ "dynamo-domain-invite",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "dynamo-module-kit"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "poise",
+ "serde",
 ]
 
 [[package]]
@@ -1101,7 +1194,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dynamo-core",
+ "dynamo-domain-moderation",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "humantime",
  "poise",
  "serde",
@@ -1112,7 +1207,9 @@ dependencies = [
 name = "dynamo-module-music"
 version = "0.1.0"
 dependencies = [
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
@@ -1124,7 +1221,10 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-stats",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
@@ -1135,7 +1235,10 @@ dependencies = [
 name = "dynamo-module-stock"
 version = "0.1.0"
 dependencies = [
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-stock",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
@@ -1147,7 +1250,10 @@ name = "dynamo-module-suggestion"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-suggestion",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
@@ -1158,10 +1264,31 @@ name = "dynamo-module-ticket"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-module-kit",
+ "dynamo-runtime",
  "poise",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "dynamo-observability"
+version = "0.1.0"
+dependencies = [
+ "dynamo-contracts",
+ "dynamo-module-kit",
+ "dynamo-runtime",
+ "poise",
+ "tracing",
+]
+
+[[package]]
+name = "dynamo-ops"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "serde",
 ]
 
 [[package]]
@@ -1172,7 +1299,13 @@ dependencies = [
  "async-trait",
  "chrono",
  "dotenvy",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-giveaway",
+ "dynamo-domain-invite",
+ "dynamo-domain-moderation",
+ "dynamo-domain-stats",
+ "dynamo-domain-suggestion",
+ "dynamo-ops",
  "futures-util",
  "mongodb",
  "serde",
@@ -1187,7 +1320,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-currency",
  "reqwest",
  "scraper",
  "serde",
@@ -1201,7 +1335,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
- "dynamo-core",
+ "dynamo-runtime",
  "poise",
  "reqwest",
  "songbird",
@@ -1216,7 +1350,8 @@ dependencies = [
  "anyhow",
  "async-trait",
  "dotenvy",
- "dynamo-core",
+ "dynamo-contracts",
+ "dynamo-domain-stock",
  "dynamo-persistence-mongo",
  "reqwest",
  "scraper",
@@ -1225,6 +1360,26 @@ dependencies = [
  "tokio",
  "tracing",
  "url",
+]
+
+[[package]]
+name = "dynamo-runtime"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-trait",
+ "chrono",
+ "dynamo-contracts",
+ "dynamo-domain-giveaway",
+ "dynamo-domain-invite",
+ "dynamo-domain-stats",
+ "dynamo-domain-suggestion",
+ "dynamo-module-kit",
+ "dynamo-ops",
+ "poise",
+ "serde",
+ "serde_json",
+ "tracing",
 ]
 
 [[package]]

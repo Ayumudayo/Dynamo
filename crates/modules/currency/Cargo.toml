@@ -7,7 +7,10 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-dynamo-core = { path = "../../core" }
+dynamo-contracts = { path = "../../contracts" }
+dynamo-domain-currency = { path = "../../domain-currency" }
+dynamo-module-kit = { path = "../../module-kit" }
+dynamo-runtime = { path = "../../runtime" }
 futures-util.workspace = true
 poise.workspace = true
 serde.workspace = true

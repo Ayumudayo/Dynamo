@@ -9,7 +9,12 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/bot`](./crates/bot): Discord runtime and slash command registration
 - [`crates/dashboard`](./crates/dashboard): `axum` companion dashboard for deployment and guild settings
 - [`crates/bootstrap`](./crates/bootstrap): MongoDB bootstrap utility
-- [`crates/core`](./crates/core): shared config, state, module registry, repositories, guards
+- [`crates/module-kit`](./crates/module-kit): module trait, manifest, settings schema, command/module catalog descriptors
+- [`crates/contracts`](./crates/contracts): deployment/guild settings plus repository and service traits
+- [`crates/runtime`](./crates/runtime): runtime config, app state, persistence/service registries, enablement, guards
+- [`crates/ops`](./crates/ops): dashboard audit log and command sync state models
+- [`crates/observability`](./crates/observability): startup reporting and rendering
+- [`crates/domain-*`](./crates): shared domain crates for currency, stock, giveaway, invite, stats, suggestion, and moderation
 - [`crates/persistence-mongo`](./crates/persistence-mongo): MongoDB repositories and bootstrap
 - [`crates/providers/google-finance`](./crates/providers/google-finance): Google Finance exchange-rate provider with persisted USD-base cache
 - [`crates/providers/yahoo`](./crates/providers/yahoo): Yahoo Finance provider with persisted crumb/cookie enrichment

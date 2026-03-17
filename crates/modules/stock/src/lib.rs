@@ -4,12 +4,15 @@ use std::{
     time::Duration,
 };
 
-use dynamo_core::{
-    Context, DeploymentCommandSettings, DiscordCommand, Error, GatewayIntents,
-    GuildCommandSettings, GuildModuleSettings, Module, ModuleCategory, ModuleManifest,
-    SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, StockQuote,
-    StockQuoteService, module_access_for_context,
+use dynamo_contracts::{
+    DeploymentCommandSettings, GuildCommandSettings, GuildModuleSettings, StockQuoteService,
 };
+use dynamo_domain_stock::StockQuote;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
+};
+use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
 use poise::serenity_prelude::{
     ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
     CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, EditMessage,
@@ -80,7 +83,7 @@ fn stock_sessions() -> &'static RwLock<HashMap<u64, Arc<Mutex<StockSession>>>> {
 
 pub struct StockModule;
 
-impl Module for StockModule {
+impl Module<AppState, Error> for StockModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -92,7 +95,7 @@ impl Module for StockModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![stock(), etf()]
     }
 
@@ -1046,7 +1049,7 @@ mod tests {
     use super::{
         current_market_data, format_money, normalize_symbol, normalize_symbols, total_updates,
     };
-    use dynamo_core::StockQuote;
+    use dynamo_domain_stock::StockQuote;
 
     #[test]
     fn normalizes_symbols_to_uppercase() {

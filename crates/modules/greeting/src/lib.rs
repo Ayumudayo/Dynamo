@@ -1,8 +1,9 @@
-use dynamo_core::{
-    AppState, Context, DiscordCommand, Error, GatewayIntents, InviteMemberRecord, Module,
-    ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
-    SettingsSection, module_access_for_app, module_access_for_context,
+use dynamo_domain_invite::InviteMemberRecord;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Context, Error, module_access_for_app, module_access_for_context};
 use poise::serenity_prelude::{
     ChannelId, CreateEmbed, CreateEmbedFooter, CreateMessage, GuildId, Member, Mentionable, User,
     UserId,
@@ -14,7 +15,7 @@ const VANITY_MEMBER_ID: &str = "VANITY";
 
 pub struct GreetingModule;
 
-impl Module for GreetingModule {
+impl Module<AppState, Error> for GreetingModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -26,7 +27,7 @@ impl Module for GreetingModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![greeting()]
     }
 

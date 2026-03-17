@@ -5,10 +5,11 @@ use std::{
 
 use chrono::{DateTime, Datelike, NaiveDateTime, TimeZone, Utc};
 use chrono_tz::Asia::{Seoul, Tokyo};
-use dynamo_core::{
-    Context, DiscordCommand, Error, GatewayIntents, Module, ModuleCategory, ModuleManifest,
-    SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection, module_access_for_context,
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
 use poise::serenity_prelude::{
     CreateActionRow, CreateButton, CreateEmbed, CreateEmbedFooter, Timestamp,
 };
@@ -34,7 +35,7 @@ const ERROR_EMBED_COLOR: u32 = 0xD61A3C;
 
 pub struct GameInfoModule;
 
-impl Module for GameInfoModule {
+impl Module<AppState, Error> for GameInfoModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -46,7 +47,7 @@ impl Module for GameInfoModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![wtinv(), maint(), pll()]
     }
 

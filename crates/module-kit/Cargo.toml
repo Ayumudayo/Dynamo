@@ -1,0 +1,11 @@
+[package]
+name = "dynamo-module-kit"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+poise.workspace = true
+serde.workspace = true

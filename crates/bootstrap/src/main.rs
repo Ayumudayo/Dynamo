@@ -1,5 +1,5 @@
 use anyhow::Result;
-use dynamo_core::{StartupPhase, StartupReport, StartupStatus, format_preview_list};
+use dynamo_observability::{StartupPhase, StartupReport, StartupStatus, format_preview_list};
 use dynamo_persistence_mongo::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
 
 #[tokio::main]

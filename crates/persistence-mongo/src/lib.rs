@@ -1,16 +1,25 @@
 use std::{collections::BTreeMap, env};
 
 use async_trait::async_trait;
-use dynamo_core::{
-    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
-    DashboardAuditLogQuery, DashboardAuditLogRepository, DashboardAuditScope,
-    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
-    DeploymentSettingsRepository, Error, GiveawayRecord, GiveawayStatus, GiveawaysRepository,
+use dynamo_contracts::{
+    DashboardAuditLogRepository, DeploymentCommandSettings, DeploymentModuleSettings,
+    DeploymentSettings, DeploymentSettingsRepository, Error, GiveawaysRepository,
     GuildCommandSettings, GuildModuleSettings, GuildSettings, GuildSettingsRepository,
-    InviteCounters, InviteLeaderboardEntry, InviteMemberRecord, InviteRepository,
-    MemberStatsRecord, MemberStatsRepository, ProviderStateRepository, SuggestionRecord,
-    SuggestionStats, SuggestionStatus, SuggestionStatusUpdate, SuggestionsRepository,
-    WarningLogRecord, WarningLogRepository,
+    InviteRepository, MemberStatsRepository, ProviderStateRepository, SuggestionsRepository,
+    WarningLogRepository,
+};
+use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
+use dynamo_domain_invite::{InviteCounters, InviteLeaderboardEntry, InviteMemberRecord};
+use dynamo_domain_moderation::WarningLogRecord;
+use dynamo_domain_stats::{
+    CommandUsageStats, MemberStatsRecord, MessageContextUsageStats, VoiceStatsRecord,
+};
+use dynamo_domain_suggestion::{
+    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
+};
+use dynamo_ops::{
+    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
+    DashboardAuditLogQuery, DashboardAuditScope,
 };
 use futures_util::TryStreamExt;
 use mongodb::{
@@ -392,9 +401,9 @@ struct MemberStatsDocument {
     guild_id: String,
     member_id: String,
     messages: u64,
-    voice: dynamo_core::VoiceStatsRecord,
-    commands: dynamo_core::CommandUsageStats,
-    contexts: dynamo_core::MessageContextUsageStats,
+    voice: VoiceStatsRecord,
+    commands: CommandUsageStats,
+    contexts: MessageContextUsageStats,
     xp: u64,
     level: u32,
     created_at: BsonDateTime,
@@ -1169,9 +1178,10 @@ impl DashboardAuditLogRepository for MongoPersistence {
 mod tests {
     use super::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
     use crate::MongoInitializationReport;
-    use dynamo_core::{
+    use dynamo_contracts::DashboardAuditLogRepository;
+    use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
-        DashboardAuditLogQuery, DashboardAuditLogRepository, DashboardAuditScope,
+        DashboardAuditLogQuery, DashboardAuditScope,
     };
 
     #[test]

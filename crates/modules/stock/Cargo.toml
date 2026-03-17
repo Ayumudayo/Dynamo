@@ -6,7 +6,10 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-dynamo-core = { path = "../../core" }
+dynamo-contracts = { path = "../../contracts" }
+dynamo-domain-stock = { path = "../../domain-stock" }
+dynamo-module-kit = { path = "../../module-kit" }
+dynamo-runtime = { path = "../../runtime" }
 poise.workspace = true
 serde.workspace = true
 serde_json.workspace = true

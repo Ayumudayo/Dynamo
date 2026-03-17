@@ -8,7 +8,8 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 async-trait.workspace = true
-dynamo-core = { path = "../../core" }
+dynamo-contracts = { path = "../../contracts" }
+dynamo-domain-stock = { path = "../../domain-stock" }
 reqwest.workspace = true
 scraper.workspace = true
 serde.workspace = true

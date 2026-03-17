@@ -1,9 +1,10 @@
 use chrono::{Duration as ChronoDuration, Utc};
-use dynamo_core::{
-    Context, DiscordCommand, Error, GatewayIntents, Module, ModuleCategory, ModuleManifest,
-    SettingOption, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
-    WarningLogRecord, module_access_for_context,
+use dynamo_domain_moderation::WarningLogRecord;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingOption,
+    SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
 use poise::serenity_prelude::{
     CreateEmbed, CreateEmbedFooter, EditMember, Member, Permissions, Timestamp, User, UserId,
 };
@@ -14,7 +15,7 @@ const DEFAULT_TIMEOUT_HOURS: i64 = 24;
 
 pub struct ModerationModule;
 
-impl Module for ModerationModule {
+impl Module<AppState, Error> for ModerationModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -26,7 +27,7 @@ impl Module for ModerationModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![
             warn(),
             warnings(),

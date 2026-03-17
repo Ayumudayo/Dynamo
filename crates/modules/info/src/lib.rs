@@ -1,11 +1,11 @@
-use dynamo_core::{
-    Context, DiscordCommand, Error, GatewayIntents, Module, ModuleCategory, ModuleManifest,
-    SettingsSchema,
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsSchema,
 };
+use dynamo_runtime::{AppState, Context, Error};
 
 pub struct InfoModule;
 
-impl Module for InfoModule {
+impl Module<AppState, Error> for InfoModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             "info",
@@ -17,7 +17,7 @@ impl Module for InfoModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![ping(), about()]
     }
 

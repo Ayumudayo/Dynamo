@@ -8,7 +8,8 @@ use std::{
 };
 
 use async_trait::async_trait;
-use dynamo_core::{Error, ProviderStateRepository, StockQuote, StockQuoteService};
+use dynamo_contracts::{Error, ProviderStateRepository, StockQuoteService};
+use dynamo_domain_stock::StockQuote;
 use reqwest::{
     Client, Response,
     header::{
@@ -1008,7 +1009,7 @@ mod tests {
         PROVIDER_ID, PersistedYahooSession, TradingPeriod, YahooFinanceClient,
         build_consent_form_body, decode_html_entities, derive_chart_metrics,
     };
-    use dynamo_core::StockQuoteService;
+    use dynamo_contracts::StockQuoteService;
     use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
     use std::collections::BTreeMap;
     use std::sync::Arc;

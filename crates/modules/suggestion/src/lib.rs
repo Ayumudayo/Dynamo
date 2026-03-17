@@ -1,10 +1,13 @@
 use chrono::Utc;
-use dynamo_core::{
-    AppState, Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module,
-    ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
-    SettingsSection, SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
-    module_access_for_context,
+use dynamo_contracts::GuildModuleSettings;
+use dynamo_domain_suggestion::{
+    SuggestionRecord, SuggestionStats, SuggestionStatus, SuggestionStatusUpdate,
 };
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
+};
+use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
 use poise::serenity_prelude::{
     ActionRowComponent, ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow,
     CreateButton, CreateEmbed, CreateEmbedFooter, CreateInputText, CreateInteractionResponse,
@@ -31,7 +34,7 @@ const REASON_INPUT_ID: &str = "reason";
 
 pub struct SuggestionModule;
 
-impl Module for SuggestionModule {
+impl Module<AppState, Error> for SuggestionModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -43,7 +46,7 @@ impl Module for SuggestionModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![suggest()]
     }
 
@@ -413,7 +416,7 @@ async fn handle_modal_interaction(
 async fn transition_suggestion(
     ctx: &poise::serenity_prelude::Context,
     data: &AppState,
-    repo: std::sync::Arc<dyn dynamo_core::SuggestionsRepository>,
+    repo: std::sync::Arc<dyn dynamo_contracts::SuggestionsRepository>,
     mut record: SuggestionRecord,
     source_message: &Message,
     moderator: &poise::serenity_prelude::Member,
@@ -502,7 +505,7 @@ async fn transition_suggestion(
 
 async fn delete_suggestion(
     ctx: &poise::serenity_prelude::Context,
-    repo: std::sync::Arc<dyn dynamo_core::SuggestionsRepository>,
+    repo: std::sync::Arc<dyn dynamo_contracts::SuggestionsRepository>,
     mut record: SuggestionRecord,
     source_message: &Message,
     moderator: &poise::serenity_prelude::Member,
@@ -731,7 +734,7 @@ fn parse_snowflake_vec_value(value: Option<serde_json::Value>) -> Result<Vec<u64
 #[cfg(test)]
 mod tests {
     use super::{SuggestionSettings, vote_message};
-    use dynamo_core::SuggestionStats;
+    use dynamo_domain_suggestion::SuggestionStats;
 
     #[test]
     fn suggestion_settings_accepts_string_ids() {

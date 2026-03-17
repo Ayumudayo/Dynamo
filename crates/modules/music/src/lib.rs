@@ -1,7 +1,11 @@
-use dynamo_core::{
-    Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module, ModuleCategory,
-    ModuleManifest, MusicBackendConfig, MusicBackendKind, MusicQueueSnapshot, SettingsField,
-    SettingsFieldKind, SettingsSchema, SettingsSection, module_access_for_context,
+use dynamo_contracts::GuildModuleSettings;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
+};
+use dynamo_runtime::{
+    AppState, Context, Error, MusicBackendConfig, MusicBackendKind, MusicQueueSnapshot,
+    module_access_for_context,
 };
 use poise::serenity_prelude::{ChannelType, CreateEmbed};
 use serde::{Deserialize, Serialize};
@@ -12,7 +16,7 @@ const DAVE_LIMITATION_NOTE: &str = "Discord now requires DAVE/E2EE for non-stage
 
 pub struct MusicModule;
 
-impl Module for MusicModule {
+impl Module<AppState, Error> for MusicModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -24,7 +28,7 @@ impl Module for MusicModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![music()]
     }
 
@@ -43,15 +47,15 @@ impl Module for MusicModule {
                             required: false,
                             kind: SettingsFieldKind::Select {
                                 options: vec![
-                                    dynamo_core::SettingOption {
+                                    dynamo_module_kit::SettingOption {
                                         label: "YouTube",
                                         value: "youtube",
                                     },
-                                    dynamo_core::SettingOption {
+                                    dynamo_module_kit::SettingOption {
                                         label: "YouTube Music",
                                         value: "youtube_music",
                                     },
-                                    dynamo_core::SettingOption {
+                                    dynamo_module_kit::SettingOption {
                                         label: "SoundCloud",
                                         value: "soundcloud",
                                     },

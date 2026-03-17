@@ -8,9 +8,10 @@ use std::{
 
 use async_trait::async_trait;
 use chrono::{DateTime, TimeZone, Utc};
-use dynamo_core::{
-    Error, ExchangeRateCacheStatus, ExchangeRateQuote, ExchangeRateRefreshResult,
-    ExchangeRateService, ExchangeRateSourceKind, ProviderStateRepository,
+use dynamo_contracts::{Error, ExchangeRateService, ProviderStateRepository};
+use dynamo_domain_currency::{
+    ExchangeRateCacheStatus, ExchangeRateQuote, ExchangeRateRefreshResult, ExchangeRateSourceKind,
+    cached_exchange_currencies,
 };
 use reqwest::{Client, header::ACCEPT};
 use scraper::{Html, Selector};
@@ -148,7 +149,7 @@ impl ExchangeRateService for GoogleFinanceExchangeService {
         };
         next_entries.insert("USD".to_string(), usd_now);
 
-        for currency in dynamo_core::cached_exchange_currencies()
+        for currency in cached_exchange_currencies()
             .iter()
             .copied()
             .filter(|value| *value != "USD")
@@ -185,7 +186,7 @@ impl ExchangeRateService for GoogleFinanceExchangeService {
         }
 
         Ok(ExchangeRateRefreshResult {
-            target_currency_count: dynamo_core::cached_exchange_currencies().len(),
+            target_currency_count: cached_exchange_currencies().len(),
             refreshed_currency_count: refreshed,
             failed_currency_count: failed,
             last_refresh_at: if refreshed > 0 {
@@ -200,7 +201,7 @@ impl ExchangeRateService for GoogleFinanceExchangeService {
         self.ensure_loaded_from_repo().await?;
         let cache = self.cache.read().await;
         Ok(ExchangeRateCacheStatus {
-            target_currency_count: dynamo_core::cached_exchange_currencies().len(),
+            target_currency_count: cached_exchange_currencies().len(),
             cached_currency_count: cache.entries.len(),
             uses_persisted_cache: self.session_repo.is_some(),
             last_refresh_at: cache.last_refresh_at,
@@ -208,7 +209,7 @@ impl ExchangeRateService for GoogleFinanceExchangeService {
     }
 
     fn cache_target_count(&self) -> usize {
-        dynamo_core::cached_exchange_currencies().len()
+        cached_exchange_currencies().len()
     }
 
     fn uses_persisted_cache(&self) -> bool {
@@ -349,7 +350,7 @@ pub fn cache_refresh_interval_seconds() -> u64 {
 }
 
 pub fn supported_currencies() -> &'static [&'static str] {
-    dynamo_core::cached_exchange_currencies()
+    cached_exchange_currencies()
 }
 
 #[cfg(test)]

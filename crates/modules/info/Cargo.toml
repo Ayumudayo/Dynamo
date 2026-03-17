@@ -6,5 +6,6 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
-dynamo-core = { path = "../../core" }
+dynamo-module-kit = { path = "../../module-kit" }
+dynamo-runtime = { path = "../../runtime" }
 poise.workspace = true

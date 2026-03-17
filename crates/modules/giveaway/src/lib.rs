@@ -1,9 +1,10 @@
 use chrono::{Duration as ChronoDuration, Utc};
-use dynamo_core::{
-    AppState, Context, DiscordCommand, Error, GatewayIntents, GiveawayRecord, GiveawayStatus,
-    Module, ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
-    SettingsSection, module_access_for_app,
+use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Context, Error, module_access_for_app};
 use poise::serenity_prelude::{
     ButtonStyle, ChannelId, ComponentInteraction, CreateActionRow, CreateButton, CreateEmbed,
     CreateEmbedFooter, CreateInteractionResponse, CreateInteractionResponseMessage, CreateMessage,
@@ -21,7 +22,7 @@ const ENDED_COLOR: u32 = 0x2ECC71;
 
 pub struct GiveawayModule;
 
-impl Module for GiveawayModule {
+impl Module<AppState, Error> for GiveawayModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -33,7 +34,7 @@ impl Module for GiveawayModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![giveaway()]
     }
 

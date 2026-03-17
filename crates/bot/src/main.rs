@@ -1,12 +1,16 @@
 use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use chrono::Utc;
-use dynamo_core::{
-    AppConfig, AppState, COMMAND_SYNC_PROVIDER_ID, CommandCatalog, CommandSyncConfig,
-    CommandSyncStateStore, DeploymentSettings, DiscordConfig, Error, GatewayIntents, GuildSettings,
-    ModuleCatalog, Persistence, ServiceRegistry, StartupPhase, StartupReport, StartupStatus,
-    aggregate_intents, catalog_startup_summary, format_gateway_intents, format_preview_kv_list,
-    format_preview_list, scope_startup_summary,
+use dynamo_contracts::{DeploymentSettings, GuildSettings};
+use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
+use dynamo_observability::{
+    StartupPhase, StartupReport, StartupStatus, catalog_startup_summary, format_gateway_intents,
+    format_preview_kv_list, format_preview_list, scope_startup_summary,
+};
+use dynamo_ops::{COMMAND_SYNC_PROVIDER_ID, CommandSyncStateStore};
+use dynamo_runtime::{
+    AppConfig, AppState, CommandSyncConfig, DiscordConfig, Error, Persistence, ServiceRegistry,
+    aggregate_intents, command_access_for_context,
 };
 use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use tokio::sync::Mutex;
@@ -117,7 +121,7 @@ fn init_tracing() {
         .with_writer(std::io::stdout)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dynamo_bot=info,dynamo_core=info,poise=info".into()),
+                .unwrap_or_else(|_| "dynamo_bot=info,dynamo_runtime=info,poise=info".into()),
         )
         .try_init();
 }
@@ -563,7 +567,7 @@ fn command_check(
     ctx: poise::Context<'_, AppState, Error>,
 ) -> poise::BoxFuture<'_, Result<bool, Error>> {
     Box::pin(async move {
-        let access = dynamo_core::command_access_for_context(ctx).await?;
+        let access = command_access_for_context(ctx).await?;
         if access.allowed() {
             Ok(true)
         } else {

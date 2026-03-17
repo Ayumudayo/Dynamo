@@ -7,7 +7,9 @@ authors.workspace = true
 
 [dependencies]
 anyhow.workspace = true
-dynamo-core = { path = "../core" }
+dynamo-contracts = { path = "../contracts" }
+dynamo-module-kit = { path = "../module-kit" }
+dynamo-runtime = { path = "../runtime" }
 dynamo-module-currency = { path = "../modules/currency" }
 dynamo-module-gameinfo = { path = "../modules/gameinfo" }
 dynamo-module-giveaway = { path = "../modules/giveaway" }

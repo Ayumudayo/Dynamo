@@ -1,13 +1,17 @@
 use std::sync::Arc;
 
-use dynamo_core::{
-    AppState, CommandCatalog, DashboardAuditLogRepository, DeploymentSettings,
-    DeploymentSettingsRepository, DiscordCommand, Error, ExchangeRateService, GiveawaysRepository,
-    GuildSettings, GuildSettingsRepository, InviteRepository, MemberStatsRepository, ModuleCatalog,
-    ModuleRegistry, OptionalModulesConfig, Persistence, ProviderStateRepository, ServiceRegistry,
-    StockQuoteService, SuggestionsRepository, WarningLogRepository, resolve_command_state,
+use dynamo_contracts::{
+    DashboardAuditLogRepository, DeploymentSettings, DeploymentSettingsRepository,
+    ExchangeRateService, GiveawaysRepository, GuildSettings, GuildSettingsRepository,
+    InviteRepository, MemberStatsRepository, ProviderStateRepository, StockQuoteService,
+    SuggestionsRepository, WarningLogRepository,
 };
+use dynamo_module_kit::{CommandCatalog, DiscordCommand, Module, ModuleCatalog};
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
+use dynamo_runtime::{
+    AppState, Error, ModuleRegistry, OptionalModulesConfig, Persistence, ServiceRegistry,
+    resolve_command_state,
+};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
 use tracing::info;
 
@@ -17,7 +21,7 @@ pub fn module_registry() -> ModuleRegistry {
 }
 
 pub fn module_registry_with_optional(_optional_modules: &OptionalModulesConfig) -> ModuleRegistry {
-    let modules: Vec<Box<dyn dynamo_core::Module>> = vec![
+    let modules: Vec<Box<dyn Module<AppState, Error>>> = vec![
         Box::new(dynamo_module_currency::CurrencyModule),
         Box::new(dynamo_module_giveaway::GiveawayModule),
         Box::new(dynamo_module_info::InfoModule),
@@ -184,12 +188,12 @@ pub async fn handle_framework_event(
 }
 
 fn filter_commands_for_scope(
-    commands: Vec<DiscordCommand>,
+    commands: Vec<DiscordCommand<AppState, Error>>,
     module_catalog: &ModuleCatalog,
     command_catalog: &CommandCatalog,
     deployment: &DeploymentSettings,
     guild: Option<&GuildSettings>,
-) -> Vec<DiscordCommand> {
+) -> Vec<DiscordCommand<AppState, Error>> {
     commands
         .into_iter()
         .filter_map(|command| {
@@ -206,13 +210,13 @@ fn filter_commands_for_scope(
 }
 
 fn filter_command_recursive(
-    mut command: DiscordCommand,
+    mut command: DiscordCommand<AppState, Error>,
     path: &mut Vec<String>,
     module_catalog: &ModuleCatalog,
     command_catalog: &CommandCatalog,
     deployment: &DeploymentSettings,
     guild: Option<&GuildSettings>,
-) -> Option<DiscordCommand> {
+) -> Option<DiscordCommand<AppState, Error>> {
     path.push(command.name.clone());
 
     if command.subcommands.is_empty() {
@@ -255,7 +259,7 @@ fn filter_command_recursive(
 
 #[cfg(test)]
 mod tests {
-    use dynamo_core::OptionalModulesConfig;
+    use dynamo_runtime::OptionalModulesConfig;
 
     use super::{module_registry, module_registry_with_optional};
 

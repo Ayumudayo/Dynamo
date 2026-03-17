@@ -1,8 +1,9 @@
-use dynamo_core::{
-    AppState, Context, DiscordCommand, Error, GatewayIntents, GuildModuleSettings, Module,
-    ModuleCategory, ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema,
-    SettingsSection, module_access_for_context,
+use dynamo_contracts::GuildModuleSettings;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Context, Error, module_access_for_context};
 use poise::serenity_prelude::{
     ButtonStyle, Channel, ChannelId, ChannelType, ComponentInteraction, CreateActionRow,
     CreateAttachment, CreateButton, CreateChannel, CreateEmbed, CreateEmbedFooter,
@@ -27,7 +28,7 @@ const CLOSE_EMBED_COLOR: u32 = 0x068ADD;
 
 pub struct TicketModule;
 
-impl Module for TicketModule {
+impl Module<AppState, Error> for TicketModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -39,7 +40,7 @@ impl Module for TicketModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         vec![ticket()]
     }
 

@@ -7,7 +7,10 @@ authors.workspace = true
 
 [dependencies]
 chrono.workspace = true
-dynamo-core = { path = "../../core" }
+dynamo-contracts = { path = "../../contracts" }
+dynamo-domain-suggestion = { path = "../../domain-suggestion" }
+dynamo-module-kit = { path = "../../module-kit" }
+dynamo-runtime = { path = "../../runtime" }
 poise.workspace = true
 serde.workspace = true
 serde_json.workspace = true

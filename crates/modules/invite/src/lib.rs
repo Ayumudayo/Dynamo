@@ -4,11 +4,12 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
-use dynamo_core::{
-    AppState, DiscordCommand, Error, GatewayIntents, InviteMemberRecord, Module, ModuleCategory,
-    ModuleManifest, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
-    module_access_for_app,
+use dynamo_domain_invite::InviteMemberRecord;
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
+    SettingsFieldKind, SettingsSchema, SettingsSection,
 };
+use dynamo_runtime::{AppState, Error, module_access_for_app};
 use poise::serenity_prelude::{
     GuildId, InviteCreateEvent, InviteDeleteEvent, RichInvite, RoleId, User, UserId,
 };
@@ -32,7 +33,7 @@ fn invite_cache() -> &'static RwLock<HashMap<u64, HashMap<String, CachedInvite>>
 
 pub struct InviteModule;
 
-impl Module for InviteModule {
+impl Module<AppState, Error> for InviteModule {
     fn manifest(&self) -> ModuleManifest {
         ModuleManifest::new(
             MODULE_ID,
@@ -44,7 +45,7 @@ impl Module for InviteModule {
         )
     }
 
-    fn commands(&self) -> Vec<DiscordCommand> {
+    fn commands(&self) -> Vec<DiscordCommand<AppState, Error>> {
         Vec::new()
     }
 

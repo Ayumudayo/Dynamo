@@ -13,14 +13,25 @@ use axum::{
     routing::{get, patch, post},
 };
 use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
-use dynamo_core::{
-    COMMAND_SYNC_PROVIDER_ID, CommandCatalog, CommandCatalogEntry, CommandSyncResult,
-    CommandSyncStateStore, DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
-    DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditScope, DeploymentModuleSettings,
-    DeploymentSettings, GuildModuleSettings, ModuleCatalog, ModuleCatalogEntry, Persistence,
-    ResolvedCommandState, ResolvedModuleState, SettingsField, SettingsFieldKind, SettingsSchema,
-    StartupPhase, StartupReport, StartupStatus, catalog_startup_summary, format_preview_kv_list,
-    format_preview_list, resolve_command_states, resolve_module_states,
+use dynamo_contracts::{
+    DeploymentModuleSettings, DeploymentSettings, GuildModuleSettings, GuildSettings,
+};
+use dynamo_module_kit::{
+    CommandCatalog, CommandCatalogEntry, ModuleCatalog, ModuleCatalogEntry, SettingsField,
+    SettingsFieldKind, SettingsSchema,
+};
+use dynamo_observability::{
+    CatalogStartupSummary, StartupPhase, StartupReport, StartupStatus, catalog_startup_summary,
+    format_preview_kv_list, format_preview_list,
+};
+use dynamo_ops::{
+    COMMAND_SYNC_PROVIDER_ID, CommandSyncResult, CommandSyncScopeState, CommandSyncStateStore,
+    DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry, DashboardAuditLogPage,
+    DashboardAuditLogQuery, DashboardAuditScope,
+};
+use dynamo_runtime::{
+    Error, Persistence, ResolvedCommandState, ResolvedModuleState, resolve_command_states,
+    resolve_module_states,
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
@@ -291,7 +302,7 @@ fn validate_dashboard_persistence(
 
 fn build_dashboard_startup_report(
     state: &DashboardState,
-    catalog_summary: &dynamo_core::CatalogStartupSummary,
+    catalog_summary: &CatalogStartupSummary,
     address: SocketAddr,
     health_endpoint: &str,
 ) -> StartupReport {
@@ -571,7 +582,7 @@ async fn load_command_sync_store(persistence: &Persistence) -> CommandSyncStateS
 async fn save_command_sync_store(
     persistence: &Persistence,
     store: &CommandSyncStateStore,
-) -> Result<(), dynamo_core::Error> {
+) -> Result<(), Error> {
     persistence
         .save_provider_state(COMMAND_SYNC_PROVIDER_ID, serde_json::to_value(store)?)
         .await
@@ -580,7 +591,7 @@ async fn save_command_sync_store(
 fn build_command_sync_panel(
     scope: SyncScopeKind,
     current_fingerprint: &str,
-    scope_state: Option<&dynamo_core::CommandSyncScopeState>,
+    scope_state: Option<&CommandSyncScopeState>,
     config: &DashboardConfig,
 ) -> CommandSyncPanel {
     let scope_state = scope_state.cloned().unwrap_or_default();
@@ -653,7 +664,7 @@ fn build_unsupported_sync_panel(message: &str) -> CommandSyncPanel {
     }
 }
 
-fn format_sync_status_text(scope_state: &dynamo_core::CommandSyncScopeState) -> Option<String> {
+fn format_sync_status_text(scope_state: &CommandSyncScopeState) -> Option<String> {
     let mut parts = Vec::new();
     if let Some(synced_at) = scope_state.last_synced_at {
         parts.push(format!(
@@ -2275,7 +2286,7 @@ fn render_deployment_command_modals(
 fn render_guild_command_modals(
     guild_id: u64,
     command_catalog: &CommandCatalog,
-    settings: &dynamo_core::GuildSettings,
+    settings: &GuildSettings,
     resolved_states: &[ResolvedCommandState],
 ) -> String {
     command_catalog
@@ -2329,7 +2340,7 @@ fn render_module_toggle(
     scope: &str,
     module_id: &str,
     _deployment: &DeploymentSettings,
-    guild: Option<&dynamo_core::GuildSettings>,
+    guild: Option<&GuildSettings>,
     resolved: &ResolvedModuleState,
 ) -> String {
     match scope {
@@ -2361,7 +2372,7 @@ fn render_command_toggle(
     scope: &str,
     command_id: &str,
     _deployment: &DeploymentSettings,
-    guild: Option<&dynamo_core::GuildSettings>,
+    guild: Option<&GuildSettings>,
     resolved: &ResolvedCommandState,
 ) -> String {
     match scope {
@@ -2574,7 +2585,7 @@ fn render_module_summary_cards(
     scope: &str,
     catalog: &ModuleCatalog,
     deployment: &DeploymentSettings,
-    guild: Option<&dynamo_core::GuildSettings>,
+    guild: Option<&GuildSettings>,
     resolved_states: &[ResolvedModuleState],
 ) -> String {
     catalog
@@ -2601,7 +2612,7 @@ fn render_command_summary_cards(
     scope: &str,
     catalog: &CommandCatalog,
     deployment: &DeploymentSettings,
-    guild: Option<&dynamo_core::GuildSettings>,
+    guild: Option<&GuildSettings>,
     resolved_states: &[ResolvedCommandState],
 ) -> String {
     catalog
@@ -3972,9 +3983,10 @@ mod tests {
         render_audit_logs_section, render_field, render_module_runtime_notice,
         sanitize_redirect_target, user_can_manage_guild,
     };
-    use dynamo_core::{
+    use dynamo_module_kit::{SettingsField, SettingsFieldKind};
+    use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
-        DashboardAuditLogPage, DashboardAuditScope, SettingsField, SettingsFieldKind,
+        DashboardAuditLogPage, DashboardAuditScope,
     };
 
     #[test]

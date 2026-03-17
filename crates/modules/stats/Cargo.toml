@@ -8,7 +8,10 @@ authors.workspace = true
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
-dynamo-core = { path = "../../core" }
+dynamo-contracts = { path = "../../contracts" }
+dynamo-domain-stats = { path = "../../domain-stats" }
+dynamo-module-kit = { path = "../../module-kit" }
+dynamo-runtime = { path = "../../runtime" }
 poise.workspace = true
 serde.workspace = true
 serde_json.workspace = true

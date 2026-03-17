@@ -9,9 +9,13 @@ authors.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 dynamo-app = { path = "../app" }
-dynamo-core = { path = "../core" }
+dynamo-contracts = { path = "../contracts" }
 dynamo-module-giveaway = { path = "../modules/giveaway" }
+dynamo-module-kit = { path = "../module-kit" }
+dynamo-observability = { path = "../observability" }
+dynamo-ops = { path = "../ops" }
 dynamo-provider-google-finance = { path = "../providers/google-finance" }
+dynamo-runtime = { path = "../runtime" }
 dotenvy.workspace = true
 poise.workspace = true
 serde_json.workspace = true
