@@ -71,6 +71,8 @@ Common optional variables:
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG`
 
+The checked-in [`.env.example`](./.env.example) uses `DASHBOARD_PORT=4000` and matching `DASHBOARD_BASE_URL` as a sample external dashboard port for home-server deployments. The application defaults are still `3000` unless you set them explicitly.
+
 Paused music notes:
 
 - Music remains out of the active template runtime while DAVE support is unresolved.
