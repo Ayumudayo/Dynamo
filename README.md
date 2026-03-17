@@ -2,7 +2,7 @@
 
 `Dynamo` is a slash-first Discord bot template built with `poise + serenity`, MongoDB-backed runtime settings, and a companion dashboard for deployment and guild configuration.
 
-This repository is the active Rust product line. The legacy JavaScript bot and dashboard still exist here temporarily as migration reference material, but the planned repo split is now the inverse of the earlier approach: the current repository stays as the Rust home, and the legacy JS runtime is exported into a separate read-only archive repository.
+This repository is the active Rust product line. The legacy JavaScript bot and dashboard still exist here temporarily as migration reference material, but the planned repo split is now the inverse of the earlier approach: the current repository stays as the Rust home, and the legacy JS runtime is exported into a separate read-only archive repository named `Dynamo-JS`.
 
 ## Workspace Layout
 
@@ -147,7 +147,7 @@ The launchers print the effective command scope resolved from `.env`.
 
 ## JS Archive Export
 
-Use the export scripts to stage a read-only JavaScript archive repo in `output/js-archive/`:
+Use the export scripts to stage the `Dynamo-JS` read-only JavaScript archive repo in `output/Dynamo-JS/`:
 
 ```powershell
 ./scripts/export-js-archive.ps1
@@ -157,7 +157,7 @@ Use the export scripts to stage a read-only JavaScript archive repo in `output/j
 ./scripts/export-js-archive.sh
 ```
 
-The staged archive includes the legacy JS runtime, JS dashboard, package manifests, command docs, and migration helper scripts. It is intended to become a separate archive repository once the split is finalized.
+The staged archive includes the legacy JS runtime, JS dashboard, package manifests, command docs, and migration helper scripts. It is intended to become the `Dynamo-JS` archive repository once the split is finalized.
 
 Reference documents for the cutover:
 
@@ -232,4 +232,4 @@ Use [`docs/dev-smoke-checklist.md`](./docs/dev-smoke-checklist.md) for the manua
 
 ## Current Status
 
-The Rust workspace in this repository is the primary product line. The next repo-level step is exporting the legacy JS runtime into its own archive repository, then removing those JS paths from this repository so `main` can become the clean Rust-only public template history going forward.
+The Rust workspace in this repository is the primary product line. The next repo-level step is exporting the legacy JS runtime into the `Dynamo-JS` archive repository, then removing those JS paths from this repository so `main` can become the clean Rust-only public template history going forward.

@@ -1,6 +1,6 @@
 # JS Pattern Audit For Rust Mainline Cutover
 
-This document captures the legacy JS patterns that are still worth preserving while the current repository becomes the Rust mainline and the JS runtime is split into its own archive repository.
+This document captures the legacy JS patterns that are still worth preserving while the current repository becomes the Rust mainline and the JS runtime is split into the `Dynamo-JS` archive repository.
 
 ## Runtime and Boot Flow
 

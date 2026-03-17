@@ -1,6 +1,6 @@
-# Dynamo JS Archive
+# Dynamo-JS
 
-This repository is a read-only archive of the legacy JavaScript implementation of Dynamo, including the old Discord.js runtime and EJS/Express dashboard.
+`Dynamo-JS` is the read-only archive of the legacy JavaScript implementation of Dynamo, including the old Discord.js runtime and EJS/Express dashboard.
 
 It is preserved for reference, migration history, and behavior comparison only. New development is expected to continue in the active Rust mainline repository.
 

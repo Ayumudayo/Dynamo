@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $TemplateRoot = Join-Path $RepoRoot "templates\\js-archive"
 if (-not $OutputDir) {
-  $OutputDir = Join-Path $RepoRoot "output\\js-archive"
+  $OutputDir = Join-Path $RepoRoot "output\\Dynamo-JS"
 }
 
 $IncludePaths = @(
@@ -47,4 +47,4 @@ foreach ($Path in $IncludePaths) {
 Copy-Item (Join-Path $TemplateRoot "README.md") (Join-Path $OutputDir "README.md") -Force
 Copy-Item (Join-Path $TemplateRoot ".gitignore") (Join-Path $OutputDir ".gitignore") -Force
 
-Write-Host "Exported JS archive staging repo to $OutputDir"
+Write-Host "Exported Dynamo-JS archive staging repo to $OutputDir"

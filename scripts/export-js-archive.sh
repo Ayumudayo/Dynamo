@@ -3,7 +3,7 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEMPLATE_DIR="$ROOT_DIR/templates/js-archive"
-OUTPUT_DIR="${1:-$ROOT_DIR/output/js-archive}"
+OUTPUT_DIR="${1:-$ROOT_DIR/output/Dynamo-JS}"
 
 INCLUDE_PATHS=(
   "bot.js"
@@ -40,4 +40,4 @@ done
 cp "$TEMPLATE_DIR/README.md" "$OUTPUT_DIR/README.md"
 cp "$TEMPLATE_DIR/.gitignore" "$OUTPUT_DIR/.gitignore"
 
-echo "Exported JS archive staging repo to $OUTPUT_DIR"
+echo "Exported Dynamo-JS archive staging repo to $OUTPUT_DIR"

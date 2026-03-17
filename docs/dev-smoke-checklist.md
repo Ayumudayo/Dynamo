@@ -131,7 +131,7 @@ Run this checklist after major module, persistence, or dashboard changes. This c
 ## Cutover Prep
 
 1. Run `./scripts/export-js-archive.ps1` or `./scripts/export-js-archive.sh`.
-2. Confirm `output/js-archive` contains:
+2. Confirm `output/Dynamo-JS` contains:
    - `src/`
    - `dashboard/`
    - `bot.js`

@@ -1,6 +1,6 @@
 # Current Repo Rust Cutover Checklist
 
-Use this checklist before splitting the legacy JS runtime into a separate archive repository and cleaning this repository into the Rust-only mainline.
+Use this checklist before splitting the legacy JS runtime into the `Dynamo-JS` archive repository and cleaning this repository into the Rust-only mainline.
 
 ## 1. Product Decisions Locked
 
@@ -12,7 +12,7 @@ Use this checklist before splitting the legacy JS runtime into a separate archiv
 
 ## 2. JS Archive Repository Contents
 
-The staged JS archive should include:
+The staged `Dynamo-JS` archive should include:
 
 - `src/`
 - `dashboard/`
@@ -25,7 +25,7 @@ The staged JS archive should include:
 - `jsconfig.json`
 - lint/format config files needed to inspect the old code
 
-The staged JS archive should not be treated as active development output. Its root README should say the archive is read-only and that active development continues in the Rust mainline repository.
+The staged `Dynamo-JS` archive should not be treated as active development output. Its root README should say the archive is read-only and that active development continues in the Rust mainline repository.
 
 ## 3. Current Repo Cleanup After Archive Split
 
@@ -46,10 +46,10 @@ After the archive repo is published:
 - dashboard Playwright smoke listing
 - one real OAuth smoke in a dev guild
 - launcher smoke with bootstrap + dashboard + bot
-- JS archive export smoke with both PowerShell and shell scripts
+- `Dynamo-JS` export smoke with both PowerShell and shell scripts
 
 ## 5. Final Repo Messaging
 
 - Current repo README must describe this repository as the Rust mainline.
-- Current repo README must point to the JS archive export flow until the split is complete.
-- The eventual JS archive repo README must point back to this repository as the active codebase.
+- Current repo README must point to the `Dynamo-JS` export flow until the split is complete.
+- The eventual `Dynamo-JS` archive repo README must point back to this repository as the active codebase.
