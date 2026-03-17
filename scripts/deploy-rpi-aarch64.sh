@@ -97,6 +97,13 @@ APP_DIR="$1"
 BOOTSTRAP_MODE="$2"
 ARCHIVE_PATH="$3"
 
+for profile in "$HOME/.profile" "$HOME/.bash_profile" "$HOME/.bashrc"; do
+  if [[ -f "$profile" ]]; then
+    # shellcheck disable=SC1090
+    source "$profile"
+  fi
+done
+
 mkdir -p "$APP_DIR" "$APP_DIR/scripts" "$APP_DIR/target/release" "$APP_DIR/logs"
 tar -C "$APP_DIR" -xf "$ARCHIVE_PATH"
 rm -f "$ARCHIVE_PATH"
@@ -120,10 +127,12 @@ elif [[ "$BOOTSTRAP_MODE" == "auto" && ! -f .bootstrap.done ]]; then
 fi
 
 if ! command -v pm2 >/dev/null 2>&1; then
+  echo "PATH=$PATH" >&2
   echo "pm2 is not installed on the target host." >&2
   exit 1
 fi
 
+echo "Using pm2 from: $(command -v pm2)"
 pm2 startOrRestart ecosystem.pm2.cjs --update-env
 pm2 save
 REMOTE
