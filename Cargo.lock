@@ -884,6 +884,7 @@ name = "dynamo-module-currency"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "dynamo-access",
  "dynamo-domain-currency",
  "dynamo-module-kit",
