@@ -20,14 +20,25 @@ function Invoke-NativeQuiet {
     [string[]]$Arguments = @()
   )
 
-  $previous = $global:PSNativeCommandUseErrorActionPreference
-  $global:PSNativeCommandUseErrorActionPreference = $false
+  $stdoutPath = Join-Path $env:TEMP ("dynamo-native-" + [guid]::NewGuid().ToString() + ".stdout.log")
+  $stderrPath = Join-Path $env:TEMP ("dynamo-native-" + [guid]::NewGuid().ToString() + ".stderr.log")
   try {
-    & $Command @Arguments *> $null
-    return $LASTEXITCODE
+    $process = Start-Process -FilePath $Command `
+      -ArgumentList $Arguments `
+      -NoNewWindow `
+      -Wait `
+      -PassThru `
+      -RedirectStandardOutput $stdoutPath `
+      -RedirectStandardError $stderrPath
+    return $process.ExitCode
   }
   finally {
-    $global:PSNativeCommandUseErrorActionPreference = $previous
+    if (Test-Path $stdoutPath) {
+      Remove-Item $stdoutPath -Force -ErrorAction SilentlyContinue
+    }
+    if (Test-Path $stderrPath) {
+      Remove-Item $stderrPath -Force -ErrorAction SilentlyContinue
+    }
   }
 }
 
