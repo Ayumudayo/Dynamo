@@ -14,17 +14,35 @@ function Require-Command {
   }
 }
 
+function Invoke-NativeQuiet {
+  param(
+    [string]$Command,
+    [string[]]$Arguments = @()
+  )
+
+  $previous = $global:PSNativeCommandUseErrorActionPreference
+  $global:PSNativeCommandUseErrorActionPreference = $false
+  try {
+    & $Command @Arguments *> $null
+    return $LASTEXITCODE
+  }
+  finally {
+    $global:PSNativeCommandUseErrorActionPreference = $previous
+  }
+}
+
 Require-Command rustup
 Require-Command cargo
 Require-Command zig
 Require-Command cargo-zigbuild
 
-& cargo-zigbuild --version *> $null
-if ($LASTEXITCODE -ne 0) {
+if ((Invoke-NativeQuiet "cargo-zigbuild" @("--version")) -ne 0) {
   throw "cargo-zigbuild is not installed. Run: cargo install cargo-zigbuild"
 }
 
-& rustup target add $TargetTriple *> $null
+if ((Invoke-NativeQuiet "rustup" @("target", "add", $TargetTriple)) -ne 0) {
+  throw "Failed to ensure Rust target $TargetTriple is installed."
+}
 
 Push-Location $RepoRoot
 try {
