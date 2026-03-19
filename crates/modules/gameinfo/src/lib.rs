@@ -365,6 +365,7 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
     let cached = cache_store.load_pllinfo().await?;
     let client = lodestone_client()?;
     let wants_translation = translate_api_key().is_some();
+    let mut debug_past_candidate = None;
 
     for page in 1..=MAX_PLL_PAGES {
         let list_url = format!("{TOPICS_LIST_URL}?page={page}");
@@ -381,7 +382,8 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
                     || !info.translated_contents.is_empty();
                 let stream_links_ready = !info.stream_links.is_empty();
                 if info.url == candidate.url
-                    && info.expire_time > now
+                    && pll_is_usable(info.start_stamp, now)
+                    && (info.expire_time > now || allow_past_pll_debug())
                     && translation_ready
                     && stream_links_ready
                 {
@@ -408,10 +410,23 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
                     translate_text_list(&client, &sections.content_items_ja).await;
             }
 
+            if !pll_is_live_or_unknown(next.start_stamp, now) {
+                if allow_past_pll_debug() && debug_past_candidate.is_none() {
+                    debug_past_candidate = Some(next);
+                }
+                continue;
+            }
+
             next.expire_time = now + PLL_CACHE_DURATION_SECONDS;
             cache_store.save_pllinfo(&next).await?;
             return Ok(Some(next));
         }
+    }
+
+    if let Some(mut next) = debug_past_candidate {
+        next.expire_time = now + PLL_CACHE_DURATION_SECONDS;
+        cache_store.save_pllinfo(&next).await?;
+        return Ok(Some(next));
     }
 
     Ok(load_pll_fallback(&cache_store, now).await?)
@@ -430,6 +445,10 @@ async fn load_pll_fallback(
     }
 
     if cached.start_stamp.is_some_and(|stamp| stamp > now) {
+        return Ok(Some(cached));
+    }
+
+    if allow_past_pll_debug() {
         return Ok(Some(cached));
     }
 
@@ -779,11 +798,18 @@ fn extract_maintenance_summary_ja(html: &str) -> Option<String> {
         .find(&body)
         .map(|matched| body[..matched.start()].trim())
         .unwrap_or_else(|| body.trim());
+    let summary = trim_maintenance_intro(summary);
     if summary.is_empty() {
         None
     } else {
-        Some(summary.to_string())
+        Some(summary)
     }
+}
+
+fn trim_maintenance_intro(summary: &str) -> String {
+    let intro =
+        Regex::new(r"^下記日時にお(?:きまして|いて)、?").expect("valid maintenance intro regex");
+    intro.replace(summary.trim(), "").trim().to_string()
 }
 
 fn parse_pll_sections(html: &str) -> PllSections {
@@ -888,6 +914,18 @@ fn translate_api_key() -> Option<String> {
         .ok()
         .map(|value| value.trim().to_string())
         .filter(|value| !value.is_empty())
+}
+
+fn allow_past_pll_debug() -> bool {
+    cfg!(debug_assertions)
+}
+
+fn pll_is_live_or_unknown(start_stamp: Option<i64>, now: i64) -> bool {
+    start_stamp.is_none_or(|stamp| stamp >= now)
+}
+
+fn pll_is_usable(start_stamp: Option<i64>, now: i64) -> bool {
+    pll_is_live_or_unknown(start_stamp, now) || allow_past_pll_debug()
 }
 
 async fn translate_optional_text(client: &Client, text: Option<&str>) -> Option<String> {
@@ -1206,7 +1244,7 @@ mod tests {
     use super::{
         MaintenanceNoticeKind, classify_maintenance_notice, extract_maintenance_summary_ja,
         extract_pll_start, format_maintenance_title, generate_pll_title,
-        parse_maintenance_schedule,
+        parse_maintenance_schedule, trim_maintenance_intro,
     };
 
     #[test]
@@ -1291,8 +1329,18 @@ mod tests {
         assert_eq!(
             extract_maintenance_summary_ja(html).as_deref(),
             Some(
-                "下記日時におきまして、パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。 メンテナンス作業中、ファイナルファンタジーXIVをご利用いただくことができません。"
+                "パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。 メンテナンス作業中、ファイナルファンタジーXIVをご利用いただくことができません。"
             )
+        );
+    }
+
+    #[test]
+    fn trims_maintenance_intro_phrase() {
+        assert_eq!(
+            trim_maintenance_intro(
+                "下記日時におきまして、パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。"
+            ),
+            "パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。"
         );
     }
 
