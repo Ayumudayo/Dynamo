@@ -261,9 +261,13 @@ async fn get_maintenance_embed() -> Result<Option<CreateEmbed>, Error> {
             .color(SUCCESS_EMBED_COLOR)
             .thumbnail(GAMEINFO_THUMBNAIL_URL)
             .timestamp(Timestamp::now())
-            .field("Start time", format!("<t:{}:F>", info.start_stamp), false)
-            .field("End time", format!("<t:{}:F>", info.end_stamp), false)
-            .field("Time remaining", format!("<t:{}:R>", info.end_stamp), false)
+            .field("시작 시각", format!("<t:{}:F>", info.start_stamp), false)
+            .field("종료 시각", format!("<t:{}:F>", info.end_stamp), false)
+            .field(
+                "종료까지 남은 시간",
+                format!("<t:{}:R>", info.end_stamp),
+                false,
+            )
             .footer(CreateEmbedFooter::new("From Lodestone News"))
     }))
 }
@@ -327,17 +331,17 @@ async fn get_pll_embed() -> Result<Option<CreateEmbed>, Error> {
             .thumbnail(GAMEINFO_THUMBNAIL_URL)
             .timestamp(Timestamp::now())
             .field(
-                "Broadcast start",
+                "방송 시작",
                 info.start_stamp
                     .map(|stamp| format!("<t:{stamp}:F>"))
-                    .unwrap_or_else(|| "Unavailable".to_string()),
+                    .unwrap_or_else(|| "확인 불가".to_string()),
                 false,
             )
             .field(
-                "Time remaining",
+                "시작까지 남은 시간",
                 info.start_stamp
                     .map(|stamp| format!("<t:{stamp}:R>"))
-                    .unwrap_or_else(|| "Unavailable".to_string()),
+                    .unwrap_or_else(|| "확인 불가".to_string()),
                 false,
             )
             .footer(CreateEmbedFooter::new("From Lodestone News"))
@@ -510,7 +514,7 @@ fn extract_pll_start(summary_html: &str) -> Result<Option<i64>, Error> {
 fn generate_pll_title(round_number: Option<&str>, start_stamp: Option<i64>) -> String {
     let round = round_number.unwrap_or("XX");
     let Some(start_stamp) = start_stamp else {
-        return format!("Round {round} Producer Letter Live date to be announced");
+        return format!("제 {round}회 프로듀서 레터 라이브 X월 XX일 방송 결정!");
     };
 
     let local = Seoul
@@ -518,7 +522,7 @@ fn generate_pll_title(round_number: Option<&str>, start_stamp: Option<i64>) -> S
         .single()
         .unwrap_or_else(|| Utc::now().with_timezone(&Seoul));
     format!(
-        "Round {round} Producer Letter Live scheduled on {}/{}",
+        "제 {round}회 프로듀서 레터 라이브 {}월 {}일 방송 결정!",
         local.month(),
         local.day()
     )
@@ -550,7 +554,7 @@ fn format_maintenance_title(start_stamp: i64, end_stamp: i64) -> String {
         )
     };
 
-    format!("Global maintenance window ({range})")
+    format!("전 월드 유지보수 작업 ({range})")
 }
 
 fn parse_iso_timestamp(input: &str) -> Result<i64, Error> {
@@ -559,8 +563,8 @@ fn parse_iso_timestamp(input: &str) -> Result<i64, Error> {
 
 fn create_maintenance_error_embed() -> CreateEmbed {
     CreateEmbed::new()
-        .title("Cannot load maintenance data")
-        .description("No maintenance information is currently available.")
+        .title("점검 정보를 불러올 수 없습니다")
+        .description("현재 점검 공지가 없거나 API 업데이트가 되지 않았습니다.")
         .url("https://jp.finalfantasyxiv.com/lodestone")
         .color(ERROR_EMBED_COLOR)
         .thumbnail(GAMEINFO_THUMBNAIL_URL)
@@ -570,7 +574,7 @@ fn create_maintenance_error_embed() -> CreateEmbed {
 fn create_pll_error_embed() -> CreateEmbed {
     CreateEmbed::new()
         .title("No PLL Info")
-        .description("No producer letter schedule found.")
+        .description("PLL 관련 정보를 찾을 수 없습니다.")
         .url("https://jp.finalfantasyxiv.com/lodestone")
         .color(ERROR_EMBED_COLOR)
         .thumbnail(GAMEINFO_THUMBNAIL_URL)
@@ -700,7 +704,7 @@ mod tests {
     fn formats_same_day_maintenance_window() {
         assert_eq!(
             format_maintenance_title(1_750_104_000, 1_750_154_400),
-            "Global maintenance window (6/17)"
+            "전 월드 유지보수 작업 (6/17)"
         );
     }
 
@@ -708,7 +712,15 @@ mod tests {
     fn generates_pll_title_with_round_and_date() {
         assert_eq!(
             generate_pll_title(Some("87"), Some(1_750_417_200)),
-            "Round 87 Producer Letter Live scheduled on 6/20"
+            "제 87회 프로듀서 레터 라이브 6월 20일 방송 결정!"
+        );
+    }
+
+    #[test]
+    fn generates_pll_title_without_date() {
+        assert_eq!(
+            generate_pll_title(Some("XX"), None),
+            "제 XX회 프로듀서 레터 라이브 X월 XX일 방송 결정!"
         );
     }
 }
