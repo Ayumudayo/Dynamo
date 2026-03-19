@@ -33,6 +33,7 @@ const GAMEINFO_THUMBNAIL_URL: &str =
 const LODESTONE_BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36";
 const MAINTENANCE_LIST_URL: &str = "https://jp.finalfantasyxiv.com/lodestone/news/category/2";
 const TOPICS_LIST_URL: &str = "https://jp.finalfantasyxiv.com/lodestone/topics/";
+const GOOGLE_TRANSLATE_API_URL: &str = "https://translation.googleapis.com/language/translate/v2";
 const PLL_CACHE_DURATION_SECONDS: i64 = 12 * 60 * 60;
 const MAX_MAINTENANCE_CANDIDATES: usize = 6;
 const MAX_PLL_PAGES: usize = 3;
@@ -133,6 +134,7 @@ struct MaintInfo {
     end_stamp: i64,
     title_kr: String,
     url: String,
+    translated_description: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,6 +145,9 @@ struct PllInfo {
     start_stamp: Option<i64>,
     #[serde(alias = "expireTime")]
     expire_time: i64,
+    translated_description: Option<String>,
+    translated_contents: Vec<String>,
+    stream_links: Vec<StreamLink>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,6 +162,43 @@ enum MaintenanceNoticeKind {
 struct LodestoneLink {
     title: String,
     url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StreamLink {
+    label: String,
+    url: String,
+}
+
+#[derive(Debug, Default)]
+struct PllSections {
+    summary_ja: Option<String>,
+    content_items_ja: Vec<String>,
+    stream_links: Vec<StreamLink>,
+}
+
+#[derive(Debug, Serialize)]
+struct TranslateRequest {
+    q: Vec<String>,
+    source: &'static str,
+    target: &'static str,
+    format: &'static str,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranslateResponse {
+    data: TranslateResponseData,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranslateResponseData {
+    translations: Vec<TranslatedItem>,
+}
+
+#[derive(Debug, Deserialize)]
+struct TranslatedItem {
+    #[serde(rename = "translatedText")]
+    translated_text: String,
 }
 
 /// Show the War Thunder and World of Tanks referral panel for this guild.
@@ -214,8 +256,10 @@ async fn maint(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    let embed = get_maintenance_embed().await?;
-    let embed = embed.unwrap_or_else(create_maintenance_error_embed);
+    let embed = fetch_maintenance_info()
+        .await?
+        .map(|info| build_maintenance_embed(&info))
+        .unwrap_or_else(create_maintenance_error_embed);
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
 }
@@ -231,9 +275,19 @@ async fn pll(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    let embed = get_pll_embed().await?;
-    let embed = embed.unwrap_or_else(create_pll_error_embed);
-    ctx.send(poise::CreateReply::default().embed(embed)).await?;
+    let Some(info) = fetch_pll_info().await? else {
+        ctx.send(poise::CreateReply::default().embed(create_pll_error_embed()))
+            .await?;
+        return Ok(());
+    };
+
+    let mut reply = poise::CreateReply::default().embed(build_pll_embed(&info));
+    let buttons = build_pll_stream_buttons(&info);
+    if !buttons.is_empty() {
+        reply = reply.components(buttons);
+    }
+
+    ctx.send(reply).await?;
     Ok(())
 }
 
@@ -258,49 +312,41 @@ async fn load_settings(ctx: Context<'_>) -> Result<GameInfoSettings, Error> {
     Ok(settings)
 }
 
-async fn get_maintenance_embed() -> Result<Option<CreateEmbed>, Error> {
-    let info = fetch_maintenance_info().await?;
-    Ok(info.map(|info| {
-        CreateEmbed::new()
-            .title(info.title_kr)
-            .url(info.url)
-            .color(SUCCESS_EMBED_COLOR)
-            .thumbnail(GAMEINFO_THUMBNAIL_URL)
-            .timestamp(Timestamp::now())
-            .field("시작 시각", format!("<t:{}:F>", info.start_stamp), false)
-            .field("종료 시각", format!("<t:{}:F>", info.end_stamp), false)
-            .field(
-                "종료까지 남은 시간",
-                format!("<t:{}:R>", info.end_stamp),
-                false,
-            )
-            .footer(CreateEmbedFooter::new("From Lodestone News"))
-    }))
-}
-
 async fn fetch_maintenance_info() -> Result<Option<MaintInfo>, Error> {
     let cache_store = GameInfoCacheStore::new();
     let now = Utc::now().timestamp();
     let client = lodestone_client()?;
+    let cached = cache_store.load_maintinfo().await?;
+    let wants_translation = translate_api_key().is_some();
 
     let list_html = fetch_lodestone_html(&client, MAINTENANCE_LIST_URL).await;
     let Ok(list_html) = list_html else {
-        return Ok(cache_store
-            .load_maintinfo()
-            .await?
-            .filter(|info| info.end_stamp > now));
+        return Ok(cached.filter(|info| info.end_stamp > now));
     };
 
     let candidates = parse_maintenance_candidates(&list_html);
     for candidate in candidates.into_iter().take(MAX_MAINTENANCE_CANDIDATES) {
+        if let Some(info) = cached.as_ref() {
+            let translation_ready = !wants_translation || info.translated_description.is_some();
+            if info.id == candidate.url && info.end_stamp > now && translation_ready {
+                return Ok(Some(info.clone()));
+            }
+        }
+
         let detail_html = fetch_lodestone_html(&client, &candidate.url).await;
         let Ok(detail_html) = detail_html else {
             continue;
         };
 
-        let Some(next) = parse_maintenance_detail(&candidate.url, &detail_html)? else {
+        let Some(mut next) = parse_maintenance_detail(&candidate.url, &detail_html)? else {
             continue;
         };
+
+        if wants_translation {
+            let summary_ja = extract_maintenance_summary_ja(&detail_html);
+            next.translated_description =
+                translate_optional_text(&client, summary_ja.as_deref()).await;
+        }
 
         if next.end_stamp <= now {
             continue;
@@ -310,49 +356,15 @@ async fn fetch_maintenance_info() -> Result<Option<MaintInfo>, Error> {
         return Ok(Some(next));
     }
 
-    Ok(cache_store
-        .load_maintinfo()
-        .await?
-        .filter(|info| info.end_stamp > now))
-}
-
-async fn get_pll_embed() -> Result<Option<CreateEmbed>, Error> {
-    let info = fetch_pll_info().await?;
-    Ok(info.map(|info| {
-        CreateEmbed::new()
-            .title(info.fixed_title)
-            .url(info.url)
-            .color(SUCCESS_EMBED_COLOR)
-            .thumbnail(GAMEINFO_THUMBNAIL_URL)
-            .timestamp(Timestamp::now())
-            .field(
-                "방송 시작",
-                info.start_stamp
-                    .map(|stamp| format!("<t:{stamp}:F>"))
-                    .unwrap_or_else(|| "확인 불가".to_string()),
-                false,
-            )
-            .field(
-                "시작까지 남은 시간",
-                info.start_stamp
-                    .map(|stamp| format!("<t:{stamp}:R>"))
-                    .unwrap_or_else(|| "확인 불가".to_string()),
-                false,
-            )
-            .footer(CreateEmbedFooter::new("From Lodestone News"))
-    }))
+    Ok(cached.filter(|info| info.end_stamp > now))
 }
 
 async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
     let cache_store = GameInfoCacheStore::new();
     let now = Utc::now().timestamp();
-    if let Some(cached) = cache_store.load_pllinfo().await? {
-        if cached.expire_time > now {
-            return Ok(Some(cached));
-        }
-    }
-
+    let cached = cache_store.load_pllinfo().await?;
     let client = lodestone_client()?;
+    let wants_translation = translate_api_key().is_some();
 
     for page in 1..=MAX_PLL_PAGES {
         let list_url = format!("{TOPICS_LIST_URL}?page={page}");
@@ -363,6 +375,20 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
 
         let candidates = parse_pll_candidates(&list_html);
         for candidate in candidates {
+            if let Some(info) = cached.as_ref() {
+                let translation_ready = !wants_translation
+                    || info.translated_description.is_some()
+                    || !info.translated_contents.is_empty();
+                let stream_links_ready = !info.stream_links.is_empty();
+                if info.url == candidate.url
+                    && info.expire_time > now
+                    && translation_ready
+                    && stream_links_ready
+                {
+                    return Ok(Some(info.clone()));
+                }
+            }
+
             let detail_html = fetch_lodestone_html(&client, &candidate.url).await;
             let Ok(detail_html) = detail_html else {
                 continue;
@@ -371,6 +397,16 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
             let Some(mut next) = parse_pll_detail(&candidate.url, &detail_html)? else {
                 continue;
             };
+
+            let sections = parse_pll_sections(&detail_html);
+            next.stream_links = sections.stream_links;
+
+            if wants_translation {
+                next.translated_description =
+                    translate_optional_text(&client, sections.summary_ja.as_deref()).await;
+                next.translated_contents =
+                    translate_text_list(&client, &sections.content_items_ja).await;
+            }
 
             next.expire_time = now + PLL_CACHE_DURATION_SECONDS;
             cache_store.save_pllinfo(&next).await?;
@@ -485,6 +521,7 @@ fn parse_maintenance_detail(url: &str, html: &str) -> Result<Option<MaintInfo>, 
         end_stamp,
         title_kr: format_maintenance_title(start_stamp, end_stamp, kind),
         url: url.to_string(),
+        translated_description: None,
     }))
 }
 
@@ -505,6 +542,9 @@ fn parse_pll_detail(url: &str, html: &str) -> Result<Option<PllInfo>, Error> {
         url: url.to_string(),
         start_stamp,
         expire_time: 0,
+        translated_description: None,
+        translated_contents: Vec::new(),
+        stream_links: Vec::new(),
     }))
 }
 
@@ -537,6 +577,89 @@ fn extract_first_heading(html: &str) -> Option<String> {
         .filter(|text| !text.is_empty())
 }
 
+fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
+    let mut embed = CreateEmbed::new()
+        .title(&info.title_kr)
+        .url(&info.url)
+        .color(SUCCESS_EMBED_COLOR)
+        .thumbnail(GAMEINFO_THUMBNAIL_URL)
+        .timestamp(Timestamp::now())
+        .field("시작 시각", format!("<t:{}:F>", info.start_stamp), false)
+        .field("종료 시각", format!("<t:{}:F>", info.end_stamp), false)
+        .field(
+            "종료까지 남은 시간",
+            format!("<t:{}:R>", info.end_stamp),
+            false,
+        )
+        .footer(CreateEmbedFooter::new("From Lodestone News"));
+
+    if let Some(description) = info.translated_description.as_deref() {
+        if !description.trim().is_empty() {
+            embed = embed.description(description);
+        }
+    }
+
+    embed
+}
+
+fn build_pll_embed(info: &PllInfo) -> CreateEmbed {
+    let mut embed = CreateEmbed::new()
+        .title(&info.fixed_title)
+        .url(&info.url)
+        .color(SUCCESS_EMBED_COLOR)
+        .thumbnail(GAMEINFO_THUMBNAIL_URL)
+        .timestamp(Timestamp::now())
+        .field(
+            "방송 시작",
+            info.start_stamp
+                .map(|stamp| format!("<t:{stamp}:F>"))
+                .unwrap_or_else(|| "확인 불가".to_string()),
+            false,
+        )
+        .field(
+            "시작까지 남은 시간",
+            info.start_stamp
+                .map(|stamp| format!("<t:{stamp}:R>"))
+                .unwrap_or_else(|| "확인 불가".to_string()),
+            false,
+        )
+        .footer(CreateEmbedFooter::new("From Lodestone News"));
+
+    if let Some(description) = info.translated_description.as_deref() {
+        if !description.trim().is_empty() {
+            embed = embed.description(description);
+        }
+    }
+
+    if !info.translated_contents.is_empty() {
+        let value = info
+            .translated_contents
+            .iter()
+            .map(|item| format!("• {item}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        embed = embed.field("방송 내용", value, false);
+    }
+
+    embed
+}
+
+fn build_pll_stream_buttons(info: &PllInfo) -> Vec<CreateActionRow> {
+    let buttons = info
+        .stream_links
+        .iter()
+        .filter_map(|link| {
+            to_valid_url(&link.url).map(|url| CreateButton::new_link(url).label(&link.label))
+        })
+        .collect::<Vec<_>>();
+
+    if buttons.is_empty() {
+        Vec::new()
+    } else {
+        vec![CreateActionRow::Buttons(buttons)]
+    }
+}
+
 fn extract_text(node: ElementRef<'_>) -> String {
     normalize_text(&node.text().collect::<Vec<_>>().join(" "))
 }
@@ -547,6 +670,15 @@ fn normalize_text(input: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+fn decode_html_entities(input: &str) -> String {
+    input
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
 }
 
 fn absolutize_lodestone_url(href: &str) -> Option<String> {
@@ -638,6 +770,176 @@ fn parse_maintenance_schedule(body_text: &str) -> Result<Option<(i64, i64)>, Err
     }
 
     Ok(Some((start.timestamp(), end.timestamp())))
+}
+
+fn extract_maintenance_summary_ja(html: &str) -> Option<String> {
+    let (_, body) = parse_article_title_and_body(html)?;
+    let summary = body.split("記").next().unwrap_or("").trim();
+    if summary.is_empty() {
+        None
+    } else {
+        Some(summary.to_string())
+    }
+}
+
+fn parse_pll_sections(html: &str) -> PllSections {
+    let document = Html::parse_document(html);
+    let wrapper_selector =
+        Selector::parse("article .news__detail__wrapper").expect("valid selector");
+    let link_selector = Selector::parse("a").expect("valid selector");
+    let list_item_selector = Selector::parse("li").expect("valid selector");
+
+    let Some(wrapper) = document.select(&wrapper_selector).next() else {
+        return PllSections::default();
+    };
+
+    #[derive(Clone, Copy, PartialEq, Eq)]
+    enum Section {
+        None,
+        Viewing,
+        Contents,
+    }
+
+    let mut before_sections = true;
+    let mut current_section = Section::None;
+    let mut summary_parts = Vec::new();
+    let mut content_items_ja = Vec::new();
+    let mut stream_links = Vec::new();
+
+    for child in wrapper.children() {
+        let Some(element) = ElementRef::wrap(child) else {
+            continue;
+        };
+
+        match element.value().name() {
+            "h3" => {
+                before_sections = false;
+                current_section = Section::None;
+            }
+            "h4" => {
+                before_sections = false;
+                current_section = match extract_text(element).as_str() {
+                    "視聴方法" => Section::Viewing,
+                    "放送内容" => Section::Contents,
+                    _ => Section::None,
+                };
+            }
+            "p" => {
+                if before_sections {
+                    let text = extract_text(element);
+                    if !text.is_empty() {
+                        summary_parts.push(text);
+                    }
+                }
+            }
+            "ul" | "ol" => match current_section {
+                Section::Viewing => {
+                    for anchor in element.select(&link_selector) {
+                        let label = extract_text(anchor);
+                        let Some(href) = anchor.value().attr("href") else {
+                            continue;
+                        };
+                        let Some(url) = absolutize_lodestone_url(href).or_else(|| {
+                            if href.starts_with("http") {
+                                Some(href.to_string())
+                            } else {
+                                None
+                            }
+                        }) else {
+                            continue;
+                        };
+
+                        if !label.is_empty() {
+                            stream_links.push(StreamLink { label, url });
+                        }
+                    }
+                }
+                Section::Contents => {
+                    for item in element.select(&list_item_selector) {
+                        let text = extract_text(item);
+                        if !text.is_empty() {
+                            content_items_ja.push(text);
+                        }
+                    }
+                }
+                Section::None => {}
+            },
+            _ => {}
+        }
+    }
+
+    PllSections {
+        summary_ja: if summary_parts.is_empty() {
+            None
+        } else {
+            Some(summary_parts.join("\n"))
+        },
+        content_items_ja,
+        stream_links,
+    }
+}
+
+fn translate_api_key() -> Option<String> {
+    std::env::var("GOOGLE_TRANSLATE_API_KEY")
+        .ok()
+        .map(|value| value.trim().to_string())
+        .filter(|value| !value.is_empty())
+}
+
+async fn translate_optional_text(client: &Client, text: Option<&str>) -> Option<String> {
+    let text = text?.trim();
+    if text.is_empty() {
+        return None;
+    }
+
+    translate_texts(client, &[text.to_string()])
+        .await
+        .ok()
+        .and_then(|mut values| values.pop())
+}
+
+async fn translate_text_list(client: &Client, texts: &[String]) -> Vec<String> {
+    let cleaned = texts
+        .iter()
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
+        .map(ToString::to_string)
+        .collect::<Vec<_>>();
+
+    if cleaned.is_empty() {
+        return Vec::new();
+    }
+
+    translate_texts(client, &cleaned).await.unwrap_or_default()
+}
+
+async fn translate_texts(client: &Client, texts: &[String]) -> Result<Vec<String>, Error> {
+    let Some(key) = translate_api_key() else {
+        return Err(anyhow::anyhow!("google translate api key is not configured").into());
+    };
+
+    let request = TranslateRequest {
+        q: texts.to_vec(),
+        source: "ja",
+        target: "ko",
+        format: "text",
+    };
+    let response = client
+        .post(GOOGLE_TRANSLATE_API_URL)
+        .query(&[("key", key.as_str())])
+        .json(&request)
+        .send()
+        .await?
+        .error_for_status()?
+        .json::<TranslateResponse>()
+        .await?;
+
+    Ok(response
+        .data
+        .translations
+        .into_iter()
+        .map(|item| decode_html_entities(&item.translated_text))
+        .collect())
 }
 
 fn capture_u32(captures: &regex::Captures<'_>, name: &str) -> Result<u32, Error> {
