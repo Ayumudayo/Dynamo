@@ -384,12 +384,12 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
                 let translation_ready = !wants_translation
                     || info.translated_description.is_some()
                     || !info.translated_contents.is_empty();
-                let stream_links_ready = !info.stream_links.is_empty();
+                let schedule_ready = is_valid_pll_schedule(info);
                 if info.url == candidate.url
                     && pll_is_usable(info.start_stamp, now)
                     && (info.expire_time > now || allow_past_pll_debug())
                     && translation_ready
-                    && stream_links_ready
+                    && schedule_ready
                 {
                     return Ok(Some(info.clone()));
                 }
@@ -412,6 +412,10 @@ async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
                     translate_optional_text(&client, sections.summary_ja.as_deref()).await;
                 next.translated_contents =
                     translate_text_list(&client, &sections.content_items_ja).await;
+            }
+
+            if !is_valid_pll_schedule(&next) {
+                continue;
             }
 
             if !pll_is_live_or_unknown(next.start_stamp, now) {
@@ -443,6 +447,10 @@ async fn load_pll_fallback(
     let Some(cached) = cache_store.load_pllinfo().await? else {
         return Ok(None);
     };
+
+    if !is_valid_pll_schedule(&cached) {
+        return Ok(None);
+    }
 
     if cached.expire_time > now {
         return Ok(Some(cached));
@@ -802,11 +810,20 @@ fn extract_maintenance_summary_ja(html: &str) -> Option<String> {
         .find(&body)
         .map(|matched| body[..matched.start()].trim())
         .unwrap_or_else(|| body.trim());
-    let summary = trim_maintenance_intro(summary);
+    let summary = take_first_sentence(&trim_maintenance_intro(summary));
     if summary.is_empty() {
         None
     } else {
         Some(summary)
+    }
+}
+
+fn take_first_sentence(input: &str) -> String {
+    let trimmed = input.trim();
+    if let Some((head, _)) = trimmed.split_once('。') {
+        format!("{head}。")
+    } else {
+        trimmed.to_string()
     }
 }
 
@@ -922,6 +939,10 @@ fn translate_api_key() -> Option<String> {
 
 fn allow_past_pll_debug() -> bool {
     cfg!(debug_assertions)
+}
+
+fn is_valid_pll_schedule(info: &PllInfo) -> bool {
+    info.start_stamp.is_some() && !info.stream_links.is_empty()
 }
 
 fn pll_is_live_or_unknown(start_stamp: Option<i64>, now: i64) -> bool {
@@ -1246,9 +1267,10 @@ fn normalize_pll_value(value: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MaintenanceNoticeKind, classify_maintenance_notice, extract_maintenance_summary_ja,
-        extract_pll_start, format_maintenance_title, generate_pll_title,
-        parse_maintenance_schedule, trim_maintenance_intro,
+        MaintenanceNoticeKind, PllInfo, classify_maintenance_notice,
+        extract_maintenance_summary_ja, extract_pll_start, format_maintenance_title,
+        generate_pll_title, is_valid_pll_schedule, parse_maintenance_schedule,
+        trim_maintenance_intro,
     };
 
     #[test]
@@ -1332,9 +1354,7 @@ mod tests {
 
         assert_eq!(
             extract_maintenance_summary_ja(html).as_deref(),
-            Some(
-                "パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。 メンテナンス作業中、ファイナルファンタジーXIVをご利用いただくことができません。"
-            )
+            Some("パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。")
         );
     }
 
@@ -1346,6 +1366,21 @@ mod tests {
             ),
             "パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。"
         );
+    }
+
+    #[test]
+    fn rejects_pll_cache_without_schedule_details() {
+        let info = PllInfo {
+            fixed_title: "제 90회 프로듀서 레터 라이브 X월 XX일 방송 결정!".to_string(),
+            url: "https://example.com".to_string(),
+            start_stamp: None,
+            expire_time: 0,
+            translated_description: Some("요전날 방송된 ...".to_string()),
+            translated_contents: Vec::new(),
+            stream_links: Vec::new(),
+        };
+
+        assert!(!is_valid_pll_schedule(&info));
     }
 
     #[test]
