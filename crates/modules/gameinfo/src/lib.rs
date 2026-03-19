@@ -774,7 +774,11 @@ fn parse_maintenance_schedule(body_text: &str) -> Result<Option<(i64, i64)>, Err
 
 fn extract_maintenance_summary_ja(html: &str) -> Option<String> {
     let (_, body) = parse_article_title_and_body(html)?;
-    let summary = body.split("記").next().unwrap_or("").trim();
+    let marker = Regex::new(r"\s記\s+日\s*時[:：]").expect("valid regex");
+    let summary = marker
+        .find(&body)
+        .map(|matched| body[..matched.start()].trim())
+        .unwrap_or_else(|| body.trim());
     if summary.is_empty() {
         None
     } else {
@@ -1200,8 +1204,9 @@ fn normalize_pll_value(value: &mut serde_json::Value) {
 #[cfg(test)]
 mod tests {
     use super::{
-        MaintenanceNoticeKind, classify_maintenance_notice, extract_pll_start,
-        format_maintenance_title, generate_pll_title, parse_maintenance_schedule,
+        MaintenanceNoticeKind, classify_maintenance_notice, extract_maintenance_summary_ja,
+        extract_pll_start, format_maintenance_title, generate_pll_title,
+        parse_maintenance_schedule,
     };
 
     #[test]
@@ -1267,6 +1272,28 @@ mod tests {
             .expect("pll parse succeeded")
             .expect("pll start exists");
         assert_eq!(start, 1_773_399_600);
+    }
+
+    #[test]
+    fn extracts_maintenance_summary_without_cutting_at_shaki() {
+        let html = r#"
+        <article>
+          <h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(3/24)</h1>
+          <div class="news__detail__wrapper">
+            下記日時におきまして、パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。
+            メンテナンス作業中、ファイナルファンタジーXIVをご利用いただくことができません。
+            記
+            日　時：2026年3月24日(火) 15:00より19:00頃まで
+          </div>
+        </article>
+        "#;
+
+        assert_eq!(
+            extract_maintenance_summary_ja(html).as_deref(),
+            Some(
+                "下記日時におきまして、パッチ7.45 HotFixesに伴う全ワールドのメンテナンス作業を実施いたします。 メンテナンス作業中、ファイナルファンタジーXIVをご利用いただくことができません。"
+            )
+        );
     }
 
     #[test]
