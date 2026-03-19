@@ -256,6 +256,8 @@ async fn maint(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
+    ctx.defer().await?;
+
     let embed = fetch_maintenance_info()
         .await?
         .map(|info| build_maintenance_embed(&info))
@@ -274,6 +276,8 @@ async fn pll(ctx: Context<'_>) -> Result<(), Error> {
         ctx.say(reason).await?;
         return Ok(());
     }
+
+    ctx.defer().await?;
 
     let Some(info) = fetch_pll_info().await? else {
         ctx.send(poise::CreateReply::default().embed(create_pll_error_embed()))
