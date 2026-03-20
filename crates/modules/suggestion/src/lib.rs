@@ -121,6 +121,8 @@ async fn suggest(
     ctx: Context<'_>,
     #[description = "Suggestion text"] suggestion: String,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason

@@ -175,6 +175,8 @@ async fn ticket_setup(
     #[description = "Optional embed description"] description: Option<String>,
     #[description = "Optional embed footer"] footer: Option<String>,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
@@ -229,6 +231,8 @@ async fn ticket_log(
     ctx: Context<'_>,
     #[description = "Optional log channel; omit to disable ticket logs"] channel: Option<ChannelId>,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let mut settings = load_settings(ctx.data(), ctx.guild_id().map(|id| id.get())).await?;
     settings.log_channel_id = channel.map(|id| id.get());
     save_settings(ctx, &settings).await?;
@@ -258,6 +262,8 @@ async fn ticket_limit(
     ctx: Context<'_>,
     #[description = "Maximum number of concurrently open ticket channels"] amount: i32,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     if amount < MIN_LIMIT as i32 {
         ctx.send(
             poise::CreateReply::default()
@@ -290,6 +296,8 @@ async fn ticket_close(
     ctx: Context<'_>,
     #[description = "Optional close reason"] reason: Option<String>,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let Some(guild_channel) =
         current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
     else {
@@ -339,6 +347,8 @@ async fn ticket_close(
     required_permissions = "MANAGE_GUILD"
 )]
 async fn ticket_closeall(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
@@ -383,6 +393,8 @@ async fn ticket_add(
     ctx: Context<'_>,
     #[description = "User ID, role ID, or mention to add to the current ticket"] target_id: String,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let Some(channel) = current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
     else {
         ctx.send(
@@ -440,6 +452,8 @@ async fn ticket_remove(
     #[description = "User ID, role ID, or mention to remove from the current ticket"]
     target_id: String,
 ) -> Result<(), Error> {
+    ctx.defer_ephemeral().await?;
+
     let Some(channel) = current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
     else {
         ctx.send(

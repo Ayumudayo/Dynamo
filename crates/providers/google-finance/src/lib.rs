@@ -17,7 +17,7 @@ use dynamo_service_exchange::{Error, ExchangeRateService};
 use reqwest::{Client, header::ACCEPT};
 use scraper::{Html, Selector};
 use serde::{Deserialize, Serialize};
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 const PROVIDER_ID: &str = "google_finance_exchange";
 const GOOGLE_FINANCE_BASE: &str = "https://www.google.com/finance/quote";
@@ -29,6 +29,7 @@ pub struct GoogleFinanceExchangeService {
     session_repo: Option<Arc<dyn ProviderStateRepository>>,
     cache: Arc<RwLock<ExchangeRateCache>>,
     loaded_from_repo: Arc<AtomicBool>,
+    load_guard: Arc<Mutex<()>>,
 }
 
 impl GoogleFinanceExchangeService {
@@ -43,10 +44,16 @@ impl GoogleFinanceExchangeService {
             session_repo,
             cache: Arc::new(RwLock::new(ExchangeRateCache::default())),
             loaded_from_repo: Arc::new(AtomicBool::new(false)),
+            load_guard: Arc::new(Mutex::new(())),
         })
     }
 
     async fn ensure_loaded_from_repo(&self) -> Result<(), Error> {
+        if self.loaded_from_repo.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let _guard = self.load_guard.lock().await;
         if self.loaded_from_repo.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -357,11 +364,18 @@ pub fn supported_currencies() -> &'static [&'static str] {
 #[cfg(test)]
 mod tests {
     use super::{
-        CachedUsdRate, ExchangeRateCache, PersistedExchangeCache, build_cached_cross_quote,
-        parse_google_finance_pair_html,
+        CachedUsdRate, ExchangeRateCache, GoogleFinanceExchangeService, PersistedExchangeCache,
+        build_cached_cross_quote, parse_google_finance_pair_html,
     };
+    use async_trait::async_trait;
     use chrono::{TimeZone, Utc};
+    use dynamo_repositories::ProviderStateRepository;
     use std::collections::BTreeMap;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::time::{Duration, sleep};
 
     #[test]
     fn parses_google_finance_quote_fixture() {
@@ -435,5 +449,55 @@ mod tests {
         let restored: PersistedExchangeCache = serde_json::from_value(json).expect("deserialize");
         assert_eq!(restored.entries.len(), 1);
         assert_eq!(restored.last_refresh_at, Some(ts));
+    }
+
+    struct CountingRepo {
+        load_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ProviderStateRepository for CountingRepo {
+        async fn load_json(
+            &self,
+            _provider_id: &str,
+        ) -> Result<Option<serde_json::Value>, dynamo_repositories::Error> {
+            self.load_calls.fetch_add(1, Ordering::SeqCst);
+            sleep(Duration::from_millis(25)).await;
+            Ok(None)
+        }
+
+        async fn save_json(
+            &self,
+            _provider_id: &str,
+            _value: serde_json::Value,
+        ) -> Result<(), dynamo_repositories::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn loads_persisted_cache_only_once_under_concurrency() {
+        let repo = Arc::new(CountingRepo {
+            load_calls: AtomicUsize::new(0),
+        });
+        let service =
+            GoogleFinanceExchangeService::new(Some(repo.clone())).expect("service should build");
+
+        let mut handles = Vec::new();
+        for _ in 0..6 {
+            let service = service.clone();
+            handles.push(tokio::spawn(async move {
+                service.ensure_loaded_from_repo().await
+            }));
+        }
+
+        for handle in handles {
+            handle
+                .await
+                .expect("task should complete")
+                .expect("initial load should succeed");
+        }
+
+        assert_eq!(repo.load_calls.load(Ordering::SeqCst), 1);
     }
 }

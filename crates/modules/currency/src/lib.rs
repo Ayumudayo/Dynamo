@@ -150,6 +150,8 @@ async fn exchange(
     #[description = "The currency you want to convert (To) / Default : KRW"] to: Option<String>,
     #[description = "The amount of currency. / Default : 1.0"] amount: Option<f64>,
 ) -> Result<(), Error> {
+    ctx.defer().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
@@ -200,6 +202,8 @@ async fn rate(
     #[description = "The currency you want to convert from (default: USD)"] from: Option<String>,
     #[description = "The amount of currency (default: 1.0)"] amount: Option<f64>,
 ) -> Result<(), Error> {
+    ctx.defer().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
