@@ -617,7 +617,11 @@ fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
         .timestamp(Timestamp::now())
         .field("시작 시각", format!("<t:{}:F>", info.start_stamp), false)
         .field("종료 시각", format!("<t:{}:F>", info.end_stamp), false)
-        .field("종료까지 남은 시간", format!("<t:{}:R>", info.end_stamp), false);
+        .field(
+            "종료까지 남은 시간",
+            format!("<t:{}:R>", info.end_stamp),
+            false,
+        );
 
     if let Some(description) = info.translated_description.as_deref() {
         if !description.trim().is_empty() {
@@ -644,11 +648,11 @@ fn build_pll_embed(info: &PllInfo) -> CreateEmbed {
         )
         .field(
             "시작까지 남은 시간",
-                info.start_stamp
-                    .map(|stamp| format!("<t:{stamp}:R>"))
-                    .unwrap_or_else(|| "확인 불가".to_string()),
-                false,
-            );
+            info.start_stamp
+                .map(|stamp| format!("<t:{stamp}:R>"))
+                .unwrap_or_else(|| "확인 불가".to_string()),
+            false,
+        );
 
     if let Some(description) = info.translated_description.as_deref() {
         if !description.trim().is_empty() {
