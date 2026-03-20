@@ -150,6 +150,8 @@ async fn exchange(
     #[description = "The currency you want to convert (To) / Default : KRW"] to: Option<String>,
     #[description = "The amount of currency. / Default : 1.0"] amount: Option<f64>,
 ) -> Result<(), Error> {
+    ctx.defer().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
@@ -200,6 +202,8 @@ async fn rate(
     #[description = "The currency you want to convert from (default: USD)"] from: Option<String>,
     #[description = "The amount of currency (default: 1.0)"] amount: Option<f64>,
 ) -> Result<(), Error> {
+    ctx.defer().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
@@ -249,15 +253,8 @@ async fn rate(
 
         embed = embed.field(
             name,
-            rate.map(|quote| {
-                let value = format_decimal(quote.rate * amount);
-                if quote.source_kind == ExchangeRateSourceKind::Cache {
-                    format!("{value}\nCached fallback")
-                } else {
-                    value
-                }
-            })
-            .unwrap_or_else(|| "Failed to fetch".to_string()),
+            rate.map(|quote| format_rate_board_value(&quote, amount))
+                .unwrap_or_else(|| "Failed to fetch".to_string()),
             true,
         );
     }
@@ -666,6 +663,18 @@ fn currency_display_label(currency: &str) -> String {
         .unwrap_or_else(|| format!("🌐 {normalized}"))
 }
 
+fn format_rate_board_value(
+    quote: &dynamo_domain_currency::ExchangeRateQuote,
+    amount: f64,
+) -> String {
+    let value = format_decimal(quote.rate * amount);
+    if quote.source_kind == ExchangeRateSourceKind::Cache && quote.from != quote.to {
+        format!("{value}\nCached fallback")
+    } else {
+        value
+    }
+}
+
 fn format_decimal(value: f64) -> String {
     let rounded = (value * 100.0).round() / 100.0;
     let sign = if rounded < 0.0 { "-" } else { "" };
@@ -705,9 +714,13 @@ fn format_grouped_integer(value: i64) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        currency_display_label, currency_option_label, format_decimal, normalize_currency,
+        currency_display_label, currency_option_label, format_decimal, format_rate_board_value,
+        normalize_currency,
     };
-    use dynamo_domain_currency::supported_currency_specs;
+    use chrono::Utc;
+    use dynamo_domain_currency::{
+        ExchangeRateQuote, ExchangeRateSourceKind, supported_currency_specs,
+    };
 
     #[test]
     fn formats_grouped_decimals_like_js_locale_output() {
@@ -742,5 +755,38 @@ mod tests {
         assert_eq!(currency_option_label("KRW"), "South Korean Won (KRW)");
         assert_eq!(currency_option_label("USD"), "United States Dollar (USD)");
         assert_eq!(currency_option_label("EUR"), "Euro (EUR)");
+    }
+
+    #[test]
+    fn same_currency_cache_row_does_not_show_fallback_label() {
+        let quote = ExchangeRateQuote {
+            from: "USD".to_string(),
+            to: "USD".to_string(),
+            rate: 1.0,
+            source_kind: ExchangeRateSourceKind::Cache,
+            source_timestamp: Utc::now(),
+            source_timestamp_text: "now".to_string(),
+            fetched_at_utc: Utc::now(),
+        };
+
+        assert_eq!(format_rate_board_value(&quote, 1.0), "1");
+    }
+
+    #[test]
+    fn different_currency_cache_row_keeps_fallback_label() {
+        let quote = ExchangeRateQuote {
+            from: "USD".to_string(),
+            to: "KRW".to_string(),
+            rate: 1_450.0,
+            source_kind: ExchangeRateSourceKind::Cache,
+            source_timestamp: Utc::now(),
+            source_timestamp_text: "now".to_string(),
+            fetched_at_utc: Utc::now(),
+        };
+
+        assert_eq!(
+            format_rate_board_value(&quote, 1.0),
+            "1,450\nCached fallback"
+        );
     }
 }

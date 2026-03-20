@@ -37,6 +37,7 @@ pub struct YahooFinanceClient {
     session_repo: Option<Arc<dyn ProviderStateRepository>>,
     session: Arc<Mutex<YahooSession>>,
     loaded_from_repo: Arc<AtomicBool>,
+    load_guard: Arc<Mutex<()>>,
 }
 
 impl YahooFinanceClient {
@@ -52,10 +53,16 @@ impl YahooFinanceClient {
             session_repo,
             session: Arc::new(Mutex::new(YahooSession::default())),
             loaded_from_repo: Arc::new(AtomicBool::new(false)),
+            load_guard: Arc::new(Mutex::new(())),
         })
     }
 
     async fn ensure_loaded_from_repo(&self) -> Result<(), Error> {
+        if self.loaded_from_repo.load(Ordering::SeqCst) {
+            return Ok(());
+        }
+
+        let _guard = self.load_guard.lock().await;
         if self.loaded_from_repo.load(Ordering::SeqCst) {
             return Ok(());
         }
@@ -1010,10 +1017,16 @@ mod tests {
         PROVIDER_ID, PersistedYahooSession, TradingPeriod, YahooFinanceClient,
         build_consent_form_body, decode_html_entities, derive_chart_metrics,
     };
+    use async_trait::async_trait;
     use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
+    use dynamo_repositories::ProviderStateRepository;
     use dynamo_service_stock::StockQuoteService;
     use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    use tokio::time::{Duration, sleep};
 
     #[test]
     fn decodes_hex_entities() {
@@ -1122,6 +1135,55 @@ mod tests {
         assert_eq!(derived.regular_market_day_high, Some(184.5));
         assert_eq!(derived.regular_market_day_low, Some(182.5));
         assert_eq!(derived.regular_market_volume, Some(70.0));
+    }
+
+    struct CountingRepo {
+        load_calls: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ProviderStateRepository for CountingRepo {
+        async fn load_json(
+            &self,
+            _provider_id: &str,
+        ) -> Result<Option<serde_json::Value>, dynamo_repositories::Error> {
+            self.load_calls.fetch_add(1, Ordering::SeqCst);
+            sleep(Duration::from_millis(25)).await;
+            Ok(None)
+        }
+
+        async fn save_json(
+            &self,
+            _provider_id: &str,
+            _value: serde_json::Value,
+        ) -> Result<(), dynamo_repositories::Error> {
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn loads_persisted_session_only_once_under_concurrency() {
+        let repo = Arc::new(CountingRepo {
+            load_calls: AtomicUsize::new(0),
+        });
+        let client = YahooFinanceClient::new(Some(repo.clone())).expect("client");
+
+        let mut handles = Vec::new();
+        for _ in 0..6 {
+            let client = client.clone();
+            handles.push(tokio::spawn(async move {
+                client.ensure_loaded_from_repo().await
+            }));
+        }
+
+        for handle in handles {
+            handle
+                .await
+                .expect("task should complete")
+                .expect("initial load should succeed");
+        }
+
+        assert_eq!(repo.load_calls.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

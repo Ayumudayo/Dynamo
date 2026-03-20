@@ -73,6 +73,7 @@ Common optional variables:
 - `DASHBOARD_PORT` default: `3000`
 - `DASHBOARD_BASE_URL` default: `http://127.0.0.1:3000`
 - `DISCORD_CLIENT_SECRET` or `BOT_SECRET` required for dashboard OAuth login
+- `GOOGLE_TRANSLATE_API_KEY` optional: enables Korean translation for Lodestone `maint` and `pll` notice text
 - `DASHBOARD_ADMIN_USER_IDS` optional comma-separated override for deployment-wide dashboard admins
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG`

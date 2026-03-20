@@ -181,6 +181,8 @@ async fn stock(
     ctx: Context<'_>,
     #[description = "Symbol of the stock"] symbol: Option<String>,
 ) -> Result<(), Error> {
+    ctx.defer().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
@@ -236,6 +238,8 @@ async fn stock(
 /// Show the configured ETF watchlist for this guild.
 #[poise::command(slash_command, guild_only, category = "Stock")]
 async fn etf(ctx: Context<'_>) -> Result<(), Error> {
+    ctx.defer().await?;
+
     if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
         .await?
         .denial_reason
@@ -428,10 +432,14 @@ async fn build_stock_response(
     let Some(snapshot) = service.fetch_quote(symbol).await? else {
         return Ok(None);
     };
+    let stop_reason = stop_reason_for_phase(&snapshot.phase);
 
     Ok(Some(StockResponse {
-        embed: build_stock_embed(&snapshot, update_count, total_updates),
-        stop_reason: stop_reason_for_phase(&snapshot.phase),
+        embed: build_stock_embed(
+            &snapshot,
+            &refresh_footer_text(update_count, total_updates, stop_reason),
+        ),
+        stop_reason,
     }))
 }
 
@@ -447,9 +455,15 @@ async fn build_etf_response(
     }
 
     let phase = representative_phase(&snapshots);
+    let stop_reason = stop_reason_for_phase(&phase);
     Ok(Some(StockResponse {
-        embed: build_etf_embed(tickers, &snapshots, &phase, update_count, total_updates),
-        stop_reason: stop_reason_for_phase(&phase),
+        embed: build_etf_embed(
+            tickers,
+            &snapshots,
+            &phase,
+            &refresh_footer_text(update_count, total_updates, stop_reason),
+        ),
+        stop_reason,
     }))
 }
 
@@ -482,7 +496,35 @@ fn stop_reason_for_phase(phase: &str) -> Option<&'static str> {
     }
 }
 
-fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u32) -> CreateEmbed {
+fn refresh_footer_text(
+    update_count: u32,
+    total_updates: u32,
+    stop_reason: Option<&'static str>,
+) -> String {
+    if let Some(reason) = stop_reason {
+        return format!("Yahoo Finance · {}", refresh_stop_reason_text(reason));
+    }
+
+    if update_count == 0 {
+        return "Yahoo Finance · Active".to_string();
+    }
+
+    if update_count >= total_updates {
+        return format!("Yahoo Finance · Done {total_updates}/{total_updates}");
+    }
+
+    format!("Yahoo Finance · {update_count}/{total_updates}")
+}
+
+fn refresh_stop_reason_text(reason: &'static str) -> &'static str {
+    match reason {
+        "post_market" | "market_closed" | "market_state_unknown" => "Stopped",
+        "max_refresh_reached" => "Done",
+        _ => "Stopped",
+    }
+}
+
+fn build_stock_embed(snapshot: &StockQuote, footer_text: &str) -> CreateEmbed {
     let current = current_market_data(snapshot, &snapshot.phase);
     let mut embed = CreateEmbed::new()
         .title(format!(
@@ -500,9 +542,7 @@ fn build_stock_embed(snapshot: &StockQuote, update_count: u32, total_updates: u3
         ))
         .thumbnail(STOCK_THUMBNAIL_URL)
         .color(embed_color(current.change))
-        .footer(CreateEmbedFooter::new(format!(
-            "Data from Yahoo Finance. Update {update_count}/{total_updates}."
-        )))
+        .footer(CreateEmbedFooter::new(footer_text.to_string()))
         .timestamp(poise::serenity_prelude::Timestamp::now())
         .field(
             "Market State",
@@ -581,16 +621,13 @@ fn build_etf_embed(
     tickers: &[String],
     snapshots: &[Result<StockQuote, String>],
     phase: &str,
-    update_count: u32,
-    total_updates: u32,
+    footer_text: &str,
 ) -> CreateEmbed {
     let mut embed = CreateEmbed::new()
         .title("ETFs")
         .thumbnail(STOCK_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new(format!(
-            "Data from Yahoo Finance. Update {update_count}/{total_updates}."
-        )))
+        .footer(CreateEmbedFooter::new(footer_text.to_string()))
         .timestamp(poise::serenity_prelude::Timestamp::now())
         .field(
             "Market State",
@@ -767,6 +804,7 @@ async fn initialize_session_loop(
     drop(state);
 
     tokio::spawn(async move {
+        let max_updates = total_updates();
         let mut update_count = 0u32;
         let mut consecutive_failures = 0u32;
 
@@ -781,42 +819,30 @@ async fn initialize_session_loop(
             }
 
             update_count += 1;
-            if update_count >= total_updates() {
-                let mut state = session.lock().await;
-                if state.generation == generation {
-                    state.active = false;
-                    state.last_stop_reason = Some("max_refresh_reached");
-                }
-                break;
-            }
 
             let (kind, service) = {
                 let state = session.lock().await;
                 (state.kind.clone(), state.service.clone())
             };
 
-            let response = match fetch_response_for_kind(
-                service.as_ref(),
-                &kind,
-                update_count,
-                total_updates(),
-            )
-            .await
-            {
-                Ok(value) => value,
-                Err(_) => {
-                    consecutive_failures += 1;
-                    if consecutive_failures >= 3 {
-                        let mut state = session.lock().await;
-                        if state.generation == generation {
-                            state.active = false;
-                            state.last_stop_reason = Some("fetch_error_threshold");
+            let response =
+                match fetch_response_for_kind(service.as_ref(), &kind, update_count, max_updates)
+                    .await
+                {
+                    Ok(value) => value,
+                    Err(_) => {
+                        consecutive_failures += 1;
+                        if consecutive_failures >= 3 {
+                            let mut state = session.lock().await;
+                            if state.generation == generation {
+                                state.active = false;
+                                state.last_stop_reason = Some("fetch_error_threshold");
+                            }
+                            break;
                         }
-                        break;
+                        continue;
                     }
-                    continue;
-                }
-            };
+                };
 
             let Some(response) = response else {
                 consecutive_failures += 1;
@@ -851,6 +877,15 @@ async fn initialize_session_loop(
                 if state.generation == generation {
                     state.active = false;
                     state.last_stop_reason = Some(reason);
+                }
+                break;
+            }
+
+            if update_count >= max_updates {
+                let mut state = session.lock().await;
+                if state.generation == generation {
+                    state.active = false;
+                    state.last_stop_reason = Some("max_refresh_reached");
                 }
                 break;
             }
@@ -1004,7 +1039,7 @@ async fn handle_refresh_button(
             .edit_response(
                 ctx,
                 poise::serenity_prelude::EditInteractionResponse::new()
-                    .content("Failed to refresh stock data. Please try again later."),
+                    .content("Failed to refresh quote data. Please try again later."),
             )
             .await?;
         return Ok(());
@@ -1037,7 +1072,7 @@ async fn handle_refresh_button(
         .edit_response(
             ctx,
             poise::serenity_prelude::EditInteractionResponse::new()
-                .content("Stock refresh updated."),
+                .content("Quote refresh updated."),
         )
         .await?;
 
@@ -1047,7 +1082,8 @@ async fn handle_refresh_button(
 #[cfg(test)]
 mod tests {
     use super::{
-        current_market_data, format_money, normalize_symbol, normalize_symbols, total_updates,
+        current_market_data, format_money, normalize_symbol, normalize_symbols,
+        refresh_footer_text, total_updates,
     };
     use dynamo_domain_stock::StockQuote;
 
@@ -1069,6 +1105,31 @@ mod tests {
     #[test]
     fn computes_total_updates_from_refresh_window() {
         assert_eq!(total_updates(), 12);
+    }
+
+    #[test]
+    fn footer_marks_initial_refresh_as_started() {
+        assert_eq!(
+            refresh_footer_text(0, total_updates(), None),
+            "Yahoo Finance · Active"
+        );
+    }
+
+    #[test]
+    fn footer_marks_final_refresh_as_complete() {
+        let total = total_updates();
+        assert_eq!(
+            refresh_footer_text(total, total, None),
+            "Yahoo Finance · Done 12/12"
+        );
+    }
+
+    #[test]
+    fn footer_explains_market_closed_stop_reason() {
+        assert_eq!(
+            refresh_footer_text(0, total_updates(), Some("market_closed")),
+            "Yahoo Finance · Stopped"
+        );
     }
 
     #[test]
