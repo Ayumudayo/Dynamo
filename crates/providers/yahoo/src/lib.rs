@@ -372,8 +372,8 @@ impl StockQuoteService for YahooFinanceClient {
     ) -> Result<Vec<Result<StockQuote, String>>, Error> {
         let mut quotes = Vec::with_capacity(symbols.len());
         for symbol in symbols {
-            match self.fetch_chart_internal(symbol).await {
-                Ok(Some(chart)) => quotes.push(Ok(merge_quote(chart, None))),
+            match self.fetch_quote(symbol).await {
+                Ok(Some(quote)) => quotes.push(Ok(quote)),
                 Ok(None) => quotes.push(Err("Invalid Ticker".to_string())),
                 Err(error) => quotes.push(Err(error.to_string())),
             }
@@ -1260,6 +1260,70 @@ mod tests {
                 assert!(
                     quote.regular_market_price.is_some(),
                     "regular or closed quote should still include a regular price"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    #[ignore = "live network smoke test"]
+    async fn live_fetch_quotes_reports_extended_hours_fields_when_active() {
+        let client = YahooFinanceClient::new(None).expect("client");
+        let quotes = client
+            .fetch_quotes(&["SOXL".to_string()])
+            .await
+            .expect("request should succeed");
+        let quote = quotes
+            .into_iter()
+            .next()
+            .expect("one result")
+            .expect("soxl should resolve");
+
+        println!(
+            "phase={} regular={:?} pre={:?} pre_change={:?} pre_change_pct={:?} post={:?} post_change={:?} post_change_pct={:?}",
+            quote.phase,
+            quote.regular_market_price,
+            quote.pre_market_price,
+            quote.pre_market_change,
+            quote.pre_market_change_percent,
+            quote.post_market_price,
+            quote.post_market_change,
+            quote.post_market_change_percent,
+        );
+
+        match quote.phase.as_str() {
+            "Pre Market" => {
+                assert!(
+                    quote.pre_market_price.is_some(),
+                    "pre-market ETF quotes should include a pre-market price"
+                );
+                assert!(
+                    quote.pre_market_change.is_some(),
+                    "pre-market ETF quotes should include a pre-market change"
+                );
+                assert!(
+                    quote.pre_market_change_percent.is_some(),
+                    "pre-market ETF quotes should include a pre-market change percent"
+                );
+            }
+            "Post Market" => {
+                assert!(
+                    quote.post_market_price.is_some(),
+                    "post-market ETF quotes should include a post-market price"
+                );
+                assert!(
+                    quote.post_market_change.is_some(),
+                    "post-market ETF quotes should include a post-market change"
+                );
+                assert!(
+                    quote.post_market_change_percent.is_some(),
+                    "post-market ETF quotes should include a post-market change percent"
+                );
+            }
+            _ => {
+                assert!(
+                    quote.regular_market_price.is_some(),
+                    "regular or closed ETF quote should still include a regular price"
                 );
             }
         }

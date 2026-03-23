@@ -525,7 +525,7 @@ fn refresh_stop_reason_text(reason: &'static str) -> &'static str {
 }
 
 fn build_stock_embed(snapshot: &StockQuote, footer_text: &str) -> CreateEmbed {
-    let current = current_market_data(snapshot, &snapshot.phase);
+    let current = primary_stock_market_data(snapshot);
     let mut embed = CreateEmbed::new()
         .title(format!(
             "{} / [{}]",
@@ -541,7 +541,7 @@ fn build_stock_embed(snapshot: &StockQuote, footer_text: &str) -> CreateEmbed {
             snapshot.symbol
         ))
         .thumbnail(STOCK_THUMBNAIL_URL)
-        .color(embed_color(current.change))
+        .color(embed_color(stock_embed_color_change(snapshot)))
         .footer(CreateEmbedFooter::new(footer_text.to_string()))
         .timestamp(poise::serenity_prelude::Timestamp::now())
         .field(
@@ -638,7 +638,7 @@ fn build_etf_embed(
     for (index, snapshot) in snapshots.iter().enumerate() {
         match snapshot {
             Ok(snapshot) => {
-                let current = current_market_data(snapshot, phase);
+                let current = current_market_data(snapshot, &snapshot.phase);
                 embed = embed.field(
                     snapshot.symbol.clone(),
                     format_money(&snapshot.currency_label, current.price),
@@ -668,6 +668,22 @@ struct CurrentMarketData {
     price: Option<f64>,
     change: Option<f64>,
     change_percent: Option<f64>,
+}
+
+fn primary_stock_market_data(snapshot: &StockQuote) -> CurrentMarketData {
+    CurrentMarketData {
+        price: snapshot.regular_market_price,
+        change: snapshot.regular_market_change,
+        change_percent: snapshot.regular_market_change_percent,
+    }
+}
+
+fn stock_embed_color_change(snapshot: &StockQuote) -> Option<f64> {
+    match snapshot.phase.as_str() {
+        "Pre Market" => snapshot.pre_market_change.or(snapshot.regular_market_change),
+        "Post Market" => snapshot.post_market_change.or(snapshot.regular_market_change),
+        _ => snapshot.regular_market_change,
+    }
 }
 
 fn current_market_data(snapshot: &StockQuote, phase: &str) -> CurrentMarketData {
@@ -1082,7 +1098,7 @@ async fn handle_refresh_button(
 #[cfg(test)]
 mod tests {
     use super::{
-        current_market_data, format_money, normalize_symbol, normalize_symbols,
+        current_market_data, format_money, stock_embed_color_change, primary_stock_market_data, normalize_symbol, normalize_symbols,
         refresh_footer_text, total_updates,
     };
     use dynamo_domain_stock::StockQuote;
@@ -1149,6 +1165,49 @@ mod tests {
         assert_eq!(current.price, Some(101.0));
         assert_eq!(current.change, Some(1.0));
         assert_eq!(current.change_percent, Some(0.01));
+    }
+
+    #[test]
+    fn stock_primary_values_remain_regular_during_pre_market() {
+        let quote = StockQuote {
+            phase: "Pre Market".to_string(),
+            pre_market_price: Some(101.0),
+            pre_market_change: Some(1.0),
+            pre_market_change_percent: Some(0.01),
+            regular_market_price: Some(100.0),
+            regular_market_change: Some(0.5),
+            regular_market_change_percent: Some(0.005),
+            ..StockQuote::default()
+        };
+
+        let current = primary_stock_market_data(&quote);
+        assert_eq!(current.price, Some(100.0));
+        assert_eq!(current.change, Some(0.5));
+        assert_eq!(current.change_percent, Some(0.005));
+    }
+
+    #[test]
+    fn stock_embed_color_uses_pre_market_change_when_active() {
+        let quote = StockQuote {
+            phase: "Pre Market".to_string(),
+            pre_market_change: Some(1.0),
+            regular_market_change: Some(-2.0),
+            ..StockQuote::default()
+        };
+
+        assert_eq!(stock_embed_color_change(&quote), Some(1.0));
+    }
+
+    #[test]
+    fn stock_embed_color_uses_post_market_change_when_active() {
+        let quote = StockQuote {
+            phase: "Post Market".to_string(),
+            post_market_change: Some(-1.5),
+            regular_market_change: Some(2.0),
+            ..StockQuote::default()
+        };
+
+        assert_eq!(stock_embed_color_change(&quote), Some(-1.5));
     }
 
     #[test]
