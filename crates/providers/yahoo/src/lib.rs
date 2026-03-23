@@ -1206,6 +1206,66 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore = "live network smoke test"]
+    async fn live_quote_reports_extended_hours_fields_when_active() {
+        let client = YahooFinanceClient::new(None).expect("client");
+        let quote = client
+            .fetch_quote("NVDA")
+            .await
+            .expect("request should succeed")
+            .expect("nvda should resolve");
+
+        println!(
+            "phase={} regular={:?} pre={:?} pre_change={:?} pre_change_pct={:?} post={:?} post_change={:?} post_change_pct={:?}",
+            quote.phase,
+            quote.regular_market_price,
+            quote.pre_market_price,
+            quote.pre_market_change,
+            quote.pre_market_change_percent,
+            quote.post_market_price,
+            quote.post_market_change,
+            quote.post_market_change_percent,
+        );
+
+        match quote.phase.as_str() {
+            "Pre Market" => {
+                assert!(
+                    quote.pre_market_price.is_some(),
+                    "pre-market quote should include a pre-market price"
+                );
+                assert!(
+                    quote.pre_market_change.is_some(),
+                    "pre-market quote should include a pre-market change"
+                );
+                assert!(
+                    quote.pre_market_change_percent.is_some(),
+                    "pre-market quote should include a pre-market change percent"
+                );
+            }
+            "Post Market" => {
+                assert!(
+                    quote.post_market_price.is_some(),
+                    "post-market quote should include a post-market price"
+                );
+                assert!(
+                    quote.post_market_change.is_some(),
+                    "post-market quote should include a post-market change"
+                );
+                assert!(
+                    quote.post_market_change_percent.is_some(),
+                    "post-market quote should include a post-market change percent"
+                );
+            }
+            _ => {
+                assert!(
+                    quote.regular_market_price.is_some(),
+                    "regular or closed quote should still include a regular price"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
     #[ignore = "live network and MongoDB smoke test"]
     async fn live_quote_summary_persists_yahoo_session_to_mongodb() {
         let _ = dotenvy::dotenv();
