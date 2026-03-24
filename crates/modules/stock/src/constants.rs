@@ -1,0 +1,15 @@
+pub(crate) const MODULE_ID: &str = "stock";
+pub(crate) const DEFAULT_SYMBOL: &str = "NVDA";
+pub(crate) const DEFAULT_ETF_TICKERS: [&str; 3] = ["SOXL", "TQQQ", "VOO"];
+pub(crate) const DEFAULT_EMBED_COLOR: u32 = 0x4F545C;
+pub(crate) const BOT_EMBED_COLOR: u32 = 0x068ADD;
+pub(crate) const UPWARD_EMBED_COLOR: u32 = 0x43B581;
+pub(crate) const DOWNWARD_EMBED_COLOR: u32 = 0xF04747;
+pub(crate) const STOCK_THUMBNAIL_URL: &str = "https://icons.iconarchive.com/icons/oxygen-icons.org/oxygen/256/Actions-office-chart-line-stacked-icon.png";
+pub(crate) const UP_EMOJI: &str = "<:yangbonghoro:1162456430360662018>";
+pub(crate) const DOWN_EMOJI: &str = "<:sale:1162457546532073623>";
+pub(crate) const REFRESH_INTERVAL_MS: u32 = 5_000;
+pub(crate) const MAX_REFRESH_TIME_MS: u32 = 60_000;
+pub(crate) const MAX_MANUAL_REFRESHES: u32 = 5;
+pub(crate) const MAX_STORED_SESSIONS: usize = 200;
+pub(crate) const STOCK_REFRESH_BUTTON_ID: &str = "stock_refresh";
