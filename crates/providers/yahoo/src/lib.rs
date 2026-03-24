@@ -981,11 +981,9 @@ fn numeric(value: Option<&NumericField>) -> Option<f64> {
 
 fn normalize_market_phase(value: &str) -> String {
     match value {
-        "PRE" | "PREPRE" => "Pre Market".to_string(),
-        "POST" | "POSTPOST" => "Post Market".to_string(),
+        "PRE" => "Pre Market".to_string(),
         "REGULAR" => "Regular Market".to_string(),
-        "CLOSED" => "Closed".to_string(),
-        other => other.replace('_', " "),
+        _ => "Closed".to_string(),
     }
 }
 
@@ -1004,9 +1002,6 @@ fn infer_market_phase(periods: Option<&CurrentTradingPeriod>) -> String {
     if now >= periods.pre.start && now <= periods.pre.end {
         return "Pre Market".to_string();
     }
-    if now >= periods.post.start && now <= periods.post.end {
-        return "Post Market".to_string();
-    }
     "Closed".to_string()
 }
 
@@ -1016,6 +1011,7 @@ mod tests {
         ChartIndicators, ChartMeta, ChartQuoteSeries, ChartResult, CurrentTradingPeriod,
         PROVIDER_ID, PersistedYahooSession, TradingPeriod, YahooFinanceClient,
         build_consent_form_body, decode_html_entities, derive_chart_metrics,
+        normalize_market_phase,
     };
     use async_trait::async_trait;
     use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
@@ -1137,6 +1133,16 @@ mod tests {
         assert_eq!(derived.regular_market_volume, Some(70.0));
     }
 
+    #[test]
+    fn normalizes_only_true_pre_market_as_pre_market() {
+        assert_eq!(normalize_market_phase("REGULAR"), "Regular Market");
+        assert_eq!(normalize_market_phase("PRE"), "Pre Market");
+        assert_eq!(normalize_market_phase("PREPRE"), "Closed");
+        assert_eq!(normalize_market_phase("POST"), "Closed");
+        assert_eq!(normalize_market_phase("POSTPOST"), "Closed");
+        assert_eq!(normalize_market_phase("CLOSED"), "Closed");
+    }
+
     struct CountingRepo {
         load_calls: AtomicUsize,
     }
@@ -1242,24 +1248,16 @@ mod tests {
                     "pre-market quote should include a pre-market change percent"
                 );
             }
-            "Post Market" => {
+            "Closed" => {
                 assert!(
-                    quote.post_market_price.is_some(),
-                    "post-market quote should include a post-market price"
-                );
-                assert!(
-                    quote.post_market_change.is_some(),
-                    "post-market quote should include a post-market change"
-                );
-                assert!(
-                    quote.post_market_change_percent.is_some(),
-                    "post-market quote should include a post-market change percent"
+                    quote.post_market_price.is_some() || quote.regular_market_price.is_some(),
+                    "closed quote should include a post-market or regular price"
                 );
             }
             _ => {
                 assert!(
                     quote.regular_market_price.is_some(),
-                    "regular or closed quote should still include a regular price"
+                    "regular quote should still include a regular price"
                 );
             }
         }
@@ -1306,24 +1304,16 @@ mod tests {
                     "pre-market ETF quotes should include a pre-market change percent"
                 );
             }
-            "Post Market" => {
+            "Closed" => {
                 assert!(
-                    quote.post_market_price.is_some(),
-                    "post-market ETF quotes should include a post-market price"
-                );
-                assert!(
-                    quote.post_market_change.is_some(),
-                    "post-market ETF quotes should include a post-market change"
-                );
-                assert!(
-                    quote.post_market_change_percent.is_some(),
-                    "post-market ETF quotes should include a post-market change percent"
+                    quote.post_market_price.is_some() || quote.regular_market_price.is_some(),
+                    "closed ETF quote should include a post-market or regular price"
                 );
             }
             _ => {
                 assert!(
                     quote.regular_market_price.is_some(),
-                    "regular or closed ETF quote should still include a regular price"
+                    "regular ETF quote should still include a regular price"
                 );
             }
         }
