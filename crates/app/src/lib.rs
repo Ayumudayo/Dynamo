@@ -130,13 +130,18 @@ pub async fn handle_framework_event(
     match event {
         FullEvent::CacheReady { guilds } => {
             for guild_id in guilds {
-                dynamo_module_invite::preload_guild_cache(ctx, data, *guild_id).await?;
+                dynamo_module_invite::events::preload_guild_cache(ctx, data, *guild_id).await?;
             }
         }
         FullEvent::GuildMemberAddition { new_member } => {
             let inviter_data =
-                dynamo_module_invite::track_joined_member(ctx, data, new_member).await?;
-            dynamo_module_greeting::send_welcome(ctx, data, new_member, inviter_data.as_ref())
+                dynamo_module_invite::events::track_joined_member(ctx, data, new_member).await?;
+            dynamo_module_greeting::events::send_welcome(
+                ctx,
+                data,
+                new_member,
+                inviter_data.as_ref(),
+            )
                 .await?;
         }
         FullEvent::GuildMemberRemoval {
@@ -145,8 +150,9 @@ pub async fn handle_framework_event(
             member_data_if_available,
         } => {
             let inviter_data =
-                dynamo_module_invite::track_left_member(ctx, data, *guild_id, user).await?;
-            dynamo_module_greeting::send_farewell(
+                dynamo_module_invite::events::track_left_member(ctx, data, *guild_id, user)
+                    .await?;
+            dynamo_module_greeting::events::send_farewell(
                 ctx,
                 data,
                 *guild_id,
@@ -157,34 +163,35 @@ pub async fn handle_framework_event(
             .await?;
         }
         FullEvent::InviteCreate { data: invite } => {
-            dynamo_module_invite::handle_invite_create(ctx, data, invite).await?;
+            dynamo_module_invite::events::handle_invite_create(ctx, data, invite).await?;
         }
         FullEvent::InviteDelete { data: invite } => {
-            dynamo_module_invite::handle_invite_delete(ctx, data, invite).await?;
+            dynamo_module_invite::events::handle_invite_delete(ctx, data, invite).await?;
         }
         FullEvent::Message { new_message } => {
-            dynamo_module_stats::handle_message(ctx, data, new_message).await?;
+            dynamo_module_stats::events::handle_message(ctx, data, new_message).await?;
         }
         FullEvent::VoiceStateUpdate { old, new } => {
-            dynamo_module_stats::handle_voice_state_update(ctx, data, old.as_ref(), new).await?;
+            dynamo_module_stats::events::handle_voice_state_update(ctx, data, old.as_ref(), new)
+                .await?;
         }
         _ => {}
     }
 
     if let FullEvent::InteractionCreate { interaction } = event {
-        if dynamo_module_stock::handle_component_interaction(ctx, interaction).await? {
+        if dynamo_module_stock::interactions::handle(ctx, interaction).await? {
             return Ok(());
         }
-        if dynamo_module_suggestion::handle_interaction(ctx, interaction, data).await? {
+        if dynamo_module_suggestion::interactions::handle(ctx, interaction, data).await? {
             return Ok(());
         }
-        if dynamo_module_ticket::handle_interaction(ctx, interaction, data).await? {
+        if dynamo_module_ticket::interactions::handle(ctx, interaction, data).await? {
             return Ok(());
         }
-        if dynamo_module_giveaway::handle_interaction(ctx, interaction, data).await? {
+        if dynamo_module_giveaway::interactions::handle(ctx, interaction, data).await? {
             return Ok(());
         }
-        dynamo_module_stats::handle_interaction(ctx, data, interaction).await?;
+        dynamo_module_stats::events::handle_interaction(ctx, data, interaction).await?;
     }
 
     Ok(())
@@ -298,5 +305,25 @@ mod tests {
                 entry.command.id
             );
         }
+    }
+
+    #[test]
+    fn module_hook_namespaces_are_exposed() {
+        let _ = dynamo_module_stock::interactions::handle;
+        let _ = dynamo_module_ticket::interactions::handle;
+        let _ = dynamo_module_suggestion::interactions::handle;
+        let _ = dynamo_module_giveaway::interactions::handle;
+
+        let _ = dynamo_module_invite::events::preload_guild_cache;
+        let _ = dynamo_module_invite::events::handle_invite_create;
+        let _ = dynamo_module_invite::events::handle_invite_delete;
+        let _ = dynamo_module_invite::events::track_joined_member;
+        let _ = dynamo_module_invite::events::track_left_member;
+
+        let _ = dynamo_module_greeting::events::send_welcome;
+        let _ = dynamo_module_greeting::events::send_farewell;
+        let _ = dynamo_module_stats::events::handle_message;
+        let _ = dynamo_module_stats::events::handle_interaction;
+        let _ = dynamo_module_stats::events::handle_voice_state_update;
     }
 }
