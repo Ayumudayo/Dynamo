@@ -223,10 +223,17 @@ impl CachedAccessToken {
 
 fn build_oauth_error(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
     if let Ok(error) = serde_json::from_str::<OAuth2ErrorResponse>(body) {
+        if let Some(description) = error.error_description.as_deref() {
+            return anyhow!(
+                "Toss OAuth token request failed with status {status} (error: {}, description: {})",
+                error.error,
+                description,
+            );
+        }
+
         return anyhow!(
-            "Toss OAuth token request failed with status {status} (error: {}, description: {})",
+            "Toss OAuth token request failed with status {status} (error: {})",
             error.error,
-            error.error_description,
         );
     }
 
@@ -459,6 +466,21 @@ mod tests {
         assert!(error.contains("Client authentication failed."));
         assert!(!error.contains("client-secret"));
         assert!(!error.contains("access_token"));
+    }
+
+    #[test]
+    fn oauth_standard_error_without_description_avoids_printing_none() {
+        let error = build_oauth_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{
+                "error": "invalid_client"
+            }"#,
+        )
+        .to_string();
+
+        assert!(error.contains("invalid_client"));
+        assert!(!error.contains("description"));
+        assert!(!error.contains("None"));
     }
 
     #[test]

@@ -18,7 +18,7 @@ pub struct OAuth2TokenResponse {
 pub struct OAuth2ErrorResponse {
     pub error: String,
     #[serde(rename = "error_description")]
-    pub error_description: String,
+    pub error_description: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -110,7 +110,23 @@ mod tests {
         .unwrap();
 
         assert_eq!(response.error, "invalid_client");
-        assert_eq!(response.error_description, "Client authentication failed.");
+        assert_eq!(
+            response.error_description.as_deref(),
+            Some("Client authentication failed.")
+        );
+    }
+
+    #[test]
+    fn oauth_error_response_allows_missing_description() {
+        let response = serde_json::from_str::<OAuth2ErrorResponse>(
+            r#"{
+                "error": "invalid_client"
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.error, "invalid_client");
+        assert_eq!(response.error_description, None);
     }
 
     #[test]

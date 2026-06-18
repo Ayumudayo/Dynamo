@@ -112,7 +112,7 @@ fn retry_delay_for_too_many_requests_at(
     jitter_percent: u32,
 ) -> Duration {
     retry_after_delay(headers, now)
-        .or_else(|| x_rate_limit_reset_delay(headers, now))
+        .or_else(|| x_rate_limit_reset_delay(headers))
         .unwrap_or_else(|| backoff_with_jitter(group, attempt, jitter_percent))
 }
 
@@ -130,7 +130,7 @@ fn retry_after_delay(headers: &HeaderMap, now: DateTime<Utc>) -> Option<Duration
     positive_delay_from(retry_at.with_timezone(&Utc), now)
 }
 
-fn x_rate_limit_reset_delay(headers: &HeaderMap, now: DateTime<Utc>) -> Option<Duration> {
+fn x_rate_limit_reset_delay(headers: &HeaderMap) -> Option<Duration> {
     let value = headers
         .get(HeaderName::from_static("x-ratelimit-reset"))?
         .to_str()
@@ -140,9 +140,8 @@ fn x_rate_limit_reset_delay(headers: &HeaderMap, now: DateTime<Utc>) -> Option<D
         return None;
     }
 
-    let epoch_seconds = value.parse::<i64>().ok()?;
-    let reset_at = DateTime::<Utc>::from_timestamp(epoch_seconds, 0)?;
-    positive_delay_from(reset_at, now)
+    let refill_seconds = value.parse::<u64>().ok()?;
+    Some(Duration::from_secs(refill_seconds))
 }
 
 fn positive_delay_from(target: DateTime<Utc>, now: DateTime<Utc>) -> Option<Duration> {
@@ -180,7 +179,7 @@ mod tests {
         headers.insert(RETRY_AFTER, HeaderValue::from_static("7"));
         headers.insert(
             HeaderName::from_static("x-ratelimit-reset"),
-            HeaderValue::from_static("1700000015"),
+            HeaderValue::from_static("5"),
         );
 
         let delay = retry_delay_for_too_many_requests_at(
@@ -196,18 +195,17 @@ mod tests {
 
     #[test]
     fn rate_limit_retry_delay_uses_x_rate_limit_reset_when_retry_after_missing() {
-        let now = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
         let mut headers = HeaderMap::new();
         headers.insert(
             HeaderName::from_static("x-ratelimit-reset"),
-            HeaderValue::from_static("1700000005"),
+            HeaderValue::from_static("5"),
         );
 
         let delay = retry_delay_for_too_many_requests_at(
             TossRateLimitGroup::MarketData,
             &headers,
             2,
-            now,
+            DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap(),
             100,
         );
 
