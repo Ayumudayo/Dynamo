@@ -34,4 +34,6 @@ dynamo-provider-google-finance = { path = "../providers/google-finance" }
 dynamo-persistence-mongo = { path = "../persistence-mongo" }
 dynamo-provider-yahoo = { path = "../providers/yahoo" }
 poise.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
 tracing.workspace = true

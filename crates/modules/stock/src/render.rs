@@ -1,6 +1,6 @@
 use crate::constants::{
-    BOT_EMBED_COLOR, DEFAULT_EMBED_COLOR, DOWNWARD_EMBED_COLOR, DOWN_EMOJI,
-    STOCK_THUMBNAIL_URL, UPWARD_EMBED_COLOR, UP_EMOJI,
+    BOT_EMBED_COLOR, DEFAULT_EMBED_COLOR, DOWN_EMOJI, DOWNWARD_EMBED_COLOR, STOCK_THUMBNAIL_URL,
+    UP_EMOJI, UPWARD_EMBED_COLOR,
 };
 use dynamo_domain_stock::StockQuote;
 use dynamo_runtime_api::Error;
@@ -70,13 +70,13 @@ fn representative_phase(snapshots: &[Result<StockQuote, String>]) -> String {
     let valid = snapshots.iter().filter_map(|entry| entry.as_ref().ok());
     let phases = valid.map(|quote| quote.phase.as_str()).collect::<Vec<_>>();
 
-    if phases.iter().any(|phase| *phase == "Regular Market") {
+    if phases.contains(&"Regular Market") {
         return "Regular Market".to_string();
     }
-    if phases.iter().any(|phase| *phase == "Pre Market") {
+    if phases.contains(&"Pre Market") {
         return "Pre Market".to_string();
     }
-    if phases.iter().any(|phase| *phase == "Closed") {
+    if phases.contains(&"Closed") {
         return "Closed".to_string();
     }
 
@@ -269,8 +269,12 @@ pub(crate) fn primary_stock_market_data(snapshot: &StockQuote) -> CurrentMarketD
 
 pub(crate) fn stock_embed_color_change(snapshot: &StockQuote) -> Option<f64> {
     match snapshot.phase.as_str() {
-        "Pre Market" => snapshot.pre_market_change.or(snapshot.regular_market_change),
-        "Closed" => snapshot.post_market_change.or(snapshot.regular_market_change),
+        "Pre Market" => snapshot
+            .pre_market_change
+            .or(snapshot.regular_market_change),
+        "Closed" => snapshot
+            .post_market_change
+            .or(snapshot.regular_market_change),
         _ => snapshot.regular_market_change,
     }
 }

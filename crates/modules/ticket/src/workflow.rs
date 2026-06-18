@@ -34,7 +34,12 @@ pub(crate) async fn create_ticket_channel(
     }
 
     let category = requested_category
-        .and_then(|name| settings.categories.iter().find(|category| category.name == name))
+        .and_then(|name| {
+            settings
+                .categories
+                .iter()
+                .find(|category| category.name == name)
+        })
         .or_else(|| settings.categories.first());
     let category_name = category
         .map(|value| value.name.clone())
@@ -81,7 +86,11 @@ pub(crate) async fn create_ticket_channel(
             ctx,
             CreateChannel::new(format!("ticket-{ticket_number}"))
                 .kind(ChannelType::Text)
-                .topic(format!("ticket|{}|{}", component.user.id.get(), category_name))
+                .topic(format!(
+                    "ticket|{}|{}",
+                    component.user.id.get(),
+                    category_name
+                ))
                 .permissions(permission_overwrites),
         )
         .await?;

@@ -89,9 +89,7 @@ pub(crate) async fn load_settings(ctx: Context<'_>) -> Result<GameInfoSettings, 
     Ok(settings)
 }
 
-pub(crate) fn build_referral_reply(
-    settings: &GameInfoSettings,
-) -> poise::CreateReply {
+pub(crate) fn build_referral_reply(settings: &GameInfoSettings) -> poise::CreateReply {
     use poise::serenity_prelude::{CreateActionRow, CreateButton, CreateEmbed, Timestamp};
 
     let embed = CreateEmbed::new()
@@ -114,7 +112,8 @@ pub(crate) fn build_referral_reply(
     }
 
     if buttons.is_empty() {
-        poise::CreateReply::default().embed(embed.description("No invite links are currently configured."))
+        poise::CreateReply::default()
+            .embed(embed.description("No invite links are currently configured."))
     } else {
         poise::CreateReply::default()
             .embed(embed)

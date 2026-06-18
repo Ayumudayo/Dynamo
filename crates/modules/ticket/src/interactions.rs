@@ -1,8 +1,6 @@
 use crate::{
     channels::current_guild_channel,
-    constants::{
-        TICKET_CATEGORY_SELECT_ID, TICKET_CLOSE_BUTTON_ID, TICKET_CREATE_BUTTON_ID,
-    },
+    constants::{TICKET_CATEGORY_SELECT_ID, TICKET_CLOSE_BUTTON_ID, TICKET_CREATE_BUTTON_ID},
     settings::load_settings,
     workflow::{close_ticket_channel, create_ticket_channel},
 };
@@ -70,7 +68,10 @@ async fn handle_ticket_open(
     }
 
     component.defer_ephemeral(ctx).await?;
-    let category_name = settings.categories.first().map(|category| category.name.clone());
+    let category_name = settings
+        .categories
+        .first()
+        .map(|category| category.name.clone());
     let result = create_ticket_channel(ctx, component, &settings, category_name.as_deref()).await?;
     component
         .edit_response(ctx, EditInteractionResponse::new().content(result))

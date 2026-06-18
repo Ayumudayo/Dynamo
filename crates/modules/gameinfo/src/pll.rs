@@ -202,10 +202,10 @@ pub(crate) fn build_pll_embed(info: &PllInfo) -> CreateEmbed {
             false,
         );
 
-    if let Some(description) = info.translated_description.as_deref() {
-        if !description.trim().is_empty() {
-            embed = embed.description(description);
-        }
+    if let Some(description) = info.translated_description.as_deref()
+        && !description.trim().is_empty()
+    {
+        embed = embed.description(description);
     }
 
     if !info.translated_contents.is_empty() {
@@ -381,7 +381,7 @@ pub(crate) fn extract_pll_start(body_text: &str) -> Result<Option<i64>, Error> {
 
     let date = captures
         .get(1)
-        .map(|value| value.as_str().replace(|c| c == '（' || c == '）', " "))
+        .map(|value| value.as_str().replace(['（', '）'], " "))
         .unwrap_or_default();
     let cleaned_date = date.split_whitespace().next().unwrap_or_default();
     let time = captures

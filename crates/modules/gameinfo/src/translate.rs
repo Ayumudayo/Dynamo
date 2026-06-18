@@ -65,7 +65,9 @@ pub(crate) async fn translate_text_list(client: &Client, texts: &[String]) -> Ve
 
 async fn translate_texts(client: &Client, texts: &[String]) -> Result<Vec<String>, Error> {
     let Some(key) = translate_api_key() else {
-        return Err(anyhow::anyhow!("google translate api key is not configured").into());
+        return Err(anyhow::anyhow!(
+            "google translate api key is not configured"
+        ));
     };
 
     let request = TranslateRequest {

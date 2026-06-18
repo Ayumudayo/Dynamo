@@ -70,7 +70,9 @@ async fn handle_refresh_button(
                     ctx,
                     CreateInteractionResponse::Message(
                         CreateInteractionResponseMessage::new()
-                            .content("A refresh restart is already being prepared for this message.")
+                            .content(
+                                "A refresh restart is already being prepared for this message.",
+                            )
                             .ephemeral(true),
                     ),
                 )

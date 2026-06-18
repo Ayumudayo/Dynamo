@@ -1,9 +1,9 @@
 use crate::{
     maintenance::{
-        classify_maintenance_notice, extract_maintenance_summary_ja, format_maintenance_title,
-        parse_maintenance_schedule, trim_maintenance_intro, MaintenanceNoticeKind,
+        MaintenanceNoticeKind, classify_maintenance_notice, extract_maintenance_summary_ja,
+        format_maintenance_title, parse_maintenance_schedule, trim_maintenance_intro,
     },
-    pll::{extract_pll_start, generate_pll_title, is_valid_pll_schedule, PllInfo},
+    pll::{PllInfo, extract_pll_start, generate_pll_title, is_valid_pll_schedule},
 };
 
 #[test]
@@ -17,7 +17,11 @@ fn formats_same_day_maintenance_window() {
 #[test]
 fn formats_emergency_maintenance_window() {
     assert_eq!(
-        format_maintenance_title(1_750_104_000, 1_750_154_400, MaintenanceNoticeKind::Emergency,),
+        format_maintenance_title(
+            1_750_104_000,
+            1_750_154_400,
+            MaintenanceNoticeKind::Emergency,
+        ),
         "전 월드 긴급 유지보수 작업 (6/17)"
     );
 }

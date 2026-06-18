@@ -415,14 +415,14 @@ async fn resolve_inviter(
         });
     }
 
-    if let Ok(user_id) = inviter_key.parse::<u64>() {
-        if let Ok(user) = UserId::new(user_id).to_user(ctx).await {
-            return Ok(InviterRenderData {
-                name: user.name.clone(),
-                tag: user.tag(),
-                invites: inviter_data.invite_data.effective(),
-            });
-        }
+    if let Ok(user_id) = inviter_key.parse::<u64>()
+        && let Ok(user) = UserId::new(user_id).to_user(ctx).await
+    {
+        return Ok(InviterRenderData {
+            name: user.name.clone(),
+            tag: user.tag(),
+            invites: inviter_data.invite_data.effective(),
+        });
     }
 
     Ok(InviterRenderData {

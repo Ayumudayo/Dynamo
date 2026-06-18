@@ -736,6 +736,8 @@ dependencies = [
  "dynamo-services-api",
  "dynamo-settings",
  "poise",
+ "serde_json",
+ "sha2",
  "tracing",
 ]
 
@@ -810,7 +812,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "url",
 ]
 
@@ -1070,6 +1071,7 @@ dependencies = [
  "dynamo-settings",
  "poise",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1131,6 +1133,7 @@ dependencies = [
  "dynamo-domain-currency",
  "dynamo-repositories",
  "dynamo-service-exchange",
+ "futures-util",
  "reqwest",
  "scraper",
  "serde",
@@ -1149,6 +1152,7 @@ dependencies = [
  "dynamo-persistence-mongo",
  "dynamo-repositories",
  "dynamo-service-stock",
+ "futures-util",
  "reqwest",
  "scraper",
  "serde",

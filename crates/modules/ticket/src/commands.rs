@@ -51,8 +51,12 @@ async fn ticket_setup(
         .await?
         .denial_reason
     {
-        ctx.send(poise::CreateReply::default().content(reason).ephemeral(true))
-            .await?;
+        ctx.send(
+            poise::CreateReply::default()
+                .content(reason)
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
 
@@ -108,8 +112,12 @@ async fn ticket_log(
         None => "Ticket log channel disabled.".to_string(),
     };
 
-    ctx.send(poise::CreateReply::default().content(message).ephemeral(true))
-        .await?;
+    ctx.send(
+        poise::CreateReply::default()
+            .content(message)
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }
 
@@ -160,7 +168,8 @@ async fn ticket_close(
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
-    let Some(guild_channel) = current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
+    let Some(guild_channel) =
+        current_guild_channel(ctx.serenity_context(), ctx.channel_id()).await?
     else {
         ctx.send(
             poise::CreateReply::default()
@@ -191,8 +200,12 @@ async fn ticket_close(
     )
     .await?;
 
-    ctx.send(poise::CreateReply::default().content(result).ephemeral(true))
-        .await?;
+    ctx.send(
+        poise::CreateReply::default()
+            .content(result)
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }
 
@@ -377,7 +390,7 @@ pub(crate) fn extract_target_id(input: &str) -> Result<u64, Error> {
         .trim_start_matches("&")
         .trim_start_matches("!")
         .trim_end_matches('>');
-    Ok(digits
+    digits
         .parse::<u64>()
-        .map_err(|error| anyhow::anyhow!("Invalid user/role identifier `{input}`: {error}"))?)
+        .map_err(|error| anyhow::anyhow!("Invalid user/role identifier `{input}`: {error}"))
 }

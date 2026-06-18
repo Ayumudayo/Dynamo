@@ -202,7 +202,7 @@ fn latest_close_in_period(
                 .then_some(*close)
                 .flatten()
         })
-        .last()
+        .next_back()
 }
 
 fn max_in_period(
@@ -245,11 +245,12 @@ fn sum_in_period(
     let mut total = 0.0;
     let mut count = 0usize;
     for (timestamp, value) in timestamps.iter().zip(values.iter()) {
-        if *timestamp >= period.start && *timestamp <= period.end {
-            if let Some(value) = value {
-                total += *value;
-                count += 1;
-            }
+        if *timestamp >= period.start
+            && *timestamp <= period.end
+            && let Some(value) = value
+        {
+            total += *value;
+            count += 1;
         }
     }
     (count > 0).then_some(total)

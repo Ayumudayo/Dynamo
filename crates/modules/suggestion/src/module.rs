@@ -416,6 +416,7 @@ async fn handle_modal_interaction(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn transition_suggestion(
     ctx: &poise::serenity_prelude::Context,
     data: &AppState,

@@ -167,10 +167,10 @@ pub async fn handle_invite_delete(
     }
 
     let mut cache = invite_cache().write().await;
-    if let Some(guild_cache) = cache.get_mut(&guild_id.get()) {
-        if let Some(invite) = guild_cache.get_mut(&event.code) {
-            invite.deleted_timestamp = Some(now_unix());
-        }
+    if let Some(guild_cache) = cache.get_mut(&guild_id.get())
+        && let Some(invite) = guild_cache.get_mut(&event.code)
+    {
+        invite.deleted_timestamp = Some(now_unix());
     }
 
     Ok(())

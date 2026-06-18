@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Write as _, sync::Arc};
 
 use dynamo_config::OptionalModulesConfig;
 use dynamo_enablement::resolve_command_state;
@@ -17,7 +17,10 @@ use dynamo_service_stock::StockQuoteService;
 use dynamo_services_api::ServiceRegistry;
 use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
+use sha2::{Digest, Sha256};
 use tracing::info;
+
+const APPLICATION_COMMAND_FINGERPRINT_VERSION: &str = "application-command-v1";
 
 pub fn module_registry() -> ModuleRegistry {
     let optional_modules = OptionalModulesConfig::from_env().unwrap_or_default();
@@ -119,7 +122,52 @@ pub fn application_command_fingerprint_for_scope(
 ) -> (String, usize) {
     let commands = create_application_commands_for_scope(deployment, guild);
     let count = commands.len();
-    (format!("{commands:#?}"), count)
+    (application_command_fingerprint(&commands), count)
+}
+
+pub fn application_command_fingerprint(commands: &[CreateCommand]) -> String {
+    let payload =
+        serde_json::to_value(commands).expect("Discord application command payloads serialize");
+    fingerprint_canonical_json_value(payload)
+}
+
+fn fingerprint_canonical_json_value(value: serde_json::Value) -> String {
+    let canonical_value = canonicalize_json_value(value);
+    let canonical_payload =
+        serde_json::to_vec(&canonical_value).expect("canonical command JSON serializes");
+    let digest = Sha256::digest(canonical_payload);
+
+    format!(
+        "{APPLICATION_COMMAND_FINGERPRINT_VERSION}:{}",
+        hex_lower(&digest)
+    )
+}
+
+fn canonicalize_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(canonicalize_json_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, canonicalize_json_value(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 pub async fn handle_framework_event(
@@ -142,7 +190,7 @@ pub async fn handle_framework_event(
                 new_member,
                 inviter_data.as_ref(),
             )
-                .await?;
+            .await?;
         }
         FullEvent::GuildMemberRemoval {
             guild_id,
@@ -150,8 +198,7 @@ pub async fn handle_framework_event(
             member_data_if_available,
         } => {
             let inviter_data =
-                dynamo_module_invite::events::track_left_member(ctx, data, *guild_id, user)
-                    .await?;
+                dynamo_module_invite::events::track_left_member(ctx, data, *guild_id, user).await?;
             dynamo_module_greeting::events::send_farewell(
                 ctx,
                 data,
@@ -271,7 +318,10 @@ fn filter_command_recursive(
 mod tests {
     use dynamo_config::OptionalModulesConfig;
 
-    use super::{module_registry, module_registry_with_optional};
+    use super::{
+        application_command_fingerprint_for_scope, fingerprint_canonical_json_value,
+        module_registry, module_registry_with_optional,
+    };
 
     #[test]
     fn default_registry_commands_have_explicit_descriptions() {
@@ -325,5 +375,48 @@ mod tests {
         let _ = dynamo_module_stats::events::handle_message;
         let _ = dynamo_module_stats::events::handle_interaction;
         let _ = dynamo_module_stats::events::handle_voice_state_update;
+    }
+
+    #[test]
+    fn application_command_fingerprint_has_version_prefix() {
+        let deployment = Default::default();
+
+        let (fingerprint, command_count) =
+            application_command_fingerprint_for_scope(&deployment, None);
+
+        assert!(command_count > 0);
+        assert!(
+            fingerprint.starts_with("application-command-v1:"),
+            "unexpected fingerprint prefix: {fingerprint}"
+        );
+    }
+
+    #[test]
+    fn application_command_fingerprint_is_stable_across_json_object_key_order() {
+        let first = serde_json::json!([
+            {
+                "name": "quote",
+                "description": "Lookup a quote",
+                "name_localizations": {
+                    "fr": "Cours",
+                    "en-US": "Quote"
+                }
+            }
+        ]);
+        let second = serde_json::json!([
+            {
+                "name_localizations": {
+                    "en-US": "Quote",
+                    "fr": "Cours"
+                },
+                "description": "Lookup a quote",
+                "name": "quote"
+            }
+        ]);
+
+        assert_eq!(
+            fingerprint_canonical_json_value(first),
+            fingerprint_canonical_json_value(second)
+        );
     }
 }

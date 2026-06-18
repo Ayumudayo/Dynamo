@@ -11,6 +11,7 @@ async-trait.workspace = true
 dynamo-domain-stock = { path = "../../domain-stock" }
 dynamo-repositories = { path = "../../repositories" }
 dynamo-service-stock = { path = "../../service-stock" }
+futures-util.workspace = true
 reqwest.workspace = true
 scraper.workspace = true
 serde.workspace = true

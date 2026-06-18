@@ -3,12 +3,14 @@ use std::{
     env,
     net::SocketAddr,
     sync::Arc,
+    time::Instant,
 };
 
 use axum::{
     Json, Router,
-    extract::{Path, Query, State},
-    http::StatusCode,
+    extract::{Path, Query, Request, State},
+    http::{HeaderMap, StatusCode, Uri},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch, post},
 };
@@ -22,7 +24,7 @@ use dynamo_module_kit::{
 };
 use dynamo_observability::{
     CatalogStartupSummary, StartupPhase, StartupReport, StartupStatus, catalog_startup_summary,
-    format_preview_kv_list, format_preview_list,
+    format_preview_kv_list, format_preview_list, init_tracing,
 };
 use dynamo_ops::{
     COMMAND_SYNC_PROVIDER_ID, CommandSyncResult, CommandSyncScopeState, CommandSyncStateStore,
@@ -121,7 +123,8 @@ async fn main() -> anyhow::Result<()> {
             "/api/guild-command-sync/{guild_id}",
             post(post_guild_command_sync),
         )
-        .with_state(state.clone());
+        .with_state(state.clone())
+        .layer(middleware::from_fn(log_request));
 
     let address = SocketAddr::new(state.config.host, state.config.port);
     let listener = tokio::net::TcpListener::bind(address).await?;
@@ -972,10 +975,13 @@ async fn deployment_page(
         _ => overview_panel.as_str(),
     };
     let content = format!(
-        "{overview}{page_tabs}{active_section}{module_modals}{command_modals}<script>{script}</script>",
-        overview = overview,
-        page_tabs = render_section_tabs("/deployment", active_tab),
-        active_section = active_section,
+        "{}{module_modals}{command_modals}<script>{script}</script>",
+        render_dashboard_page_shell(
+            &overview,
+            &render_section_tabs("/deployment", active_tab),
+            active_section,
+            active_tab,
+        ),
         module_modals = module_modals,
         command_modals = command_modals,
         script = dashboard_script(),
@@ -1157,25 +1163,29 @@ async fn guild_page(
         "logs" => logs_section.as_str(),
         _ => overview_panel.as_str(),
     };
+    let overview = render_overview_section(
+        &card.name,
+        "Guild-scoped module and command controls for this server.",
+        &[
+            (
+                "Modules Enabled",
+                count_enabled_modules(&resolved_states).to_string(),
+            ),
+            (
+                "Commands Enabled",
+                count_enabled_commands(&resolved_command_states).to_string(),
+            ),
+            ("Guild ID", guild_id.to_string()),
+        ],
+    );
     let content = format!(
-        "{overview}{page_tabs}{active_section}{module_modals}{command_modals}<script>{script}</script>",
-        overview = render_overview_section(
-            &card.name,
-            "Guild-scoped module and command controls for this server.",
-            &[
-                (
-                    "Modules Enabled",
-                    count_enabled_modules(&resolved_states).to_string()
-                ),
-                (
-                    "Commands Enabled",
-                    count_enabled_commands(&resolved_command_states).to_string()
-                ),
-                ("Guild ID", guild_id.to_string()),
-            ],
+        "{}{module_modals}{command_modals}<script>{script}</script>",
+        render_dashboard_page_shell(
+            &overview,
+            &render_section_tabs(&format!("/guild/{guild_id}"), active_tab),
+            active_section,
+            active_tab,
         ),
-        page_tabs = render_section_tabs(&format!("/guild/{guild_id}"), active_tab),
-        active_section = active_section,
         module_modals = module_modals,
         command_modals = command_modals,
         script = dashboard_script(),
@@ -1733,10 +1743,10 @@ fn render_section_tabs(base_path: &str, active_tab: &str) -> String {
     ]
     .into_iter()
     .map(|(tab, label)| {
+        let href = format!("{base_path}{}", page_query_for_tab(tab));
         format!(
             "<a class=\"tab-button{}\" data-testid=\"page-tab-{tab}\" href=\"{href}\">{label}</a>",
             if active_tab == tab { " active" } else { "" },
-            href = format!("{base_path}{}", page_query_for_tab(tab)),
             label = escape_html(label),
         )
     })
@@ -1880,12 +1890,20 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .pill-success { color: #bbf7d0; background: rgba(72, 229, 178, 0.14); }
 .pill-warn { color: #fdba74; background: rgba(249, 115, 22, 0.12); }
 .toolbar-panel, .section-block { margin-bottom: 16px; }
+.dashboard-page-shell { display: grid; gap: 0; }
+.dashboard-page-shell-task-first { display: flex; flex-direction: column; }
+.dashboard-page-shell-task-first .dashboard-page-overview { order: 1; }
+.dashboard-page-shell-task-first .dashboard-page-tabs { order: 2; }
+.dashboard-page-shell-task-first .dashboard-page-active { order: 3; }
+.dashboard-page-overview, .dashboard-page-tabs, .dashboard-page-active { min-width: 0; }
 .toolbar { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
-.toolbar-search { max-width: 320px; margin: 0; }
-.toolbar-select { width: 180px; margin: 0; }
+.toolbar-search { width: min(100%, 320px); max-width: 320px; margin: 0; }
+.toolbar-select { width: min(100%, 180px); margin: 0; }
 .compact-toolbar { justify-content: flex-start; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
 .compact-search { max-width: 240px; height: 40px; padding: 10px 12px; }
-.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; }
+.section-heading { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.section-heading > div { min-width: 0; flex: 1 1 220px; }
+.section-heading .toolbar-search { flex: 1 1 220px; }
 .compact-heading { margin-bottom: 12px; }
 .module-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .compact-module-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -1942,7 +1960,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .toggle-switch input:checked + .toggle-slider::after { transform: translateX(20px); background: var(--success); }
 .settings-modal-overlay { position: fixed; inset: 0; background: rgba(7, 9, 14, 0.78); display: grid; place-items: center; padding: 18px; z-index: 50; }
 .settings-modal-overlay[hidden] { display: none !important; }
-.settings-modal { width: min(640px, 100%); max-height: min(82vh, 860px); overflow: auto; background: #11151e; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); }
+.settings-modal { width: min(640px, calc(100vw - 24px)); max-width: 100%; max-height: min(82vh, 860px); overflow: auto; background: #11151e; border: 1px solid rgba(255,255,255,0.08); border-radius: 18px; box-shadow: 0 30px 80px rgba(0,0,0,0.45); outline: none; }
 .settings-modal-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 14px 16px 10px; position: sticky; top: 0; background: #11151e; z-index: 2; }
 .settings-modal-body { padding: 0 16px 16px; }
 .modal-close { width: auto; min-width: 40px; padding: 8px 12px; font-size: 24px; line-height: 1; background: transparent; color: var(--text); }
@@ -1983,6 +2001,16 @@ fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; paddin
 .logs-table th, .logs-table td { text-align: left; padding: 10px 12px; border-bottom: 1px solid rgba(255,255,255,0.06); vertical-align: top; font-size: 0.9rem; }
 .logs-table th { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 .logs-table tbody tr:hover { background: rgba(255,255,255,0.02); }
+.logs-mobile-list { display: none; gap: 10px; }
+.audit-log-card { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; background: var(--panel-strong); padding: 12px; }
+.audit-log-card-head { display: flex; align-items: start; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+.audit-log-card-time { margin: 0; color: var(--muted); font-size: 12px; letter-spacing: 0.04em; }
+.audit-log-card-fields { display: grid; gap: 10px; margin: 0; }
+.audit-log-card-field { display: grid; gap: 4px; }
+.audit-log-card-field-summary { padding-top: 4px; border-top: 1px solid rgba(255,255,255,0.06); }
+.audit-log-card-field dt { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; }
+.audit-log-card-field dd { margin: 0; color: var(--text); line-height: 1.5; overflow-wrap: anywhere; }
+.logs-mobile-empty { color: var(--muted); text-align: center; padding: 18px 12px; border: 1px dashed rgba(255,255,255,0.08); border-radius: 14px; }
 .empty-cell { color: var(--muted); text-align: center; padding: 18px 12px !important; }
 .logs-pagination { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 10px; }
 .page-count { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
@@ -2002,6 +2030,27 @@ a { color: #ff6b87; }
 @media (max-width: 820px) {
   .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid, .compact-module-grid, .compact-command-grid { grid-template-columns: 1fr; }
   .settings-modal { width: min(96vw, 640px); }
+  .section-heading { align-items: stretch; }
+  .section-heading .toolbar-search, .section-heading .compact-search { max-width: none; width: 100%; }
+  .dashboard-page-shell-task-first { display: flex; flex-direction: column; }
+  .dashboard-page-shell-task-first .dashboard-page-tabs { order: 1; }
+  .dashboard-page-shell-task-first .dashboard-page-active { order: 2; }
+  .dashboard-page-shell-task-first .dashboard-page-overview { order: 3; }
+  .dashboard-page-shell-task-first .dashboard-page-overview .hero { padding: 16px; margin-top: 8px; }
+  .dashboard-page-shell-task-first .dashboard-page-overview .hero h1 { font-size: 1.35rem; }
+  .dashboard-page-shell-task-first .dashboard-page-overview .hero .lede { font-size: 0.92rem; }
+  .logs-panel { overflow-x: visible; }
+  .logs-table { display: none; }
+  .logs-mobile-list { display: grid; }
+  .logs-pagination { flex-wrap: wrap; }
+}
+@media (max-width: 560px) {
+  .settings-modal-overlay { padding: 12px; align-items: start; overflow-y: auto; }
+  .settings-modal-head { align-items: start; }
+  .toggle-field { flex-direction: column; }
+  .modal-actions { flex-direction: column-reverse; align-items: stretch; }
+  .modal-actions .button { width: 100%; }
+  .modal-status { margin-right: 0; min-height: 18px; }
 }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
@@ -2327,7 +2376,7 @@ fn render_guild_command_modals(
 
 fn render_settings_modal(modal_id: &str, title: &str, body: &str) -> String {
     format!(
-        "<div id=\"{modal_id}\" class=\"settings-modal-overlay\" data-testid=\"settings-modal-{modal_testid}\" hidden onclick=\"dismissSettingsModal(event, '{modal_id}')\"><div class=\"settings-modal\" onclick=\"event.stopPropagation()\"><div class=\"settings-modal-head\"><div><p class=\"eyebrow\">Settings</p><h3 title=\"{title}\">{title}</h3></div><button class=\"modal-close\" data-testid=\"modal-close-{modal_testid}\" type=\"button\" onclick=\"closeSettingsModal('{modal_id}')\">×</button></div><div class=\"settings-modal-body\">{body}</div></div></div>",
+        "<div id=\"{modal_id}\" class=\"settings-modal-overlay\" data-testid=\"settings-modal-{modal_testid}\" hidden onclick=\"dismissSettingsModal(event, '{modal_id}')\"><div class=\"settings-modal\" data-modal-root role=\"dialog\" aria-modal=\"true\" aria-labelledby=\"modal-title-{modal_id}\" tabindex=\"-1\" onclick=\"event.stopPropagation()\"><div class=\"settings-modal-head\"><div><p class=\"eyebrow\">Settings</p><h3 id=\"modal-title-{modal_id}\" title=\"{title}\">{title}</h3></div><button class=\"modal-close\" data-testid=\"modal-close-{modal_testid}\" type=\"button\" aria-label=\"Close settings\" onclick=\"closeSettingsModal('{modal_id}')\">×</button></div><div class=\"settings-modal-body\">{body}</div></div></div>",
         modal_id = modal_id,
         modal_testid = status_key(modal_id),
         title = escape_html(title),
@@ -2509,7 +2558,7 @@ fn render_audit_logs_section(
     };
 
     format!(
-        "<section class=\"section-block\" data-testid=\"logs-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Logs</p><h2>Dashboard Audit Trail</h2></div></div><form class=\"toolbar compact-toolbar\" method=\"get\" action=\"{base_path}\"><input type=\"hidden\" name=\"tab\" value=\"logs\" /><select name=\"log_entity\" class=\"toolbar-select\" data-testid=\"logs-entity-filter\"><option value=\"\" {all_entity}>All entities</option><option value=\"module\" {module_selected}>Modules</option><option value=\"command\" {command_selected}>Commands</option></select><select name=\"log_action\" class=\"toolbar-select\" data-testid=\"logs-action-filter\"><option value=\"\" {all_action}>All actions</option><option value=\"toggle\" {toggle_selected}>Toggles</option><option value=\"save_settings\" {save_selected}>Settings saves</option></select><button class=\"button button-secondary button-compact\" type=\"submit\">Apply</button></form><div class=\"panel logs-panel\"><table class=\"logs-table\" data-testid=\"logs-table\"><thead><tr><th>Time</th><th>Actor</th><th>Target</th><th>Action</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table></div><div class=\"logs-pagination\"><span class=\"page-count\">Page {page_number} of {page_total}</span><div class=\"actions compact-actions\">{prev_link}{next_link}</div></div></section>",
+        "<section class=\"section-block\" data-testid=\"logs-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Logs</p><h2>Dashboard Audit Trail</h2></div></div><form class=\"toolbar compact-toolbar\" method=\"get\" action=\"{base_path}\"><input type=\"hidden\" name=\"tab\" value=\"logs\" /><select name=\"log_entity\" class=\"toolbar-select\" data-testid=\"logs-entity-filter\"><option value=\"\" {all_entity}>All entities</option><option value=\"module\" {module_selected}>Modules</option><option value=\"command\" {command_selected}>Commands</option></select><select name=\"log_action\" class=\"toolbar-select\" data-testid=\"logs-action-filter\"><option value=\"\" {all_action}>All actions</option><option value=\"toggle\" {toggle_selected}>Toggles</option><option value=\"save_settings\" {save_selected}>Settings saves</option></select><button class=\"button button-secondary button-compact\" type=\"submit\">Apply</button></form><div class=\"panel logs-panel\"><table class=\"logs-table\" data-testid=\"logs-table\"><thead><tr><th>Time</th><th>Actor</th><th>Target</th><th>Action</th><th>Summary</th></tr></thead><tbody>{rows}</tbody></table><div class=\"logs-mobile-list\" data-testid=\"logs-mobile-list\">{mobile_cards}</div></div><div class=\"logs-pagination\"><span class=\"page-count\">Page {page_number} of {page_total}</span><div class=\"actions compact-actions\">{prev_link}{next_link}</div></div></section>",
         base_path = base_path,
         all_entity = if entity_type.is_none() {
             "selected"
@@ -2538,10 +2587,61 @@ fn render_audit_logs_section(
             ""
         },
         rows = rows,
+        mobile_cards = render_audit_log_mobile_cards(page),
         page_number = page.page,
         page_total = page.total.max(1).div_ceil(page.page_size.max(1)),
         prev_link = prev_link,
         next_link = next_link,
+    )
+}
+
+fn render_audit_log_mobile_cards(page: &DashboardAuditLogPage) -> String {
+    if page.entries.is_empty() {
+        return "<article class=\"logs-mobile-empty\" data-testid=\"logs-mobile-empty\">No dashboard audit events recorded yet.</article>".to_string();
+    }
+
+    page.entries
+        .iter()
+        .enumerate()
+        .map(|(index, entry)| {
+            format!(
+                "<article class=\"audit-log-card\" data-testid=\"audit-log-card-{index}\"><div class=\"audit-log-card-head\"><p class=\"audit-log-card-time\" data-log-field=\"time\">{time}</p><span class=\"pill\" data-log-field=\"action\">{action}</span></div><dl class=\"audit-log-card-fields\"><div class=\"audit-log-card-field\"><dt>Actor</dt><dd data-log-field=\"actor\">{actor}</dd></div><div class=\"audit-log-card-field\"><dt>Target</dt><dd data-log-field=\"target\">{target}</dd></div><div class=\"audit-log-card-field audit-log-card-field-summary\"><dt>Summary</dt><dd data-log-field=\"summary\">{summary}</dd></div></dl></article>",
+                index = index,
+                time = escape_html(&entry.timestamp.format("%Y-%m-%d %H:%M:%S UTC").to_string()),
+                actor = escape_html(&format!("{} ({})", entry.actor_username, entry.actor_user_id)),
+                target = escape_html(&format!(
+                    "{} / {}",
+                    audit_entity_label(entry.entity_type),
+                    entry.entity_id
+                )),
+                action = escape_html(audit_action_label(entry.action)),
+                summary = escape_html(&entry.summary),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+fn render_dashboard_page_shell(
+    overview: &str,
+    page_tabs: &str,
+    active_section: &str,
+    active_tab: &str,
+) -> String {
+    if active_tab == "overview" {
+        return format!(
+            "<div class=\"dashboard-page-shell\"><div class=\"dashboard-page-overview\" data-testid=\"dashboard-page-overview\">{overview}</div><div class=\"dashboard-page-tabs\" data-testid=\"dashboard-page-tabs\">{page_tabs}</div><div class=\"dashboard-page-active\" data-testid=\"dashboard-page-active\">{active_section}</div></div>",
+            overview = overview,
+            page_tabs = page_tabs,
+            active_section = active_section,
+        );
+    }
+
+    format!(
+        "<div class=\"dashboard-page-shell dashboard-page-shell-task-first\"><div class=\"dashboard-page-tabs\" data-testid=\"dashboard-page-tabs\">{page_tabs}</div><div class=\"dashboard-page-active\" data-testid=\"dashboard-page-active\">{active_section}</div><div class=\"dashboard-page-overview\" data-testid=\"dashboard-page-overview\">{overview}</div></div>",
+        page_tabs = page_tabs,
+        active_section = active_section,
+        overview = overview,
     )
 }
 
@@ -2594,7 +2694,7 @@ fn render_module_summary_cards(
         .map(|(entry, resolved)| {
             let toggle = render_module_toggle(scope, entry.module.id, deployment, guild, resolved);
             format!(
-                "<article class=\"panel summary-card module-card\" data-testid=\"module-card-{testid}\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3 title=\"{name}\">{name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"module-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button><span class=\"card-status\" id=\"card-status-module-{testid}\"></span></div></article>",
+                "<article class=\"panel summary-card module-card\" data-testid=\"module-card-{testid}\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3 title=\"{name}\">{name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"module-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}', this)\">Settings</button><span class=\"card-status\" id=\"card-status-module-{testid}\"></span></div></article>",
                 testid = status_key(entry.module.id),
                 data_name = escape_html(&entry.module.display_name.to_ascii_lowercase()),
                 name = escape_html(entry.module.display_name),
@@ -2621,7 +2721,7 @@ fn render_command_summary_cards(
         .map(|(entry, resolved)| {
             let toggle = render_command_toggle(scope, &entry.command.id, deployment, guild, resolved);
             format!(
-                "<article class=\"panel summary-card command-card\" data-testid=\"command-card-{testid}\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3 title=\"{display_name}\">{display_name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"summary-card-subtitle\">{category_label}</div><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"command-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}')\">Settings</button><span class=\"card-status\" id=\"card-status-command-{testid}\"></span></div></article>",
+                "<article class=\"panel summary-card command-card\" data-testid=\"command-card-{testid}\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3 title=\"{display_name}\">{display_name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"summary-card-subtitle\">{category_label}</div><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"command-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}', this)\">Settings</button><span class=\"card-status\" id=\"card-status-command-{testid}\"></span></div></article>",
                 testid = status_key(&entry.command.id),
                 command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
                 category_key = escape_html(&command_category_key(entry)),
@@ -2923,6 +3023,63 @@ async fn healthz() -> impl IntoResponse {
     Json(serde_json::json!({ "status": "ok" }))
 }
 
+async fn log_request(request: Request, next: Next) -> Response {
+    let method = request.method().clone();
+    let path = request_path_for_logging(request.uri()).to_string();
+    let request_id = request_id_for_logging(request.headers());
+    let started = Instant::now();
+
+    let response = next.run(request).await;
+    let status = response.status();
+    let latency_ms = u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX);
+
+    if !request_path_should_be_logged(&path) {
+        return response;
+    }
+
+    if let Some(request_id) = request_id {
+        info!(
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            latency_ms,
+            request_id = %request_id,
+            "dashboard request"
+        );
+    } else {
+        info!(
+            method = %method,
+            path = %path,
+            status = status.as_u16(),
+            latency_ms,
+            "dashboard request"
+        );
+    }
+
+    response
+}
+
+fn request_path_for_logging(uri: &Uri) -> &str {
+    uri.path()
+}
+
+fn request_path_should_be_logged(path: &str) -> bool {
+    path != "/healthz"
+}
+
+fn request_id_for_logging(headers: &HeaderMap) -> Option<String> {
+    const REQUEST_ID_HEADERS: [&str; 2] = ["x-request-id", "x-correlation-id"];
+
+    REQUEST_ID_HEADERS.iter().find_map(|name| {
+        let value = headers.get(*name)?.to_str().ok()?.trim();
+        if value.is_empty() || value.len() > 128 || !value.chars().all(|ch| ch.is_ascii_graphic()) {
+            return None;
+        }
+
+        Some(value.to_string())
+    })
+}
+
 async fn list_modules(
     jar: CookieJar,
     State(state): State<Arc<DashboardState>>,
@@ -2974,16 +3131,6 @@ async fn list_live_module_states(
         "states": resolve_module_states(&state.module_catalog, &deployment_settings, None)
     }))
     .into_response()
-}
-
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stdout)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dynamo_dashboard=info,dynamo_app=info".into()),
-        )
-        .try_init();
 }
 
 async fn require_api_session(
@@ -3703,19 +3850,78 @@ function setInlineStatus(id, message, kind = 'info') {
   target.dataset.kind = kind;
 }
 
-function openSettingsModal(modalId) {
+const MODAL_FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+const settingsModalState = {
+  activeModalId: null,
+  returnFocus: null,
+};
+
+function activeSettingsModal() {
+  if (!settingsModalState.activeModalId) return null;
+  return document.getElementById(settingsModalState.activeModalId);
+}
+
+function anyOpenSettingsModal() {
+  return document.querySelector('.settings-modal-overlay:not([hidden])');
+}
+
+function findModalDialog(modal) {
+  return modal ? modal.querySelector('[data-modal-root]') : null;
+}
+
+function isFocusableVisible(element) {
+  return !!(element.offsetWidth || element.offsetHeight || element.getClientRects().length);
+}
+
+function modalFocusableElements(modal) {
+  const dialog = findModalDialog(modal);
+  if (!dialog) return [];
+  return Array.from(dialog.querySelectorAll(MODAL_FOCUSABLE_SELECTOR)).filter((element) => isFocusableVisible(element));
+}
+
+function focusFirstModalControl(modal) {
+  const dialog = findModalDialog(modal);
+  if (!dialog) return;
+  const focusable = modalFocusableElements(modal);
+  const preferred = focusable.find((element) => element.matches('input, select, textarea, button:not(.modal-close)'));
+  (preferred || focusable[0] || dialog).focus();
+}
+
+function openSettingsModal(modalId, trigger) {
   const modal = document.getElementById(modalId);
   if (!modal) return false;
+  const openModal = anyOpenSettingsModal();
+  if (openModal && openModal !== modal) {
+    openModal.hidden = true;
+  }
+  settingsModalState.activeModalId = modalId;
+  settingsModalState.returnFocus = trigger instanceof HTMLElement
+    ? trigger
+    : document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
   modal.hidden = false;
   document.body.style.overflow = 'hidden';
+  window.requestAnimationFrame(() => focusFirstModalControl(modal));
   return false;
 }
 
 function closeSettingsModal(modalId) {
   const modal = document.getElementById(modalId);
   if (!modal) return false;
+  const wasActive = settingsModalState.activeModalId === modalId;
   modal.hidden = true;
-  document.body.style.overflow = '';
+  if (!anyOpenSettingsModal()) {
+    document.body.style.overflow = '';
+  }
+  if (wasActive) {
+    settingsModalState.activeModalId = null;
+    const returnFocus = settingsModalState.returnFocus;
+    settingsModalState.returnFocus = null;
+    if (returnFocus && typeof returnFocus.focus === 'function') {
+      returnFocus.focus();
+    }
+  }
   return false;
 }
 
@@ -3727,10 +3933,32 @@ function dismissSettingsModal(event, modalId) {
 }
 
 document.addEventListener('keydown', (event) => {
-  if (event.key !== 'Escape') return;
-  const openModal = document.querySelector('.settings-modal-overlay:not([hidden])');
-  if (openModal) {
+  const openModal = activeSettingsModal() || document.querySelector('.settings-modal-overlay:not([hidden])');
+  if (!openModal) return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
     closeSettingsModal(openModal.id);
+    return;
+  }
+  if (event.key !== 'Tab') return;
+
+  const dialog = findModalDialog(openModal);
+  if (!dialog) return;
+  const focusable = modalFocusableElements(openModal);
+  if (!focusable.length) {
+    event.preventDefault();
+    dialog.focus();
+    return;
+  }
+
+  const first = focusable[0];
+  const last = focusable[focusable.length - 1];
+  if (event.shiftKey && document.activeElement === first) {
+    event.preventDefault();
+    last.focus();
+  } else if (!event.shiftKey && document.activeElement === last) {
+    event.preventDefault();
+    first.focus();
   }
 });
 
@@ -3977,8 +4205,11 @@ async function requestGuildCommandSync(guildId) {
 mod tests {
     use super::{
         DashboardGuild, audit_action_label, audit_entity_label, escape_html,
-        render_audit_logs_section, render_field, sanitize_redirect_target, user_can_manage_guild,
+        render_audit_logs_section, render_dashboard_page_shell, render_field,
+        render_settings_modal, request_id_for_logging, request_path_for_logging,
+        request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
     };
+    use axum::http::{HeaderMap, HeaderValue, Uri};
     use dynamo_module_kit::{SettingsField, SettingsFieldKind};
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
@@ -4020,6 +4251,41 @@ mod tests {
             sanitize_redirect_target(Some("//evil.example")),
             "/selector"
         );
+    }
+
+    #[test]
+    fn request_path_for_logging_drops_oauth_callback_query() {
+        let uri: Uri = "/auth/discord/callback?code=secret-code&state=secret-state"
+            .parse()
+            .expect("uri");
+
+        assert_eq!(request_path_for_logging(&uri), "/auth/discord/callback");
+    }
+
+    #[test]
+    fn request_path_logging_skips_health_checks() {
+        assert!(!request_path_should_be_logged("/healthz"));
+        assert!(request_path_should_be_logged("/auth/discord/callback"));
+    }
+
+    #[test]
+    fn request_id_for_logging_uses_bounded_request_id_header() {
+        let mut headers = HeaderMap::new();
+        headers.insert("x-request-id", HeaderValue::from_static("req-123"));
+
+        assert_eq!(request_id_for_logging(&headers).as_deref(), Some("req-123"));
+    }
+
+    #[test]
+    fn request_id_for_logging_rejects_unbounded_request_id_header() {
+        let mut headers = HeaderMap::new();
+        let long_value = "x".repeat(129);
+        headers.insert(
+            "x-request-id",
+            HeaderValue::from_str(&long_value).expect("header value"),
+        );
+
+        assert_eq!(request_id_for_logging(&headers), None);
     }
 
     #[test]
@@ -4093,5 +4359,89 @@ mod tests {
         assert!(rendered.contains("Saved guild settings for command etf."));
         assert!(rendered.contains(audit_entity_label(DashboardAuditEntityType::Command)));
         assert!(rendered.contains(audit_action_label(DashboardAuditAction::SaveSettings)));
+        assert!(rendered.contains("data-testid=\"logs-mobile-list\""));
+        assert!(rendered.contains("data-testid=\"audit-log-card-0\""));
+        assert!(rendered.contains("data-log-field=\"summary\""));
+        assert_eq!(rendered.matches("data-log-field=\"action\"").count(), 1);
+    }
+
+    #[test]
+    fn audit_logs_section_empty_state_renders_mobile_empty_state() {
+        let rendered = render_audit_logs_section(
+            "/deployment",
+            &DashboardAuditLogPage::empty(1, 20),
+            None,
+            None,
+        );
+
+        assert!(rendered.contains("No dashboard audit events recorded yet."));
+        assert!(rendered.contains("data-testid=\"logs-mobile-list\""));
+        assert!(rendered.contains("data-testid=\"logs-mobile-empty\""));
+    }
+
+    #[test]
+    fn settings_modal_renders_dialog_semantics() {
+        let rendered = render_settings_modal(
+            "modal-guild-command-etf",
+            "ETF Settings",
+            "<form><input name=\"ticker\" /></form>",
+        );
+
+        assert!(rendered.contains("role=\"dialog\""));
+        assert!(rendered.contains("aria-modal=\"true\""));
+        assert!(rendered.contains("aria-labelledby=\"modal-title-modal-guild-command-etf\""));
+        assert!(rendered.contains("aria-label=\"Close settings\""));
+        assert!(rendered.contains("data-modal-root"));
+    }
+
+    #[test]
+    fn task_first_shell_marks_non_overview_tabs() {
+        let rendered = render_dashboard_page_shell(
+            "<section data-testid=\"page-overview\"></section>",
+            "<nav data-testid=\"page-tabs\"></nav>",
+            "<section data-testid=\"page-active\"></section>",
+            "logs",
+        );
+
+        assert!(rendered.contains("dashboard-page-shell dashboard-page-shell-task-first"));
+        assert!(rendered.contains("data-testid=\"dashboard-page-tabs\""));
+        assert!(rendered.contains("data-testid=\"dashboard-page-active\""));
+        let tabs_index = rendered
+            .find("data-testid=\"dashboard-page-tabs\"")
+            .expect("tabs in task-first shell");
+        let active_index = rendered
+            .find("data-testid=\"dashboard-page-active\"")
+            .expect("active section in task-first shell");
+        let overview_index = rendered
+            .find("data-testid=\"dashboard-page-overview\"")
+            .expect("overview in task-first shell");
+
+        assert!(tabs_index < active_index);
+        assert!(active_index < overview_index);
+    }
+
+    #[test]
+    fn task_first_shell_keeps_overview_default_layout() {
+        let rendered = render_dashboard_page_shell(
+            "<section data-testid=\"page-overview\"></section>",
+            "<nav data-testid=\"page-tabs\"></nav>",
+            "<section data-testid=\"page-active\"></section>",
+            "overview",
+        );
+
+        assert!(rendered.contains("dashboard-page-shell\""));
+        assert!(!rendered.contains("dashboard-page-shell-task-first"));
+        let overview_index = rendered
+            .find("data-testid=\"dashboard-page-overview\"")
+            .expect("overview in overview shell");
+        let tabs_index = rendered
+            .find("data-testid=\"dashboard-page-tabs\"")
+            .expect("tabs in overview shell");
+        let active_index = rendered
+            .find("data-testid=\"dashboard-page-active\"")
+            .expect("active section in overview shell");
+
+        assert!(overview_index < tabs_index);
+        assert!(tabs_index < active_index);
     }
 }

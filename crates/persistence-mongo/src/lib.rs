@@ -25,7 +25,8 @@ use dynamo_settings::{
 use futures_util::TryStreamExt;
 use mongodb::{
     Client, Collection, Database,
-    bson::{DateTime as BsonDateTime, doc, from_bson, oid::ObjectId, to_bson},
+    bson::{Bson, DateTime as BsonDateTime, Document, doc, from_bson, oid::ObjectId, to_bson},
+    options::ReturnDocument,
 };
 use serde::{Deserialize, Serialize};
 
@@ -286,11 +287,12 @@ struct GuildSettingsDocument {
 }
 
 impl GuildSettingsDocument {
-    fn from_domain(settings: GuildSettings) -> Self {
+    #[cfg(test)]
+    fn default_for_guild(guild_id: u64) -> Self {
         Self {
-            id: MongoPersistence::guild_document_id(settings.guild_id),
-            modules: settings.modules,
-            commands: settings.commands,
+            id: MongoPersistence::guild_document_id(guild_id),
+            modules: BTreeMap::new(),
+            commands: BTreeMap::new(),
         }
     }
 
@@ -686,25 +688,63 @@ fn parse_snowflake(value: &str, field_name: &str) -> Result<u64, Error> {
         .map_err(|error| anyhow::anyhow!("Stored {field_name} is not a valid u64: {error}"))
 }
 
+fn settings_set_on_insert(document_id: &str) -> Document {
+    doc! {
+        "_id": document_id,
+        "modules": {},
+        "commands": {},
+    }
+}
+
+fn settings_field_path(section: &str, id_kind: &str, id: &str) -> Result<String, Error> {
+    if id.is_empty() {
+        return Err(anyhow::anyhow!(
+            "{id_kind} id cannot be empty for Mongo settings paths"
+        ));
+    }
+
+    if id.contains('.') {
+        return Err(anyhow::anyhow!(
+            "{id_kind} id `{id}` cannot contain `.` for Mongo settings paths"
+        ));
+    }
+
+    if id.starts_with('$') {
+        return Err(anyhow::anyhow!(
+            "{id_kind} id `{id}` cannot start with `$` for Mongo settings paths"
+        ));
+    }
+
+    Ok(format!("{section}.{id}"))
+}
+
+fn settings_upsert_update(document_id: &str, settings_path: &str, settings: Bson) -> Document {
+    doc! {
+        "$setOnInsert": settings_set_on_insert(document_id),
+        "$set": {
+            settings_path: settings,
+        },
+    }
+}
+
 #[async_trait]
 impl GuildSettingsRepository for MongoPersistence {
     async fn get_or_create(&self, guild_id: u64) -> Result<GuildSettings, Error> {
         let id = Self::guild_document_id(guild_id);
+        let document = self
+            .guild_settings
+            .find_one_and_update(
+                doc! { "_id": &id },
+                doc! {
+                    "$setOnInsert": settings_set_on_insert(&id),
+                },
+            )
+            .upsert(true)
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("guild settings upsert returned no document"))?;
 
-        if let Some(document) = self.guild_settings.find_one(doc! { "_id": &id }).await? {
-            return document.into_domain();
-        }
-
-        let settings = GuildSettings {
-            guild_id,
-            modules: BTreeMap::new(),
-            commands: BTreeMap::new(),
-        };
-        self.guild_settings
-            .insert_one(GuildSettingsDocument::from_domain(settings.clone()))
-            .await?;
-
-        Ok(settings)
+        document.into_domain()
     }
 
     async fn upsert_module_settings(
@@ -714,21 +754,20 @@ impl GuildSettingsRepository for MongoPersistence {
         settings: GuildModuleSettings,
     ) -> Result<GuildSettings, Error> {
         let id = Self::guild_document_id(guild_id);
-        let module_path = format!("modules.{module_id}");
+        let module_path = settings_field_path("modules", "module", module_id)?;
         let module_settings = to_bson(&settings)?;
-
-        self.guild_settings
-            .update_one(
+        let document = self
+            .guild_settings
+            .find_one_and_update(
                 doc! { "_id": &id },
-                doc! {
-                    "$setOnInsert": { "_id": &id },
-                    "$set": { module_path: module_settings },
-                },
+                settings_upsert_update(&id, &module_path, module_settings),
             )
             .upsert(true)
-            .await?;
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("guild module settings upsert returned no document"))?;
 
-        GuildSettingsRepository::get_or_create(self, guild_id).await
+        document.into_domain()
     }
 
     async fn upsert_command_settings(
@@ -738,21 +777,20 @@ impl GuildSettingsRepository for MongoPersistence {
         settings: GuildCommandSettings,
     ) -> Result<GuildSettings, Error> {
         let id = Self::guild_document_id(guild_id);
-        let command_path = format!("commands.{command_id}");
+        let command_path = settings_field_path("commands", "command", command_id)?;
         let command_settings = to_bson(&settings)?;
-
-        self.guild_settings
-            .update_one(
+        let document = self
+            .guild_settings
+            .find_one_and_update(
                 doc! { "_id": &id },
-                doc! {
-                    "$setOnInsert": { "_id": &id },
-                    "$set": { command_path: command_settings },
-                },
+                settings_upsert_update(&id, &command_path, command_settings),
             )
             .upsert(true)
-            .await?;
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("guild command settings upsert returned no document"))?;
 
-        GuildSettingsRepository::get_or_create(self, guild_id).await
+        document.into_domain()
     }
 }
 
@@ -774,21 +812,22 @@ impl DeploymentSettingsRepository for MongoPersistence {
         module_id: &str,
         settings: DeploymentModuleSettings,
     ) -> Result<DeploymentSettings, Error> {
-        let module_path = format!("modules.{module_id}");
+        let module_path = settings_field_path("modules", "module", module_id)?;
         let module_settings = to_bson(&settings)?;
-
-        self.deployment_settings
-            .update_one(
+        let document = self
+            .deployment_settings
+            .find_one_and_update(
                 doc! { "_id": DEPLOYMENT_SETTINGS_ID },
-                doc! {
-                    "$setOnInsert": { "_id": DEPLOYMENT_SETTINGS_ID },
-                    "$set": { module_path: module_settings },
-                },
+                settings_upsert_update(DEPLOYMENT_SETTINGS_ID, &module_path, module_settings),
             )
             .upsert(true)
-            .await?;
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("deployment module settings upsert returned no document")
+            })?;
 
-        self.get().await
+        Ok(document.into_domain())
     }
 
     async fn upsert_command_settings(
@@ -796,21 +835,22 @@ impl DeploymentSettingsRepository for MongoPersistence {
         command_id: &str,
         settings: DeploymentCommandSettings,
     ) -> Result<DeploymentSettings, Error> {
-        let command_path = format!("commands.{command_id}");
+        let command_path = settings_field_path("commands", "command", command_id)?;
         let command_settings = to_bson(&settings)?;
-
-        self.deployment_settings
-            .update_one(
+        let document = self
+            .deployment_settings
+            .find_one_and_update(
                 doc! { "_id": DEPLOYMENT_SETTINGS_ID },
-                doc! {
-                    "$setOnInsert": { "_id": DEPLOYMENT_SETTINGS_ID },
-                    "$set": { command_path: command_settings },
-                },
+                settings_upsert_update(DEPLOYMENT_SETTINGS_ID, &command_path, command_settings),
             )
             .upsert(true)
-            .await?;
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("deployment command settings upsert returned no document")
+            })?;
 
-        self.get().await
+        Ok(document.into_domain())
     }
 }
 
@@ -1179,13 +1219,54 @@ impl DashboardAuditLogRepository for MongoPersistence {
 
 #[cfg(test)]
 mod tests {
-    use super::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
+    use super::{
+        DEFAULT_DATABASE_NAME, DeploymentSettingsDocument, GuildSettingsDocument, MongoPersistence,
+        MongoPersistenceConfig,
+    };
     use crate::MongoInitializationReport;
     use dynamo_ops::DashboardAuditLogRepository;
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
         DashboardAuditLogQuery, DashboardAuditScope,
     };
+    use dynamo_repositories::{DeploymentSettingsRepository, GuildSettingsRepository};
+    use dynamo_settings::{
+        DeploymentCommandSettings, DeploymentModuleSettings, GuildCommandSettings,
+        GuildModuleSettings,
+    };
+    use mongodb::bson::{Bson, doc, to_bson};
+    use serde_json::json;
+
+    fn require_mongo_test_config(test_name: &str) -> anyhow::Result<MongoPersistenceConfig> {
+        let _ = dotenvy::dotenv();
+        MongoPersistenceConfig::try_from_env()?.ok_or_else(|| {
+            anyhow::anyhow!(
+                "{test_name} requires MongoDB test configuration; set MONGODB_URI or MONGO_CONNECTION"
+            )
+        })
+    }
+
+    fn isolated_mongo_test_config(
+        base: &MongoPersistenceConfig,
+        test_name: &str,
+    ) -> MongoPersistenceConfig {
+        let label: String = test_name
+            .chars()
+            .map(|ch| {
+                if ch.is_ascii_alphanumeric() {
+                    ch.to_ascii_lowercase()
+                } else {
+                    '_'
+                }
+            })
+            .collect();
+        let database_name = format!(
+            "dynamo_persistence_mongo_{label}_{}",
+            chrono::Utc::now().timestamp_millis().unsigned_abs()
+        );
+
+        MongoPersistenceConfig::new(base.connection_string.clone(), database_name)
+    }
 
     #[test]
     fn initialization_report_can_include_dashboard_audit_collection() {
@@ -1208,15 +1289,337 @@ mod tests {
         );
     }
 
+    #[test]
+    fn guild_default_document_initializes_required_fields() {
+        let document = GuildSettingsDocument::default_for_guild(42);
+
+        assert_eq!(document.id, "42");
+        assert!(document.modules.is_empty());
+        assert!(document.commands.is_empty());
+    }
+
+    #[test]
+    fn guild_upsert_update_seeds_required_fields_on_insert() {
+        let settings = GuildModuleSettings {
+            enabled: false,
+            configuration: json!({ "threshold": 7 }),
+        };
+
+        let update = super::settings_upsert_update(
+            "42",
+            "modules.stock",
+            to_bson(&settings).expect("guild module settings serialize"),
+        );
+
+        assert_eq!(
+            update,
+            doc! {
+                "$setOnInsert": {
+                    "_id": "42",
+                    "modules": {},
+                    "commands": {},
+                },
+                "$set": {
+                    "modules.stock": {
+                        "enabled": false,
+                        "configuration": { "threshold": 7i64 },
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn deployment_upsert_update_seeds_required_fields_on_insert() {
+        let settings = DeploymentModuleSettings {
+            installed: false,
+            enabled: true,
+        };
+
+        let update = super::settings_upsert_update(
+            "global",
+            "modules.stock",
+            to_bson(&settings).expect("deployment module settings serialize"),
+        );
+
+        assert_eq!(
+            update,
+            doc! {
+                "$setOnInsert": {
+                    "_id": "global",
+                    "modules": {},
+                    "commands": {},
+                },
+                "$set": {
+                    "modules.stock": {
+                        "installed": false,
+                        "enabled": true,
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn deployment_default_document_initializes_required_fields() {
+        let document = DeploymentSettingsDocument::default_document();
+
+        assert_eq!(document.id, "global");
+        assert_eq!(
+            to_bson(&document.modules).ok(),
+            Some(Bson::Document(doc! {}))
+        );
+        assert_eq!(
+            to_bson(&document.commands).ok(),
+            Some(Bson::Document(doc! {}))
+        );
+    }
+
+    #[test]
+    fn settings_field_path_accepts_real_style_ids() {
+        assert_eq!(
+            super::settings_field_path("modules", "module", "stock").unwrap(),
+            "modules.stock"
+        );
+        assert_eq!(
+            super::settings_field_path("commands", "command", "exchange::rate").unwrap(),
+            "commands.exchange::rate"
+        );
+    }
+
+    #[test]
+    fn settings_field_path_rejects_invalid_ids() {
+        let empty = super::settings_field_path("modules", "module", "").unwrap_err();
+        assert!(
+            empty
+                .to_string()
+                .contains("module id cannot be empty for Mongo settings paths")
+        );
+
+        let dotted = super::settings_field_path("modules", "module", "a.b").unwrap_err();
+        assert!(
+            dotted
+                .to_string()
+                .contains("module id `a.b` cannot contain `.` for Mongo settings paths")
+        );
+
+        let dollar = super::settings_field_path("commands", "command", "$bad").unwrap_err();
+        assert!(
+            dollar
+                .to_string()
+                .contains("command id `$bad` cannot start with `$` for Mongo settings paths")
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "requires MongoDB environment and persists test data"]
+    async fn settings_round_trip_against_mongo() -> anyhow::Result<()> {
+        let config = require_mongo_test_config("settings_round_trip_against_mongo")?;
+        let guild_store = MongoPersistence::connect(isolated_mongo_test_config(
+            &config,
+            "settings_round_trip_guild",
+        ))
+        .await?;
+
+        let marker = chrono::Utc::now().timestamp_millis().unsigned_abs();
+        let created_guild_id = marker;
+        let guild_module_guild_id = marker + 1;
+        let guild_command_guild_id = marker + 2;
+        let guild_module_id = format!("integration_guild_module_{marker}");
+        let guild_command_id = format!("integration::guild::command::{marker}");
+
+        let created =
+            GuildSettingsRepository::get_or_create(&guild_store, created_guild_id).await?;
+        assert_eq!(created.guild_id, created_guild_id);
+        assert!(created.modules.is_empty());
+        assert!(created.commands.is_empty());
+
+        let guild_module_settings = GuildModuleSettings {
+            enabled: false,
+            configuration: json!({ "threshold": 7 }),
+        };
+        let guild_after_module = GuildSettingsRepository::upsert_module_settings(
+            &guild_store,
+            guild_module_guild_id,
+            &guild_module_id,
+            guild_module_settings.clone(),
+        )
+        .await?;
+        assert_eq!(guild_after_module.guild_id, guild_module_guild_id);
+        assert_eq!(
+            guild_after_module.modules.get(&guild_module_id),
+            Some(&guild_module_settings)
+        );
+        assert!(guild_after_module.commands.is_empty());
+
+        let guild_module_settings_updated = GuildModuleSettings {
+            enabled: true,
+            configuration: json!({ "threshold": 11, "mode": "updated" }),
+        };
+        let guild_after_module_update = GuildSettingsRepository::upsert_module_settings(
+            &guild_store,
+            guild_module_guild_id,
+            &guild_module_id,
+            guild_module_settings_updated.clone(),
+        )
+        .await?;
+        assert_eq!(
+            guild_after_module_update.modules.get(&guild_module_id),
+            Some(&guild_module_settings_updated)
+        );
+        assert_ne!(
+            guild_after_module_update.modules.get(&guild_module_id),
+            Some(&guild_module_settings)
+        );
+
+        let guild_command_settings = GuildCommandSettings {
+            enabled: false,
+            configuration: json!({ "mode": "strict" }),
+        };
+        let guild_after_command = GuildSettingsRepository::upsert_command_settings(
+            &guild_store,
+            guild_command_guild_id,
+            &guild_command_id,
+            guild_command_settings.clone(),
+        )
+        .await?;
+        assert_eq!(guild_after_command.guild_id, guild_command_guild_id);
+        assert_eq!(
+            guild_after_command.commands.get(&guild_command_id),
+            Some(&guild_command_settings)
+        );
+        assert!(guild_after_command.modules.is_empty());
+
+        let guild_command_settings_updated = GuildCommandSettings {
+            enabled: true,
+            configuration: json!({ "mode": "relaxed", "version": 2 }),
+        };
+        let guild_after_command_update = GuildSettingsRepository::upsert_command_settings(
+            &guild_store,
+            guild_command_guild_id,
+            &guild_command_id,
+            guild_command_settings_updated.clone(),
+        )
+        .await?;
+        assert_eq!(
+            guild_after_command_update.commands.get(&guild_command_id),
+            Some(&guild_command_settings_updated)
+        );
+        assert_ne!(
+            guild_after_command_update.commands.get(&guild_command_id),
+            Some(&guild_command_settings)
+        );
+        assert!(guild_after_command_update.modules.is_empty());
+
+        let deployment_module_store = MongoPersistence::connect(isolated_mongo_test_config(
+            &config,
+            "settings_round_trip_deployment_module",
+        ))
+        .await?;
+        let deployment_module_id = format!("integration_deployment_module_{marker}");
+
+        let deployment_module_settings = DeploymentModuleSettings {
+            installed: false,
+            enabled: true,
+        };
+        let deployment_after_module = DeploymentSettingsRepository::upsert_module_settings(
+            &deployment_module_store,
+            &deployment_module_id,
+            deployment_module_settings.clone(),
+        )
+        .await?;
+        assert_eq!(
+            deployment_after_module.modules.get(&deployment_module_id),
+            Some(&deployment_module_settings)
+        );
+
+        let deployment_module_settings_updated = DeploymentModuleSettings {
+            installed: true,
+            enabled: false,
+        };
+        let deployment_after_module_update = DeploymentSettingsRepository::upsert_module_settings(
+            &deployment_module_store,
+            &deployment_module_id,
+            deployment_module_settings_updated.clone(),
+        )
+        .await?;
+        assert_eq!(
+            deployment_after_module_update
+                .modules
+                .get(&deployment_module_id),
+            Some(&deployment_module_settings_updated)
+        );
+        assert_ne!(
+            deployment_after_module_update
+                .modules
+                .get(&deployment_module_id),
+            Some(&deployment_module_settings)
+        );
+
+        let deployment_command_store = MongoPersistence::connect(isolated_mongo_test_config(
+            &config,
+            "settings_round_trip_deployment_command",
+        ))
+        .await?;
+        let deployment_command_id = format!("integration::deployment::command::{marker}");
+        let deployment_command_settings = DeploymentCommandSettings {
+            installed: false,
+            enabled: false,
+            configuration: json!({ "mode": "dry-run" }),
+        };
+        let deployment_after_command = DeploymentSettingsRepository::upsert_command_settings(
+            &deployment_command_store,
+            &deployment_command_id,
+            deployment_command_settings.clone(),
+        )
+        .await?;
+        assert_eq!(
+            deployment_after_command
+                .commands
+                .get(&deployment_command_id),
+            Some(&deployment_command_settings)
+        );
+        assert!(deployment_after_command.modules.is_empty());
+
+        let deployment_command_settings_updated = DeploymentCommandSettings {
+            installed: true,
+            enabled: true,
+            configuration: json!({ "mode": "live", "version": 2 }),
+        };
+        let deployment_after_command_update =
+            DeploymentSettingsRepository::upsert_command_settings(
+                &deployment_command_store,
+                &deployment_command_id,
+                deployment_command_settings_updated.clone(),
+            )
+            .await?;
+        assert_eq!(
+            deployment_after_command_update
+                .commands
+                .get(&deployment_command_id),
+            Some(&deployment_command_settings_updated)
+        );
+        assert_ne!(
+            deployment_after_command_update
+                .commands
+                .get(&deployment_command_id),
+            Some(&deployment_command_settings)
+        );
+        assert!(deployment_after_command_update.modules.is_empty());
+
+        Ok(())
+    }
+
     #[tokio::test]
     #[ignore = "requires MongoDB environment and persists test data"]
     async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
-        let _ = dotenvy::dotenv();
-        let Some(config) = MongoPersistenceConfig::try_from_env()? else {
-            return Ok(());
-        };
+        let config = require_mongo_test_config("dashboard_audit_logs_round_trip_against_mongo")?;
+        let store = MongoPersistence::connect(isolated_mongo_test_config(
+            &config,
+            "dashboard_audit_logs_round_trip",
+        ))
+        .await?;
 
-        let store = MongoPersistence::connect(config).await?;
         store.ensure_initialized().await?;
         let marker = format!("integration::{}", chrono::Utc::now().timestamp_millis());
         let entry = DashboardAuditLogEntry {

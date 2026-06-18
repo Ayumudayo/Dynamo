@@ -76,7 +76,7 @@ Common optional variables:
 - `GOOGLE_TRANSLATE_API_KEY` optional: enables Korean translation for Lodestone `maint` and `pll` notice text
 - `DASHBOARD_ADMIN_USER_IDS` optional comma-separated override for deployment-wide dashboard admins
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
-- `RUST_LOG`
+- `RUST_LOG` optional tracing filter; defaults to `info`
 
 The checked-in [`.env.example`](./.env.example) uses `DASHBOARD_PORT=4000` and matching `DASHBOARD_BASE_URL` as a sample external dashboard port for home-server deployments. The application defaults are still `3000` unless you set them explicitly.
 
@@ -154,6 +154,26 @@ Stop managed dashboard and bot processes:
 
 The launchers print the effective command scope resolved from `.env`.
 
+## Logging
+
+Rust application logs use compact tracing output without application-side timestamps. PM2 is responsible for runtime timestamp display in `pm2 monit` and `pm2 logs`; the checked-in PM2 configs set `time: false` so log files are not double-prefixed with PM2 timestamp injection.
+
+The PM2 configs write repo-local files under `logs/`:
+
+- `logs/dynamo-dashboard.out.log`
+- `logs/dynamo-dashboard.error.log`
+- `logs/dynamo-dashboard.combined.log`
+- `logs/dynamo-bot.out.log`
+- `logs/dynamo-bot.error.log`
+- `logs/dynamo-bot.combined.log`
+
+Set `RUST_LOG` to tune verbosity. Examples:
+
+```bash
+RUST_LOG=info pm2 start ecosystem.config.js --update-env
+RUST_LOG=dynamo_dashboard=debug,dynamo_bot=info,poise=warn pm2 restart ecosystem.config.js --update-env
+```
+
 ## Raspberry Pi / PM2
 
 For a Raspberry Pi or Ubuntu-style server where you want to keep the bot and dashboard under `pm2`, use the release wrappers instead of the development launchers.
@@ -192,6 +212,7 @@ Notes:
 - The PM2 wrappers run the release binaries from `target/release/`.
 - They expect `.env` to exist in the repo root.
 - The Rust binaries still load `.env` themselves, so the wrapper scripts only need to `cd` into the repo root before `exec`.
+- PM2 writes dashboard and bot stdout, stderr, and combined log files under `logs/` as documented in the Logging section.
 - On a Raspberry Pi, `cargo build --release` can take noticeably longer than debug builds.
 
 ### Cross-build On This PC And Deploy To Raspberry Pi

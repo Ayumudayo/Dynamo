@@ -2,7 +2,7 @@ use crate::{
     constants::{MODULE_ID, STOCK_REFRESH_BUTTON_ID},
     render::{build_etf_response, build_stock_response, refresh_components},
     settings::{load_effective_etf_tickers, load_settings, normalize_symbol},
-    state::{initialize_session_loop, register_session, total_updates, SessionKind, StockSession},
+    state::{SessionKind, StockSession, initialize_session_loop, register_session, total_updates},
 };
 use dynamo_access::module_access_for_context;
 use dynamo_runtime_api::{Context, Error};

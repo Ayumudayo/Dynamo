@@ -1,5 +1,5 @@
-use poise::serenity_prelude::{Channel, ChannelId, ChannelType, GuildChannel, GuildId};
 use dynamo_runtime_api::Error;
+use poise::serenity_prelude::{Channel, ChannelId, ChannelType, GuildChannel, GuildId};
 
 pub(crate) fn is_ticket_channel(channel: &GuildChannel) -> bool {
     channel.kind == ChannelType::Text

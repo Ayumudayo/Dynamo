@@ -2,7 +2,7 @@ use crate::{
     constants::{
         MAX_REFRESH_TIME_MS, MAX_STORED_SESSIONS, REFRESH_INTERVAL_MS, STOCK_REFRESH_BUTTON_ID,
     },
-    render::{build_etf_response, build_stock_response, refresh_components, StockResponse},
+    render::{StockResponse, build_etf_response, build_stock_response, refresh_components},
 };
 use dynamo_runtime_api::Error;
 use dynamo_service_stock::StockQuoteService;
@@ -58,10 +58,10 @@ pub(crate) fn total_updates() -> u32 {
 
 pub(crate) async fn register_session(message_id: u64, session: Arc<Mutex<StockSession>>) {
     let mut sessions = stock_sessions().write().await;
-    if sessions.len() >= MAX_STORED_SESSIONS {
-        if let Some(oldest) = sessions.keys().next().copied() {
-            sessions.remove(&oldest);
-        }
+    if sessions.len() >= MAX_STORED_SESSIONS
+        && let Some(oldest) = sessions.keys().next().copied()
+    {
+        sessions.remove(&oldest);
     }
     sessions.insert(message_id, session);
 }

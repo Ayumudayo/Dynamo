@@ -126,7 +126,10 @@ fn parse_ticket_settings(module: &GuildModuleSettings) -> Result<TicketSettings,
     )?)
 }
 
-pub(crate) async fn save_settings(ctx: Context<'_>, settings: &TicketSettings) -> Result<(), Error> {
+pub(crate) async fn save_settings(
+    ctx: Context<'_>,
+    settings: &TicketSettings,
+) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };

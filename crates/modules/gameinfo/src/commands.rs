@@ -1,6 +1,8 @@
 use crate::{
     constants::MODULE_ID,
-    maintenance::{build_maintenance_embed, create_maintenance_error_embed, fetch_maintenance_info},
+    maintenance::{
+        build_maintenance_embed, create_maintenance_error_embed, fetch_maintenance_info,
+    },
     pll::{build_pll_embed, build_pll_stream_buttons, create_pll_error_embed, fetch_pll_info},
     referral::{build_referral_reply, load_settings},
 };

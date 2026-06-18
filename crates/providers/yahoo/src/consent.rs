@@ -50,11 +50,11 @@ pub(crate) fn decode_html_entities(value: &str) -> String {
                     hex.push(*next);
                     let _ = chars.next();
                 }
-                if let Ok(codepoint) = u32::from_str_radix(&hex, 16) {
-                    if let Some(decoded) = char::from_u32(codepoint) {
-                        output.push(decoded);
-                        continue;
-                    }
+                if let Ok(codepoint) = u32::from_str_radix(&hex, 16)
+                    && let Some(decoded) = char::from_u32(codepoint)
+                {
+                    output.push(decoded);
+                    continue;
                 }
                 output.push('&');
                 output.push('#');

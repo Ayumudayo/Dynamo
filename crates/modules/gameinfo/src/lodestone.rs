@@ -1,7 +1,7 @@
 use dynamo_runtime_api::Error;
 use reqwest::{
-    header::{HeaderMap, HeaderValue, ACCEPT_LANGUAGE, USER_AGENT},
     Client,
+    header::{ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT},
 };
 use scraper::{ElementRef, Html, Selector};
 use std::time::Duration;
@@ -16,7 +16,10 @@ pub(crate) struct LodestoneLink {
 
 pub(crate) fn lodestone_client() -> Result<Client, Error> {
     let mut headers = HeaderMap::new();
-    headers.insert(USER_AGENT, HeaderValue::from_static(LODESTONE_BROWSER_USER_AGENT));
+    headers.insert(
+        USER_AGENT,
+        HeaderValue::from_static(LODESTONE_BROWSER_USER_AGENT),
+    );
     headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("ja,en;q=0.9"));
 
     Ok(Client::builder()

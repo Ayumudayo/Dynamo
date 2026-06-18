@@ -91,7 +91,7 @@ impl Module<AppState, Error> for ModerationModule {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 struct ModerationSettings {
     #[serde(
@@ -101,15 +101,6 @@ struct ModerationSettings {
     )]
     modlog_channel_id: Option<u64>,
     max_warn: MaxWarnSettings,
-}
-
-impl Default for ModerationSettings {
-    fn default() -> Self {
-        Self {
-            modlog_channel_id: None,
-            max_warn: MaxWarnSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -642,7 +633,7 @@ async fn maybe_apply_max_warn(
         return Ok(());
     }
 
-    let auto_reason = Some("Max warnings reached");
+    let auto_reason = "Max warnings reached";
     match settings.max_warn.action {
         MaxWarnAction::Timeout => {
             ensure_moderatable(ctx, issuer, target, Permissions::MODERATE_MEMBERS).await?;
@@ -652,21 +643,19 @@ async fn maybe_apply_max_warn(
             target
                 .disable_communication_until_datetime(ctx, timestamp)
                 .await?;
-            send_modlog(ctx, "TIMEOUT", &target.user, auto_reason).await?;
+            send_modlog(ctx, "TIMEOUT", &target.user, Some(auto_reason)).await?;
         }
         MaxWarnAction::Kick => {
             ensure_moderatable(ctx, issuer, target, Permissions::KICK_MEMBERS).await?;
-            target
-                .kick_with_reason(ctx, auto_reason.unwrap_or(""))
-                .await?;
-            send_modlog(ctx, "KICK", &target.user, auto_reason).await?;
+            target.kick_with_reason(ctx, auto_reason).await?;
+            send_modlog(ctx, "KICK", &target.user, Some(auto_reason)).await?;
         }
         MaxWarnAction::Ban => {
             ensure_moderatable(ctx, issuer, target, Permissions::BAN_MEMBERS).await?;
             guild_id
-                .ban_with_reason(ctx, target.user.id, 0, auto_reason.unwrap_or(""))
+                .ban_with_reason(ctx, target.user.id, 0, auto_reason)
                 .await?;
-            send_modlog(ctx, "BAN", &target.user, auto_reason).await?;
+            send_modlog(ctx, "BAN", &target.user, Some(auto_reason)).await?;
         }
     }
 

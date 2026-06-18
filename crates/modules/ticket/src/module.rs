@@ -1,5 +1,7 @@
 use crate::commands::ticket;
-use dynamo_module_kit::{DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsSchema};
+use dynamo_module_kit::{
+    DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsSchema,
+};
 use dynamo_runtime_api::{AppState, Error};
 
 pub struct TicketModule;

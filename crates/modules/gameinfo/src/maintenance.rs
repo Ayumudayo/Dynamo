@@ -124,12 +124,16 @@ pub(crate) fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
         .timestamp(Timestamp::now())
         .field("시작 시각", format!("<t:{}:F>", info.start_stamp), false)
         .field("종료 시각", format!("<t:{}:F>", info.end_stamp), false)
-        .field("종료까지 남은 시간", format!("<t:{}:R>", info.end_stamp), false);
+        .field(
+            "종료까지 남은 시간",
+            format!("<t:{}:R>", info.end_stamp),
+            false,
+        );
 
-    if let Some(description) = info.translated_description.as_deref() {
-        if !description.trim().is_empty() {
-            embed = embed.description(description);
-        }
+    if let Some(description) = info.translated_description.as_deref()
+        && !description.trim().is_empty()
+    {
+        embed = embed.description(description);
     }
 
     embed

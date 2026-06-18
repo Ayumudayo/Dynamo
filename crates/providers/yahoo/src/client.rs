@@ -1,4 +1,6 @@
 use std::{
+    collections::BTreeMap,
+    future::Future,
     sync::{
         Arc,
         atomic::{AtomicBool, Ordering},
@@ -10,6 +12,7 @@ use async_trait::async_trait;
 use dynamo_domain_stock::StockQuote;
 use dynamo_repositories::ProviderStateRepository;
 use dynamo_service_stock::{Error, StockQuoteService};
+use futures_util::stream::{self, StreamExt};
 use reqwest::{
     Client, Response,
     header::{ACCEPT, COOKIE, HeaderMap},
@@ -29,11 +32,36 @@ use crate::{
     session::{PersistedYahooSession, YahooSession, build_cookie_header, capture_set_cookies},
 };
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct YahooSessionSnapshot {
+    crumb: Option<String>,
+    cookies: BTreeMap<String, String>,
+}
+
+impl YahooSessionSnapshot {
+    fn is_usable(&self) -> bool {
+        self.crumb
+            .as_deref()
+            .is_some_and(|crumb| !crumb.trim().is_empty())
+            && !self.cookies.is_empty()
+    }
+}
+
+impl From<&YahooSession> for YahooSessionSnapshot {
+    fn from(session: &YahooSession) -> Self {
+        Self {
+            crumb: session.crumb.clone(),
+            cookies: session.cookies.clone(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct YahooFinanceClient {
     client: Client,
     session_repo: Option<Arc<dyn ProviderStateRepository>>,
     session: Arc<Mutex<YahooSession>>,
+    refresh_guard: Arc<Mutex<()>>,
     loaded_from_repo: Arc<AtomicBool>,
     load_guard: Arc<Mutex<()>>,
 }
@@ -50,6 +78,7 @@ impl YahooFinanceClient {
             client,
             session_repo,
             session: Arc::new(Mutex::new(YahooSession::default())),
+            refresh_guard: Arc::new(Mutex::new(())),
             loaded_from_repo: Arc::new(AtomicBool::new(false)),
             load_guard: Arc::new(Mutex::new(())),
         })
@@ -71,30 +100,27 @@ impl YahooFinanceClient {
         };
 
         let loaded = repo.load_json(PROVIDER_ID).await?;
-        if let Some(value) = loaded {
-            if let Ok(state) = serde_json::from_value::<PersistedYahooSession>(value) {
-                let mut session = self.session.lock().await;
-                session.crumb = state.crumb;
-                session.cookies = state.cookies;
-            }
+        if let Some(value) = loaded
+            && let Ok(state) = serde_json::from_value::<PersistedYahooSession>(value)
+        {
+            let mut session = self.session.lock().await;
+            session.crumb = state.crumb;
+            session.cookies = state.cookies;
         }
 
         self.loaded_from_repo.store(true, Ordering::SeqCst);
         Ok(())
     }
 
-    async fn persist_session(&self) -> Result<(), Error> {
+    async fn persist_session_snapshot(&self, session: &YahooSessionSnapshot) -> Result<(), Error> {
         let Some(repo) = &self.session_repo else {
             return Ok(());
         };
 
-        let session = self.session.lock().await;
         let value = serde_json::to_value(PersistedYahooSession {
             crumb: session.crumb.clone(),
             cookies: session.cookies.clone(),
         })?;
-        drop(session);
-
         repo.save_json(PROVIDER_ID, value).await
     }
 
@@ -102,11 +128,11 @@ impl YahooFinanceClient {
         &self,
         url: &str,
         extra_headers: HeaderMap,
-        session: &YahooSession,
+        cookies: &BTreeMap<String, String>,
     ) -> Result<Response, Error> {
         let mut request = self.client.get(url).headers(extra_headers);
-        if !session.cookies.is_empty() {
-            request = request.header(COOKIE, build_cookie_header(&session.cookies));
+        if !cookies.is_empty() {
+            request = request.header(COOKIE, build_cookie_header(cookies));
         }
         Ok(request.send().await?)
     }
@@ -116,24 +142,73 @@ impl YahooFinanceClient {
         url: &str,
         form_body: String,
         extra_headers: HeaderMap,
-        session: &YahooSession,
+        cookies: &BTreeMap<String, String>,
     ) -> Result<Response, Error> {
         let mut request = self.client.post(url).headers(extra_headers).body(form_body);
-        if !session.cookies.is_empty() {
-            request = request.header(COOKIE, build_cookie_header(&session.cookies));
+        if !cookies.is_empty() {
+            request = request.header(COOKIE, build_cookie_header(cookies));
         }
         Ok(request.send().await?)
     }
 
-    async fn refresh_session(&self) -> Result<(), Error> {
+    async fn session_snapshot(&self) -> YahooSessionSnapshot {
+        let session = self.session.lock().await;
+        YahooSessionSnapshot::from(&*session)
+    }
+
+    fn refresh_needed(
+        current: &YahooSessionSnapshot,
+        expected_stale: Option<&YahooSessionSnapshot>,
+    ) -> bool {
+        if !current.is_usable() {
+            return true;
+        }
+
+        expected_stale.is_some_and(|stale| current == stale)
+    }
+
+    async fn refresh_session_with<F, Fut>(
+        &self,
+        expected_stale: Option<&YahooSessionSnapshot>,
+        refresh: F,
+    ) -> Result<YahooSessionSnapshot, Error>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<YahooSessionSnapshot, Error>>,
+    {
         self.ensure_loaded_from_repo().await?;
 
-        let mut session = self.session.lock().await;
-        session.crumb = None;
-        session.cookies.clear();
+        let current = self.session_snapshot().await;
+        if !Self::refresh_needed(&current, expected_stale) {
+            return Ok(current);
+        }
 
+        let _refresh_guard = self.refresh_guard.lock().await;
+        let current = self.session_snapshot().await;
+        if !Self::refresh_needed(&current, expected_stale) {
+            return Ok(current);
+        }
+
+        let refreshed = refresh().await?;
+        if !refreshed.is_usable() {
+            return Err(anyhow::anyhow!(
+                "Yahoo session refresh did not produce a usable crumb/cookie snapshot"
+            ));
+        }
+
+        {
+            let mut session = self.session.lock().await;
+            session.crumb = refreshed.crumb.clone();
+            session.cookies = refreshed.cookies.clone();
+        }
+        self.persist_session_snapshot(&refreshed).await?;
+        Ok(refreshed)
+    }
+
+    async fn perform_session_refresh(&self) -> Result<YahooSessionSnapshot, Error> {
+        let mut session = YahooSession::default();
         let mut response = self
-            .send_get(QUOTE_PAGE_URL, html_headers(None, None), &session)
+            .send_get(QUOTE_PAGE_URL, html_headers(None, None), &session.cookies)
             .await?;
         capture_set_cookies(response.headers(), &mut session)?;
 
@@ -145,7 +220,7 @@ impl YahooFinanceClient {
                     .send_get(
                         &location,
                         html_headers(Some(&location), Some(QUOTE_PAGE_URL)),
-                        &session,
+                        &session.cookies,
                     )
                     .await?;
                 capture_set_cookies(response.headers(), &mut session)?;
@@ -159,7 +234,11 @@ impl YahooFinanceClient {
         }
 
         let crumb_response = self
-            .send_get(GET_CRUMB_URL, crumb_headers(QUOTE_PAGE_URL), &session)
+            .send_get(
+                GET_CRUMB_URL,
+                crumb_headers(QUOTE_PAGE_URL),
+                &session.cookies,
+            )
             .await?;
         capture_set_cookies(crumb_response.headers(), &mut session)?;
 
@@ -177,9 +256,15 @@ impl YahooFinanceClient {
         }
 
         session.crumb = Some(crumb.trim().to_string());
-        drop(session);
-        self.persist_session().await?;
-        Ok(())
+        Ok(YahooSessionSnapshot::from(&session))
+    }
+
+    async fn refresh_session(
+        &self,
+        expected_stale: Option<&YahooSessionSnapshot>,
+    ) -> Result<YahooSessionSnapshot, Error> {
+        self.refresh_session_with(expected_stale, || self.perform_session_refresh())
+            .await
     }
 
     async fn handle_consent_flow(
@@ -191,7 +276,7 @@ impl YahooFinanceClient {
             .send_get(
                 consent_url,
                 html_headers(Some(consent_url), Some(QUOTE_PAGE_URL)),
-                session,
+                &session.cookies,
             )
             .await?;
         capture_set_cookies(consent_response.headers(), session)?;
@@ -206,7 +291,7 @@ impl YahooFinanceClient {
             .send_get(
                 &collect_url,
                 html_headers(Some(&collect_url), Some(consent_url)),
-                session,
+                &session.cookies,
             )
             .await?;
         capture_set_cookies(collect_response.headers(), session)?;
@@ -218,7 +303,7 @@ impl YahooFinanceClient {
                 &collect_url,
                 form_body,
                 form_headers(&collect_url, Some(consent_url)),
-                session,
+                &session.cookies,
             )
             .await?;
         capture_set_cookies(submit_response.headers(), session)?;
@@ -233,7 +318,7 @@ impl YahooFinanceClient {
             .send_get(
                 &copy_url,
                 html_headers(Some(&copy_url), Some(&collect_url)),
-                session,
+                &session.cookies,
             )
             .await?;
         capture_set_cookies(copy_response.headers(), session)?;
@@ -243,7 +328,7 @@ impl YahooFinanceClient {
                 .send_get(
                     &final_url,
                     html_headers(Some(&final_url), Some(&copy_url)),
-                    session,
+                    &session.cookies,
                 )
                 .await?;
             capture_set_cookies(final_response.headers(), session)?;
@@ -283,42 +368,47 @@ impl YahooFinanceClient {
     ) -> Result<Option<QuoteSummaryResult>, Error> {
         self.ensure_loaded_from_repo().await?;
 
-        let first_attempt = self.fetch_quote_summary_once(symbol).await;
+        let session = self.usable_session_snapshot().await?;
+        let first_attempt = self
+            .fetch_quote_summary_with_snapshot(symbol, &session)
+            .await;
 
         match first_attempt {
             Ok(result) => Ok(result),
             Err(error) if allow_retry && looks_like_auth_error(&error) => {
-                self.refresh_session().await?;
+                self.refresh_session(Some(&session)).await?;
                 self.fetch_quote_summary_once(symbol).await
             }
             Err(error) => Err(error),
         }
     }
 
-    async fn fetch_quote_summary_once(
-        &self,
-        symbol: &str,
-    ) -> Result<Option<QuoteSummaryResult>, Error> {
-        {
-            let session = self.session.lock().await;
-            if session.crumb.is_none() || session.cookies.is_empty() {
-                drop(session);
-                self.refresh_session().await?;
-            }
+    async fn usable_session_snapshot(&self) -> Result<YahooSessionSnapshot, Error> {
+        let snapshot = self.session_snapshot().await;
+        if snapshot.is_usable() {
+            return Ok(snapshot);
         }
 
-        let session = self.session.lock().await;
+        self.refresh_session(None).await
+    }
+
+    async fn fetch_quote_summary_with_snapshot(
+        &self,
+        symbol: &str,
+        session: &YahooSessionSnapshot,
+    ) -> Result<Option<QuoteSummaryResult>, Error> {
         let crumb = session
             .crumb
-            .clone()
+            .as_deref()
             .ok_or_else(|| anyhow::anyhow!("Yahoo crumb is not available"))?;
         let url = format!(
             "https://query2.finance.yahoo.com/v10/finance/quoteSummary/{symbol}?formatted=false&modules={QUOTE_SUMMARY_MODULES}&crumb={crumb}"
         );
-        let response = self.send_get(&url, json_headers(symbol), &session).await?;
+        let response = self
+            .send_get(&url, json_headers(symbol), &session.cookies)
+            .await?;
         let status = response.status();
         let body = response.text().await?;
-        drop(session);
 
         if !status.is_success() {
             return Err(anyhow::anyhow!(
@@ -344,6 +434,15 @@ impl YahooFinanceClient {
             .result
             .and_then(|mut values| values.pop()))
     }
+
+    async fn fetch_quote_summary_once(
+        &self,
+        symbol: &str,
+    ) -> Result<Option<QuoteSummaryResult>, Error> {
+        let session = self.usable_session_snapshot().await?;
+        self.fetch_quote_summary_with_snapshot(symbol, &session)
+            .await
+    }
 }
 
 #[async_trait]
@@ -368,14 +467,94 @@ impl StockQuoteService for YahooFinanceClient {
         &self,
         symbols: &[String],
     ) -> Result<Vec<Result<StockQuote, String>>, Error> {
-        let mut quotes = Vec::with_capacity(symbols.len());
-        for symbol in symbols {
-            match self.fetch_quote(symbol).await {
-                Ok(Some(quote)) => quotes.push(Ok(quote)),
-                Ok(None) => quotes.push(Err("Invalid Ticker".to_string())),
-                Err(error) => quotes.push(Err(error.to_string())),
+        let client = self.clone();
+        Ok(collect_quotes_bounded(symbols, 4, move |symbol| {
+            let client = client.clone();
+            async move { client.fetch_quote(&symbol).await }
+        })
+        .await)
+    }
+}
+
+async fn collect_quotes_bounded<F, Fut>(
+    symbols: &[String],
+    concurrency_limit: usize,
+    fetch_one: F,
+) -> Vec<Result<StockQuote, String>>
+where
+    F: Fn(String) -> Fut + Clone + Send,
+    Fut: Future<Output = Result<Option<StockQuote>, Error>> + Send,
+{
+    let limit = concurrency_limit.max(1);
+    let mut results = stream::iter(symbols.iter().cloned().enumerate())
+        .map(|(index, symbol)| {
+            let fetch_one = fetch_one.clone();
+            async move {
+                let result = match fetch_one(symbol).await {
+                    Ok(Some(quote)) => Ok(quote),
+                    Ok(None) => Err("Invalid Ticker".to_string()),
+                    Err(error) => Err(error.to_string()),
+                };
+                (index, result)
             }
-        }
-        Ok(quotes)
+        })
+        .buffer_unordered(limit)
+        .collect::<Vec<_>>()
+        .await;
+    results.sort_by_key(|(index, _)| *index);
+    results.into_iter().map(|(_, result)| result).collect()
+}
+
+#[cfg(test)]
+impl YahooFinanceClient {
+    pub(crate) async fn test_set_session(&self, crumb: Option<&str>, cookies: &[(&str, &str)]) {
+        let mut session = self.session.lock().await;
+        session.crumb = crumb.map(str::to_string);
+        session.cookies = cookies
+            .iter()
+            .map(|(name, value)| ((*name).to_string(), (*value).to_string()))
+            .collect();
+    }
+
+    pub(crate) async fn test_session_snapshot(&self) -> (Option<String>, BTreeMap<String, String>) {
+        let session = self.session_snapshot().await;
+        (session.crumb, session.cookies)
+    }
+
+    pub(crate) async fn test_refresh_session_with<F, Fut>(
+        &self,
+        expected_snapshot: (Option<String>, BTreeMap<String, String>),
+        refresh: F,
+    ) -> Result<(Option<String>, BTreeMap<String, String>), Error>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = Result<(Option<String>, Vec<(String, String)>), Error>>,
+    {
+        let expected_snapshot = YahooSessionSnapshot {
+            crumb: expected_snapshot.0,
+            cookies: expected_snapshot.1,
+        };
+        let refreshed = self
+            .refresh_session_with(Some(&expected_snapshot), || async move {
+                let (crumb, cookies) = refresh().await?;
+                Ok(YahooSessionSnapshot {
+                    crumb,
+                    cookies: cookies.into_iter().collect(),
+                })
+            })
+            .await?;
+        Ok((refreshed.crumb, refreshed.cookies))
+    }
+
+    pub(crate) async fn test_collect_quotes_bounded<F, Fut>(
+        symbols: &[String],
+        concurrency_limit: usize,
+        fetch_one: F,
+    ) -> Vec<Result<StockQuote, String>>
+    where
+        F: Fn(String) -> Fut + Clone + Send,
+        Fut: Future<Output = Result<Option<StockQuote>, Error>> + Send,
+    {
+        collect_quotes_bounded(symbols, concurrency_limit, fetch_one).await
     }
 }

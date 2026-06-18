@@ -7,6 +7,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use dynamo_domain_stock::StockQuote;
 use dynamo_persistence_mongo::{MongoPersistence, MongoPersistenceConfig};
 use dynamo_repositories::ProviderStateRepository;
 use dynamo_service_stock::StockQuoteService;
@@ -143,6 +144,18 @@ fn normalizes_only_true_pre_market_as_pre_market() {
     assert_eq!(normalize_market_phase("CLOSED"), "Closed");
 }
 
+fn stub_quote(symbol: &str) -> StockQuote {
+    StockQuote {
+        symbol: symbol.to_string(),
+        currency_label: "USD".to_string(),
+        phase: "Regular Market".to_string(),
+        ..StockQuote::default()
+    }
+}
+
+type SessionSnapshot = (Option<String>, BTreeMap<String, String>);
+type RefreshJoinHandle = tokio::task::JoinHandle<anyhow::Result<SessionSnapshot>>;
+
 struct CountingRepo {
     load_calls: AtomicUsize,
 }
@@ -190,6 +203,119 @@ async fn loads_persisted_session_only_once_under_concurrency() {
     }
 
     assert_eq!(repo.load_calls.load(Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn refresh_session_singleflights_concurrent_stale_refreshes() {
+    let client = YahooFinanceClient::new(None).expect("client");
+    client
+        .test_set_session(
+            Some("stale-crumb"),
+            &[("A1", "stale-cookie"), ("A3", "stale-cookie-2")],
+        )
+        .await;
+    let stale_snapshot = client.test_session_snapshot().await;
+
+    let refresh_calls = Arc::new(AtomicUsize::new(0));
+    let mut handles: Vec<RefreshJoinHandle> = Vec::new();
+
+    for _ in 0..6 {
+        let client = client.clone();
+        let refresh_calls = refresh_calls.clone();
+        let stale_snapshot = stale_snapshot.clone();
+        handles.push(tokio::spawn(async move {
+            client
+                .test_refresh_session_with(stale_snapshot, || async move {
+                    refresh_calls.fetch_add(1, Ordering::SeqCst);
+                    sleep(Duration::from_millis(25)).await;
+                    Ok((
+                        Some("fresh-crumb".to_string()),
+                        vec![
+                            ("A1".to_string(), "fresh-cookie".to_string()),
+                            ("A3".to_string(), "fresh-cookie-2".to_string()),
+                        ],
+                    ))
+                })
+                .await
+        }));
+    }
+
+    for handle in handles {
+        let snapshot = handle
+            .await
+            .expect("task should complete")
+            .expect("refresh should succeed");
+        assert_eq!(snapshot.0.as_deref(), Some("fresh-crumb"));
+        assert_eq!(
+            snapshot.1.get("A1").map(String::as_str),
+            Some("fresh-cookie")
+        );
+    }
+
+    assert_eq!(refresh_calls.load(Ordering::SeqCst), 1);
+
+    let snapshot = client.test_session_snapshot().await;
+    assert_eq!(snapshot.0.as_deref(), Some("fresh-crumb"));
+    assert_eq!(
+        snapshot.1.get("A3").map(String::as_str),
+        Some("fresh-cookie-2")
+    );
+}
+
+#[tokio::test]
+async fn bounded_parallel_fetch_preserves_order_and_error_semantics() {
+    let symbols = vec![
+        "slow-ok".to_string(),
+        "fast-err".to_string(),
+        "mid-none".to_string(),
+        "fast-ok".to_string(),
+    ];
+    let active = Arc::new(AtomicUsize::new(0));
+    let max_active = Arc::new(AtomicUsize::new(0));
+
+    let results = YahooFinanceClient::test_collect_quotes_bounded(&symbols, 2, {
+        let active = active.clone();
+        let max_active = max_active.clone();
+        move |symbol| {
+            let active = active.clone();
+            let max_active = max_active.clone();
+            async move {
+                let now_active = active.fetch_add(1, Ordering::SeqCst) + 1;
+                max_active.fetch_max(now_active, Ordering::SeqCst);
+
+                let output = match symbol.as_str() {
+                    "slow-ok" => {
+                        sleep(Duration::from_millis(40)).await;
+                        Ok(Some(stub_quote("slow-ok")))
+                    }
+                    "fast-err" => Err(anyhow::anyhow!("boom")),
+                    "mid-none" => {
+                        sleep(Duration::from_millis(15)).await;
+                        Ok(None)
+                    }
+                    "fast-ok" => Ok(Some(stub_quote("fast-ok"))),
+                    other => Err(anyhow::anyhow!("unexpected symbol {other}")),
+                };
+
+                active.fetch_sub(1, Ordering::SeqCst);
+                output
+            }
+        }
+    })
+    .await;
+
+    assert_eq!(max_active.load(Ordering::SeqCst), 2);
+    assert_eq!(results.len(), symbols.len());
+    assert_eq!(
+        results[0].as_ref().map(|quote| quote.symbol.as_str()),
+        Ok("slow-ok")
+    );
+    assert!(matches!(results[1].as_ref(), Err(error) if error == "boom"));
+    assert!(matches!(results[2].as_ref(), Err(error) if error == "Invalid Ticker"));
+    assert_eq!(
+        results[3].as_ref().map(|quote| quote.symbol.as_str()),
+        Ok("fast-ok")
+    );
 }
 
 #[tokio::test]

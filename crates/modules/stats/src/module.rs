@@ -86,20 +86,11 @@ impl Module<AppState, Error> for StatsModule {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 struct StatsSettings {
     enabled: bool,
     xp: StatsXpSettings,
-}
-
-impl Default for StatsSettings {
-    fn default() -> Self {
-        Self {
-            enabled: false,
-            xp: StatsXpSettings::default(),
-        }
-    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,17 +208,14 @@ pub async fn handle_interaction(
     };
     let mut record = repo.get_or_create(guild_id, member_id).await?;
 
-    match interaction {
-        Interaction::Command(command) => {
-            if command.data.kind == poise::serenity_prelude::CommandType::ChatInput {
-                record.commands.slash += 1;
-            } else if command.data.kind == poise::serenity_prelude::CommandType::Message {
-                record.contexts.message += 1;
-            } else if command.data.kind == poise::serenity_prelude::CommandType::User {
-                record.contexts.user += 1;
-            }
+    if let Interaction::Command(command) = interaction {
+        if command.data.kind == poise::serenity_prelude::CommandType::ChatInput {
+            record.commands.slash += 1;
+        } else if command.data.kind == poise::serenity_prelude::CommandType::Message {
+            record.contexts.message += 1;
+        } else if command.data.kind == poise::serenity_prelude::CommandType::User {
+            record.contexts.user += 1;
         }
-        _ => {}
     }
 
     record.updated_at = chrono::Utc::now();
