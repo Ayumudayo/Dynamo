@@ -1,3 +1,4 @@
+use chrono::{DateTime, FixedOffset, NaiveDate};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -61,11 +62,54 @@ pub struct TossPriceRaw {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TossStockRaw {
+    pub symbol: String,
+    pub name: Option<String>,
+    #[serde(rename = "shortName")]
+    pub short_name: Option<String>,
+    #[serde(rename = "longName")]
+    pub long_name: Option<String>,
+    pub currency: Option<String>,
+    #[serde(rename = "quoteType")]
+    pub quote_type: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct TossExchangeRateRaw {
     #[serde(rename = "midRate")]
     pub mid_rate: String,
     #[serde(rename = "validFrom")]
     pub valid_from: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TossMarketCalendarRaw {
+    pub today: TossMarketDayRaw,
+    #[serde(rename = "previousBusinessDay")]
+    pub previous_business_day: TossMarketDayRaw,
+    #[serde(rename = "nextBusinessDay")]
+    pub next_business_day: TossMarketDayRaw,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TossMarketDayRaw {
+    pub date: NaiveDate,
+    #[serde(rename = "dayMarket")]
+    pub day_market: Option<TossMarketSessionRaw>,
+    #[serde(rename = "preMarket")]
+    pub pre_market: Option<TossMarketSessionRaw>,
+    #[serde(rename = "regularMarket")]
+    pub regular_market: Option<TossMarketSessionRaw>,
+    #[serde(rename = "afterMarket")]
+    pub after_market: Option<TossMarketSessionRaw>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct TossMarketSessionRaw {
+    #[serde(rename = "startTime")]
+    pub start_time: DateTime<FixedOffset>,
+    #[serde(rename = "endTime")]
+    pub end_time: DateTime<FixedOffset>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -76,11 +120,17 @@ pub struct TossCandleRaw {
     pub timestamp: Option<String>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct CandlePageResponse {
+    pub candles: Vec<TossCandleRaw>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiEnvelope, OAuth2ErrorResponse, OAuth2TokenResponse, TossCandleRaw, TossErrorEnvelope,
-        TossExchangeRateRaw, TossInvestApiError, TossPriceRaw,
+        ApiEnvelope, CandlePageResponse, OAuth2ErrorResponse, OAuth2TokenResponse,
+        TossErrorEnvelope, TossExchangeRateRaw, TossInvestApiError, TossMarketCalendarRaw,
+        TossPriceRaw, TossStockRaw,
     };
 
     #[test]
@@ -188,13 +238,30 @@ mod tests {
             }"#,
         )
         .unwrap();
-        let candles = serde_json::from_str::<ApiEnvelope<Vec<TossCandleRaw>>>(
+        let candles = serde_json::from_str::<ApiEnvelope<CandlePageResponse>>(
+            r#"{
+                "result": {
+                    "candles": [
+                        {
+                            "symbol": "SOXL",
+                            "closePrice": "22.9800",
+                            "timestamp": "2026-06-17T20:00:00-04:00"
+                        }
+                    ]
+                }
+            }"#,
+        )
+        .unwrap();
+        let stocks = serde_json::from_str::<ApiEnvelope<Vec<TossStockRaw>>>(
             r#"{
                 "result": [
                     {
                         "symbol": "SOXL",
-                        "closePrice": "22.9800",
-                        "timestamp": "2026-06-17T20:00:00-04:00"
+                        "name": "SOXL name",
+                        "shortName": "SOXL short",
+                        "longName": "SOXL long",
+                        "currency": "USD",
+                        "quoteType": "ETF"
                     }
                 ]
             }"#,
@@ -203,6 +270,96 @@ mod tests {
 
         assert_eq!(prices.result[0].last_price, "23.4500");
         assert_eq!(exchange.result.mid_rate, "1378.2500");
-        assert_eq!(candles.result[0].close_price, "22.9800");
+        assert_eq!(candles.result.candles[0].close_price, "22.9800");
+        assert_eq!(stocks.result[0].quote_type.as_deref(), Some("ETF"));
+    }
+
+    #[test]
+    fn market_calendar_response_deserializes_kst_sessions() {
+        let calendar = serde_json::from_str::<ApiEnvelope<TossMarketCalendarRaw>>(
+            r#"{
+                "result": {
+                    "today": {
+                        "date": "2026-06-18",
+                        "dayMarket": {
+                            "startTime": "2026-06-18T10:00:00+09:00",
+                            "endTime": "2026-06-18T16:00:00+09:00"
+                        },
+                        "preMarket": {
+                            "startTime": "2026-06-18T17:00:00+09:00",
+                            "endTime": "2026-06-18T22:30:00+09:00"
+                        },
+                        "regularMarket": {
+                            "startTime": "2026-06-18T22:30:00+09:00",
+                            "endTime": "2026-06-19T05:00:00+09:00"
+                        },
+                        "afterMarket": {
+                            "startTime": "2026-06-19T05:00:00+09:00",
+                            "endTime": "2026-06-19T09:00:00+09:00"
+                        }
+                    },
+                    "previousBusinessDay": {
+                        "date": "2026-06-17",
+                        "dayMarket": null,
+                        "preMarket": null,
+                        "regularMarket": null,
+                        "afterMarket": null
+                    },
+                    "nextBusinessDay": {
+                        "date": "2026-06-19",
+                        "dayMarket": null,
+                        "preMarket": null,
+                        "regularMarket": null,
+                        "afterMarket": null
+                    }
+                }
+            }"#,
+        )
+        .unwrap()
+        .result;
+
+        assert_eq!(calendar.today.date.to_string(), "2026-06-18");
+        assert_eq!(
+            calendar.today.regular_market.unwrap().end_time.to_string(),
+            "2026-06-19 05:00:00 +09:00"
+        );
+    }
+
+    #[test]
+    fn market_calendar_allows_holiday_nullable_sessions() {
+        let calendar = serde_json::from_str::<ApiEnvelope<TossMarketCalendarRaw>>(
+            r#"{
+                "result": {
+                    "today": {
+                        "date": "2026-07-03",
+                        "dayMarket": null,
+                        "preMarket": null,
+                        "regularMarket": null,
+                        "afterMarket": null
+                    },
+                    "previousBusinessDay": {
+                        "date": "2026-07-02",
+                        "dayMarket": null,
+                        "preMarket": null,
+                        "regularMarket": null,
+                        "afterMarket": null
+                    },
+                    "nextBusinessDay": {
+                        "date": "2026-07-06",
+                        "dayMarket": null,
+                        "preMarket": null,
+                        "regularMarket": null,
+                        "afterMarket": null
+                    }
+                }
+            }"#,
+        )
+        .unwrap()
+        .result;
+
+        assert!(calendar.today.day_market.is_none());
+        assert!(calendar.today.pre_market.is_none());
+        assert!(calendar.today.regular_market.is_none());
+        assert!(calendar.today.after_market.is_none());
     }
 }

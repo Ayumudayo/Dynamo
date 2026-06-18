@@ -25,18 +25,17 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/observability`](./crates/observability): startup reporting and rendering
 - [`crates/domain-*`](./crates): shared domain crates for currency, stock, giveaway, invite, stats, suggestion, and moderation
 - [`crates/persistence-mongo`](./crates/persistence-mongo): MongoDB repositories and bootstrap
-- [`crates/providers/google-finance`](./crates/providers/google-finance): Google Finance exchange-rate provider with persisted USD-base cache
-- [`crates/providers/yahoo`](./crates/providers/yahoo): Yahoo Finance provider with persisted crumb/cookie enrichment
+- [`crates/providers/tossinvest`](./crates/providers/tossinvest): Toss Invest market data provider for KRW/USD exchange rates and US stock/ETF quotes
 - [`crates/modules`](./crates/modules): first-party modules
 
 See [`docs/workspace-architecture.md`](./docs/workspace-architecture.md) for the intended dependency boundaries and stacked merge order for the current refactor chain.
 
 ## Included Core Modules
 
-- `currency`: Google Finance backed `/exchange` and `/rate` commands with cached fallback
+- `currency`: Toss Invest backed KRW/USD `/exchange` and `/rate` commands using `midRate`
 - `info`: basic bot diagnostics
 - `gameinfo`: FFXIV world transfer, maintenance, and PLL lookups with fallback cache
-- `stock`: Yahoo-backed quote lookups, ETF summaries, refresh sessions
+- `stock`: Toss Invest backed stock lookups, ETF summaries, and refresh sessions
 - `greeting`: welcome/farewell templates and preview command
 - `invite`: invite attribution, reward role evaluation, invite cache tracking
 - `suggestion`: suggestion board workflow with moderator buttons and modal reasons
@@ -121,7 +120,7 @@ Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and 
 They prebuild `dynamo-bootstrap`, `dynamo-dashboard`, and `dynamo-bot` once with a single `cargo build` invocation, then run the shared binaries from `target/debug/`.
 Bot startup logs include the resolved command scope, loaded module count, loaded leaf command count, and loaded module ids. Dashboard startup logs include the listening URL plus loaded module and command counts.
 Long startup lists are compacted as `count + preview` so the report stays readable in terminals and server logs.
-The bot startup report also shows whether the Google Finance exchange-rate cache service is wired and whether the 30-minute refresh loop is active.
+The bot startup report also shows whether Toss Invest market-data services are wired and whether the exchange-rate refresh loop is active.
 
 PowerShell:
 
@@ -278,12 +277,10 @@ cargo test --workspace
 bash scripts/check-workspace-structure.sh
 ```
 
-Live network smoke checks for Yahoo enrichment are available but intentionally ignored by default:
+Live Toss Invest smoke checks require local API credentials and are run outside the default workspace suite:
 
 ```powershell
-cargo test -p dynamo-provider-yahoo live_quote_summary_enrichment_returns_rich_nvda_quote -- --ignored --nocapture
-cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to_mongodb -- --ignored --nocapture
-cargo test -p dynamo-provider-google-finance
+powershell -ExecutionPolicy Bypass -File scripts\validate-tossinvest.ps1 -KeyPath E:\Toss\Invest\API-Key.md
 ```
 
 Node tooling at the repository root is now limited to Playwright smoke only. The root `package.json` is no longer a bot runtime manifest.

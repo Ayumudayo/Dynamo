@@ -86,19 +86,39 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
     ))
 }
 
-pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<ServiceRegistry> {
-    let stock_quotes: Arc<dyn StockQuoteService> = Arc::new(
-        dynamo_provider_yahoo::YahooFinanceClient::new(persistence.provider_state.clone())?,
-    );
-    let exchange_rates: Arc<dyn ExchangeRateService> = Arc::new(
-        dynamo_provider_google_finance::GoogleFinanceExchangeService::new(
-            persistence.provider_state.clone(),
-        )?,
-    );
+pub fn services_from_persistence(_persistence: &Persistence) -> anyhow::Result<ServiceRegistry> {
+    let Some(toss_client) = toss_client_from_env()? else {
+        return Ok(ServiceRegistry::new(None, None));
+    };
+
+    let stock_quotes: Arc<dyn StockQuoteService> =
+        Arc::new(dynamo_provider_tossinvest::TossInvestStockQuoteService::new(toss_client.clone()));
+    let exchange_rates: Arc<dyn ExchangeRateService> =
+        Arc::new(dynamo_provider_tossinvest::TossInvestMarketDataService::new(toss_client));
     Ok(ServiceRegistry::new(
         Some(stock_quotes),
         Some(exchange_rates),
     ))
+}
+
+fn toss_client_from_env() -> anyhow::Result<Option<dynamo_provider_tossinvest::TossInvestClient>> {
+    let config = match dynamo_provider_tossinvest::TossInvestConfig::from_env() {
+        Ok(config) => config,
+        Err(error) if is_missing_tossinvest_credential_error(&error) => return Ok(None),
+        Err(error) => return Err(error.context("failed to load Toss Invest configuration")),
+    };
+
+    Ok(Some(dynamo_provider_tossinvest::TossInvestClient::new(
+        config,
+    )))
+}
+
+fn is_missing_tossinvest_credential_error(error: &anyhow::Error) -> bool {
+    matches!(
+        error.to_string().as_str(),
+        "Missing required environment variable TOSSINVEST_CLIENT_ID"
+            | "Missing required environment variable TOSSINVEST_CLIENT_SECRET"
+    )
 }
 
 pub fn create_application_commands_for_scope(
@@ -316,12 +336,59 @@ fn filter_command_recursive(
 
 #[cfg(test)]
 mod tests {
+    use std::{ffi::OsString, sync::Mutex};
+
     use dynamo_config::OptionalModulesConfig;
+    use dynamo_persistence_api::Persistence;
+    use dynamo_service_exchange::ExchangeRateService;
 
     use super::{
         application_command_fingerprint_for_scope, fingerprint_canonical_json_value,
-        module_registry, module_registry_with_optional,
+        module_registry, module_registry_with_optional, services_from_persistence,
+        toss_client_from_env,
     };
+
+    static TOSS_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests that mutate Toss environment variables hold TOSS_ENV_LOCK,
+            // and ScopedEnvVar restores the original value before releasing the lock.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests that mutate Toss environment variables hold TOSS_ENV_LOCK,
+            // and ScopedEnvVar restores the original value before releasing the lock.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            // SAFETY: ScopedEnvVar values are dropped while TOSS_ENV_LOCK is still held,
+            // so environment mutation stays serialized for the full test scope.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn default_registry_commands_have_explicit_descriptions() {
@@ -375,6 +442,62 @@ mod tests {
         let _ = dynamo_module_stats::events::handle_message;
         let _ = dynamo_module_stats::events::handle_interaction;
         let _ = dynamo_module_stats::events::handle_voice_state_update;
+    }
+
+    #[test]
+    fn services_keep_market_data_optional_without_toss_credentials() {
+        let _lock = TOSS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _client_id = ScopedEnvVar::remove("TOSSINVEST_CLIENT_ID");
+        let _client_secret = ScopedEnvVar::remove("TOSSINVEST_CLIENT_SECRET");
+        let _base_url = ScopedEnvVar::remove("TOSSINVEST_BASE_URL");
+
+        let services = services_from_persistence(&Persistence::default()).unwrap();
+
+        assert!(services.stock_quotes.is_none());
+        assert!(services.exchange_rates.is_none());
+    }
+
+    #[test]
+    fn services_build_toss_market_data_when_credentials_are_present() {
+        let _lock = TOSS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _client_id = ScopedEnvVar::set("TOSSINVEST_CLIENT_ID", "test-client-id");
+        let _client_secret = ScopedEnvVar::set("TOSSINVEST_CLIENT_SECRET", "test-client-secret");
+        let _base_url = ScopedEnvVar::set("TOSSINVEST_BASE_URL", "https://openapi.tossinvest.com");
+
+        let client = toss_client_from_env().unwrap().expect("Toss client");
+        let service = dynamo_provider_tossinvest::TossInvestMarketDataService::new(client);
+
+        assert_eq!(service.cache_target_count(), 2);
+        assert!(!service.uses_persisted_cache());
+
+        let services = services_from_persistence(&Persistence::default()).unwrap();
+        assert!(services.stock_quotes.is_some());
+        assert!(services.exchange_rates.is_some());
+    }
+
+    #[test]
+    fn services_reject_invalid_toss_configuration_when_credentials_are_present() {
+        let _lock = TOSS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _client_id = ScopedEnvVar::set("TOSSINVEST_CLIENT_ID", "test-client-id");
+        let _client_secret = ScopedEnvVar::set("TOSSINVEST_CLIENT_SECRET", "test-client-secret");
+        let _base_url = ScopedEnvVar::set("TOSSINVEST_BASE_URL", "http://not-allowed.example");
+
+        let error = match services_from_persistence(&Persistence::default()) {
+            Ok(_) => panic!("invalid Toss configuration should fail"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load Toss Invest configuration")
+        );
     }
 
     #[test]

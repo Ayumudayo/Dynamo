@@ -106,13 +106,8 @@ impl TossRateLimiter {
         now_utc: DateTime<Utc>,
         jitter_percent: u32,
     ) -> Duration {
-        let delay = retry_delay_for_too_many_requests_at(
-            group,
-            headers,
-            attempt,
-            now_utc,
-            jitter_percent,
-        );
+        let delay =
+            retry_delay_for_too_many_requests_at(group, headers, attempt, now_utc, jitter_percent);
         let mut next_allowed_at = self.next_allowed_at.lock().await;
         let next_slot = next_allowed_at.entry(group).or_insert(now_instant);
         let base = (*next_slot).max(now_instant);
@@ -210,11 +205,7 @@ fn positive_delay_from(target: DateTime<Utc>, now: DateTime<Utc>) -> Option<Dura
     delta.to_std().ok()
 }
 
-fn backoff_with_jitter(
-    group: TossRateLimitGroup,
-    attempt: u32,
-    jitter_percent: u32,
-) -> Duration {
+fn backoff_with_jitter(group: TossRateLimitGroup, attempt: u32, jitter_percent: u32) -> Duration {
     let base_delay = group.local_retry_delay(attempt);
     let clamped_percent = jitter_percent.clamp(50, 100);
     let jittered_millis =
@@ -224,9 +215,12 @@ fn backoff_with_jitter(
 
 #[cfg(test)]
 mod tests {
-    use super::{TossRateLimitGroup, TossRateLimiter, backoff_with_jitter, retry_delay_for_too_many_requests_at};
+    use super::{
+        TossRateLimitGroup, TossRateLimiter, backoff_with_jitter,
+        retry_delay_for_too_many_requests_at,
+    };
     use chrono::{DateTime, Utc};
-    use reqwest::header::{HeaderMap, HeaderValue, HeaderName, RETRY_AFTER};
+    use reqwest::header::{HeaderMap, HeaderName, HeaderValue, RETRY_AFTER};
     use std::time::{Duration, Instant};
 
     #[test]

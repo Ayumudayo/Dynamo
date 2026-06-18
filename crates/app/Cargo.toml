@@ -30,9 +30,8 @@ dynamo-module-suggestion = { path = "../modules/suggestion" }
 dynamo-module-stats = { path = "../modules/stats" }
 dynamo-module-ticket = { path = "../modules/ticket" }
 dynamo-module-stock = { path = "../modules/stock" }
-dynamo-provider-google-finance = { path = "../providers/google-finance" }
 dynamo-persistence-mongo = { path = "../persistence-mongo" }
-dynamo-provider-yahoo = { path = "../providers/yahoo" }
+dynamo-provider-tossinvest = { path = "../providers/tossinvest" }
 poise.workspace = true
 serde_json.workspace = true
 sha2.workspace = true

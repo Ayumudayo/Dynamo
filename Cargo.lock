@@ -726,8 +726,7 @@ dependencies = [
  "dynamo-ops",
  "dynamo-persistence-api",
  "dynamo-persistence-mongo",
- "dynamo-provider-google-finance",
- "dynamo-provider-yahoo",
+ "dynamo-provider-tossinvest",
  "dynamo-registry",
  "dynamo-repositories",
  "dynamo-runtime-api",
@@ -769,7 +768,7 @@ dependencies = [
  "dynamo-observability",
  "dynamo-ops",
  "dynamo-persistence-api",
- "dynamo-provider-google-finance",
+ "dynamo-provider-tossinvest",
  "dynamo-registry",
  "dynamo-runtime-api",
  "dynamo-services-api",
@@ -1124,24 +1123,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dynamo-provider-google-finance"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "chrono",
- "dynamo-domain-currency",
- "dynamo-repositories",
- "dynamo-service-exchange",
- "futures-util",
- "reqwest",
- "scraper",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "dynamo-provider-tossinvest"
 version = "0.1.0"
 dependencies = [
@@ -1159,27 +1140,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tracing",
-]
-
-[[package]]
-name = "dynamo-provider-yahoo"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "async-trait",
- "dotenvy",
- "dynamo-domain-stock",
- "dynamo-persistence-mongo",
- "dynamo-repositories",
- "dynamo-service-stock",
- "futures-util",
- "reqwest",
- "scraper",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
- "url",
 ]
 
 [[package]]

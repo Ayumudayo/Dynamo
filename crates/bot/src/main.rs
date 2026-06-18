@@ -248,20 +248,12 @@ fn build_bot_preconnect_report(
             },
         )
         .detail(
-            "exchange_rate_cache_targets",
+            "exchange_rate_targets",
             services
                 .exchange_rates
                 .as_ref()
                 .map(|service| service.cache_target_count().to_string())
                 .unwrap_or_else(|| "0".to_string()),
-        )
-        .detail(
-            "exchange_rate_cache_persistence",
-            services
-                .exchange_rates
-                .as_ref()
-                .map(|service| service.uses_persisted_cache().to_string())
-                .unwrap_or_else(|| "false".to_string()),
         ),
     );
 
@@ -350,7 +342,7 @@ async fn build_bot_runtime_report(
             .len();
 
     let mut report = StartupReport::new("bot");
-    let exchange_cache_status = if let Some(service) = &app_state.services.exchange_rates {
+    let exchange_rate_status = if let Some(service) = &app_state.services.exchange_rates {
         Some(service.cache_status().await?)
     } else {
         None
@@ -381,26 +373,25 @@ async fn build_bot_runtime_report(
             if app_state.services.exchange_rates.is_some() {
                 format!(
                     "enabled every {}s",
-                    dynamo_provider_google_finance::cache_refresh_interval_seconds()
+                    dynamo_provider_tossinvest::exchange_refresh_interval_seconds()
                 )
             } else {
                 "disabled".to_string()
             },
         )
         .detail(
-            "exchange_rate_cache_status",
-            exchange_cache_status
+            "exchange_rate_status",
+            exchange_rate_status
                 .as_ref()
                 .map(|status| {
                     format!(
-                        "targets={} cached={} persisted={} last_refresh={}",
+                        "targets={} last_refresh={} persisted={}",
                         status.target_currency_count,
-                        status.cached_currency_count,
-                        status.uses_persisted_cache,
                         status
                             .last_refresh_at
                             .map(|value| value.to_rfc3339())
-                            .unwrap_or_else(|| "none".to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        status.uses_persisted_cache
                     )
                 })
                 .unwrap_or_else(|| "not configured".to_string()),
@@ -860,11 +851,11 @@ fn spawn_exchange_rate_refresh_loop(data: AppState) {
 
     tokio::spawn(async move {
         if let Err(error) = service.refresh_cache().await {
-            warn!(?error, "failed to warm exchange-rate cache");
+            warn!(?error, "failed to preflight exchange-rate data");
         }
 
         let interval =
-            Duration::from_secs(dynamo_provider_google_finance::cache_refresh_interval_seconds());
+            Duration::from_secs(dynamo_provider_tossinvest::exchange_refresh_interval_seconds());
         let mut warning_throttle = WarningThrottle::default();
         loop {
             tokio::time::sleep(interval).await;
@@ -872,7 +863,7 @@ fn spawn_exchange_rate_refresh_loop(data: AppState) {
                 if let Some(suppressed_repetitions) = warning_throttle.record_error(&error) {
                     warn!(
                         ?error,
-                        suppressed_repetitions, "failed to refresh exchange-rate cache"
+                        suppressed_repetitions, "failed to refresh exchange-rate data"
                     );
                 }
             } else {
@@ -936,7 +927,11 @@ impl WarningThrottle {
 
 #[cfg(test)]
 mod tests {
-    use super::{WarningThrottle, WarningThrottleAction, command_scope_needs_sync};
+    use dynamo_services_api::ServiceRegistry;
+
+    use super::{
+        WarningThrottle, WarningThrottleAction, collect_service_labels, command_scope_needs_sync,
+    };
 
     #[test]
     fn warning_throttle_logs_first_error_and_suppresses_identical_repeats() {
@@ -1008,6 +1003,13 @@ mod tests {
             "application-command-v1:abc",
             false
         ));
+    }
+
+    #[test]
+    fn service_labels_omit_exchange_when_exchange_service_is_disabled() {
+        let labels = collect_service_labels(&ServiceRegistry::new(None, None));
+
+        assert!(!labels.contains(&"exchange_rates".to_string()));
     }
 
     #[test]

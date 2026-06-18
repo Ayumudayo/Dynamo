@@ -4,8 +4,7 @@ use anyhow::{Context, anyhow};
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use dynamo_domain_currency::{
-    ExchangeRateCacheStatus, ExchangeRateQuote, ExchangeRateRefreshResult,
-    ExchangeRateSourceKind,
+    ExchangeRateCacheStatus, ExchangeRateQuote, ExchangeRateRefreshResult, ExchangeRateSourceKind,
 };
 use dynamo_service_exchange::{Error, ExchangeRateService};
 use reqwest::Method;
@@ -38,6 +37,10 @@ pub struct TossInvestMarketDataService {
     last_refresh_at: Arc<RwLock<Option<DateTime<Utc>>>>,
 }
 
+pub fn exchange_refresh_interval_seconds() -> u64 {
+    60 * 60 * 24
+}
+
 impl TossInvestMarketDataService {
     pub fn new(client: TossInvestClient) -> Self {
         Self {
@@ -63,26 +66,14 @@ impl TossInvestMarketDataService {
         let from = normalize_currency(from);
         let to = normalize_currency(to);
 
-        if from == to {
-            let fetched_at = Utc::now();
-            return Ok(ExchangeRateQuote {
-                from,
-                to,
-                rate: 1.0,
-                source_kind: ExchangeRateSourceKind::Live,
-                source_timestamp: fetched_at,
-                source_timestamp_text: format_timestamp(fetched_at),
-                fetched_at_utc: fetched_at,
-            });
-        }
-
         if !is_supported_pair(&from, &to) {
             return Err(anyhow!(UNSUPPORTED_PAIR_ERROR));
         }
 
         let fetched = fetch_usd_krw(EXCHANGE_RATE_PATH.to_string()).await?;
         let usd_krw = parse_mid_rate(&fetched.mid_rate)?;
-        let source_timestamp = parse_source_timestamp(fetched.valid_from.as_deref(), fetched.fetched_at);
+        let source_timestamp =
+            parse_source_timestamp(fetched.valid_from.as_deref(), fetched.fetched_at);
         let rate = if from == USD && to == KRW {
             usd_krw
         } else {
@@ -242,23 +233,29 @@ mod tests {
         },
     };
 
+    use crate::TossRateLimitGroup;
     use chrono::{TimeDelta, TimeZone, Utc};
     use dynamo_domain_currency::ExchangeRateSourceKind;
-    use crate::TossRateLimitGroup;
 
-    use super::{EXCHANGE_RATE_GROUP, FetchedExchangeRate, TossInvestMarketDataService};
+    use super::{
+        EXCHANGE_RATE_GROUP, FetchedExchangeRate, TossInvestMarketDataService,
+        UNSUPPORTED_PAIR_ERROR,
+    };
 
     fn test_service() -> TossInvestMarketDataService {
         let client = crate::TossInvestClient::new(
             crate::TossInvestConfig::from_map(&BTreeMap::from([
-                ("TOSSINVEST_CLIENT_ID".to_string(), "test-client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "test-client-id".to_string(),
+                ),
                 (
                     "TOSSINVEST_CLIENT_SECRET".to_string(),
                     "test-client-secret".to_string(),
                 ),
                 (
                     "TOSSINVEST_BASE_URL".to_string(),
-                    "https://sandbox.openapi.tossinvest.example".to_string(),
+                    "https://openapi.tossinvest.com".to_string(),
                 ),
             ]))
             .unwrap(),
@@ -369,12 +366,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn exchange_same_currency_returns_one_without_external_call() {
+    async fn exchange_same_currency_is_not_reported_as_toss_mid_rate() {
         let service = test_service();
         let external_calls = Arc::new(AtomicUsize::new(0));
         let external_calls_for_call = external_calls.clone();
 
-        let quote = service
+        let error = service
             .fetch_pair_with("usd", "USD", move |_path| {
                 external_calls_for_call.fetch_add(1, Ordering::SeqCst);
                 async move {
@@ -386,12 +383,9 @@ mod tests {
                 }
             })
             .await
-            .unwrap();
+            .unwrap_err();
 
-        assert_eq!(quote.from, "USD");
-        assert_eq!(quote.to, "USD");
-        assert_eq!(quote.rate, 1.0);
-        assert_eq!(quote.source_kind, ExchangeRateSourceKind::Live);
+        assert_eq!(error.to_string(), UNSUPPORTED_PAIR_ERROR);
         assert_eq!(external_calls.load(Ordering::SeqCst), 0);
     }
 

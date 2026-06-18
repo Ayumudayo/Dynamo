@@ -366,7 +366,10 @@ impl CachedAccessToken {
         }
     }
 
-    fn from_oauth_response(response: OAuth2TokenResponse, fetched_at: DateTime<Utc>) -> Result<Self> {
+    fn from_oauth_response(
+        response: OAuth2TokenResponse,
+        fetched_at: DateTime<Utc>,
+    ) -> Result<Self> {
         let expires_in_seconds = i64::try_from(response.expires_in)
             .map_err(|_| anyhow!("Toss OAuth token expiry overflowed i64"))?;
         let expires_at = fetched_at
@@ -443,8 +446,9 @@ fn retryable_token_error_code(response: &TossInvestResponse) -> Result<bool> {
 }
 
 fn shared_state_for(config: &TossInvestConfig) -> Arc<SharedClientState> {
-    static SHARED_CLIENT_STATES: OnceLock<StdMutex<BTreeMap<ClientIdentity, Weak<SharedClientState>>>> =
-        OnceLock::new();
+    static SHARED_CLIENT_STATES: OnceLock<
+        StdMutex<BTreeMap<ClientIdentity, Weak<SharedClientState>>>,
+    > = OnceLock::new();
 
     let identity = ClientIdentity::from_config(config);
     let registry = SHARED_CLIENT_STATES.get_or_init(|| StdMutex::new(BTreeMap::new()));
@@ -492,7 +496,10 @@ impl TossInvestClient {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
     use chrono::{TimeDelta, Utc};
     use reqwest::{
@@ -504,7 +511,7 @@ mod tests {
 
     use super::{CachedAccessToken, TossInvestClient, TossInvestResponse, build_oauth_error};
 
-    const DEFAULT_TEST_BASE_URL: &str = "https://sandbox.openapi.tossinvest.example";
+    const DEFAULT_TEST_BASE_URL: &str = "https://openapi.tossinvest.com";
 
     fn test_config(client_id: &str) -> crate::TossInvestConfig {
         test_config_with_base_url(client_id, DEFAULT_TEST_BASE_URL)
@@ -564,7 +571,11 @@ mod tests {
             .await;
 
         let request = client
-            .authenticated_request(TossRateLimitGroup::MarketData, Method::GET, "/api/v1/prices")
+            .authenticated_request(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+            )
             .await
             .unwrap()
             .build()
@@ -572,7 +583,7 @@ mod tests {
 
         assert_eq!(
             request.url().as_str(),
-            "https://sandbox.openapi.tossinvest.example/api/v1/prices"
+            "https://openapi.tossinvest.com/api/v1/prices"
         );
         assert_eq!(
             request.headers().get(AUTHORIZATION),
@@ -625,7 +636,11 @@ mod tests {
             .await;
 
         let error = client
-            .authenticated_request(TossRateLimitGroup::MarketData, Method::GET, "//evil.example/api")
+            .authenticated_request(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "//evil.example/api",
+            )
             .await
             .unwrap_err()
             .to_string();
@@ -803,11 +818,11 @@ mod tests {
     fn oauth_clients_share_state_across_trailing_slash_base_url_spellings() {
         let first = TossInvestClient::new(test_config_with_base_url(
             "client-id-shared-trailing-slash",
-            "https://sandbox.openapi.tossinvest.example",
+            "https://openapi.tossinvest.com",
         ));
         let second = TossInvestClient::new(test_config_with_base_url(
             "client-id-shared-trailing-slash",
-            "https://sandbox.openapi.tossinvest.example/",
+            "https://openapi.tossinvest.com/",
         ));
 
         assert!(Arc::ptr_eq(&first.shared_state, &second.shared_state));
@@ -817,11 +832,7 @@ mod tests {
     async fn oauth_send_authenticated_retries_once_with_refreshed_token_for_invalid_token() {
         let client = TossInvestClient::new(test_config("client-id-send-retry-invalid-token"));
         client
-            .test_set_cached_token(
-                "old-token",
-                "Bearer",
-                Utc::now() + TimeDelta::seconds(3600),
-            )
+            .test_set_cached_token("old-token", "Bearer", Utc::now() + TimeDelta::seconds(3600))
             .await;
         client
             .test_set_next_refresh_token(

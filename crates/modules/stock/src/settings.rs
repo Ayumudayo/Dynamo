@@ -174,7 +174,12 @@ pub(crate) fn normalize_symbols(symbols: Vec<String>) -> Vec<String> {
     let mut seen = std::collections::BTreeSet::new();
     symbols
         .into_iter()
-        .map(normalize_symbol)
+        .filter_map(normalize_optional_symbol)
         .filter(|symbol| seen.insert(symbol.clone()))
         .collect()
+}
+
+fn normalize_optional_symbol(symbol: String) -> Option<String> {
+    let trimmed = symbol.trim().to_ascii_uppercase();
+    (!trimmed.is_empty()).then_some(trimmed)
 }
