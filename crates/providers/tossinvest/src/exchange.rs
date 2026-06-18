@@ -167,18 +167,9 @@ async fn fetch_exchange_rate(
     client: &TossInvestClient,
     path: &str,
 ) -> Result<FetchedExchangeRate, Error> {
-    let client = client.clone();
-    let path = path.to_string();
-    let handle = tokio::runtime::Handle::current();
-    let response = tokio::task::spawn_blocking(move || {
-        handle.block_on(async move {
-            client
-                .send_authenticated(EXCHANGE_RATE_GROUP, Method::GET, &path)
-                .await
-        })
-    })
-    .await
-    .context("failed to join Toss Invest exchange-rate request task")??;
+    let response = client
+        .send_authenticated(EXCHANGE_RATE_GROUP, Method::GET, path)
+        .await?;
     build_fetched_exchange_rate(response)
 }
 

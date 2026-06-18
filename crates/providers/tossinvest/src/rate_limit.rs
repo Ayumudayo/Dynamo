@@ -82,13 +82,17 @@ impl TossRateLimiter {
         headers: &HeaderMap,
         attempt: u32,
     ) -> Duration {
+        let jitter_percent = {
+            let mut rng = rand::thread_rng();
+            rng.gen_range(50..=100)
+        };
         self.observe_too_many_requests_at(
             group,
             headers,
             attempt,
             Instant::now(),
             Utc::now(),
-            rand::thread_rng().gen_range(50..=100),
+            jitter_percent,
         )
         .await
     }

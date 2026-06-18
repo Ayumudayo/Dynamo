@@ -87,7 +87,9 @@ impl Module<AppState, Error> for CurrencyModule {
                 sections: vec![SettingsSection {
                     id: "rate-targets",
                     title: "Rate Result Currencies",
-                    description: Some("Choose up to six currencies to display for /rate in order."),
+                    description: Some(
+                        "Only KRW and USD are supported. Blank or matching values fall back to the opposite currency for the selected base.",
+                    ),
                     fields: vec![
                         rate_target_field("target_1", "Result currency 1"),
                         rate_target_field("target_2", "Result currency 2"),
@@ -164,10 +166,14 @@ async fn exchange(
     }
 
     let defaults = load_exchange_defaults(ctx).await?;
-    let (from, to) = sanitize_exchange_pair(
-        from.unwrap_or(defaults.default_from),
-        to.unwrap_or(defaults.default_to),
-    );
+    let (from, to) =
+        match resolve_explicit_exchange_pair(from.as_deref(), to.as_deref(), &defaults) {
+            Ok(pair) => pair,
+            Err(message) => {
+                ctx.say(message).await?;
+                return Ok(());
+            }
+        };
     let amount = amount.unwrap_or(defaults.default_amount);
     let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
         ctx.say("The exchange-rate service is not available in this deployment.")
@@ -221,8 +227,13 @@ async fn rate(
     }
 
     let defaults = load_exchange_defaults(ctx).await?;
-    let from = supported_toss_currency(from.as_deref().unwrap_or(defaults.default_from.as_str()))
-        .unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
+    let from = match resolve_rate_base_currency(from.as_deref(), &defaults) {
+        Ok(from) => from,
+        Err(message) => {
+            ctx.say(message).await?;
+            return Ok(());
+        }
+    };
     let amount = amount.unwrap_or(defaults.default_amount);
     let rate_targets = sanitize_rate_targets(&from, load_rate_targets(ctx).await?);
     let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
@@ -459,8 +470,9 @@ fn supported_toss_currency(input: &str) -> Option<String> {
 }
 
 fn sanitize_exchange_pair(from: String, to: String) -> (String, String) {
-    let from = supported_toss_currency(&from).unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
-    let to = supported_toss_currency(&to).unwrap_or_else(|| opposite_currency(&from));
+    let from =
+        sanitize_persisted_currency(&from).unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
+    let to = sanitize_persisted_currency(&to).unwrap_or_else(|| opposite_currency(&from));
 
     if from == to {
         return (from.clone(), opposite_currency(&from));
@@ -469,13 +481,67 @@ fn sanitize_exchange_pair(from: String, to: String) -> (String, String) {
     (from, to)
 }
 
+fn sanitize_persisted_currency(input: &str) -> Option<String> {
+    supported_toss_currency(input)
+}
+
+fn validate_supported_explicit_currency(input: &str) -> Result<String, &'static str> {
+    supported_toss_currency(input).ok_or(TOSS_EXCHANGE_SUPPORT_ERROR)
+}
+
+fn resolve_explicit_exchange_pair(
+    from: Option<&str>,
+    to: Option<&str>,
+    defaults: &ResolvedExchangeDefaults,
+) -> Result<(String, String), &'static str> {
+    match (from, to) {
+        (Some(explicit_from), Some(explicit_to)) => Ok((
+            validate_supported_explicit_currency(explicit_from)?,
+            validate_supported_explicit_currency(explicit_to)?,
+        )),
+        (Some(explicit_from), None) => {
+            let from = validate_supported_explicit_currency(explicit_from)?;
+            let mut to = sanitize_persisted_currency(&defaults.default_to)
+                .unwrap_or_else(|| opposite_currency(&from));
+            if to == from {
+                to = opposite_currency(&from);
+            }
+            Ok((from, to))
+        }
+        (None, Some(explicit_to)) => {
+            let to = validate_supported_explicit_currency(explicit_to)?;
+            let mut from = sanitize_persisted_currency(&defaults.default_from)
+                .unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
+            if from == to {
+                from = opposite_currency(&to);
+            }
+            Ok((from, to))
+        }
+        (None, None) => Ok(sanitize_exchange_pair(
+            defaults.default_from.clone(),
+            defaults.default_to.clone(),
+        )),
+    }
+}
+
+fn resolve_rate_base_currency(
+    explicit_from: Option<&str>,
+    defaults: &ResolvedExchangeDefaults,
+) -> Result<String, &'static str> {
+    match explicit_from {
+        Some(explicit_from) => validate_supported_explicit_currency(explicit_from),
+        None => Ok(sanitize_persisted_currency(&defaults.default_from)
+            .unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string())),
+    }
+}
+
 fn sanitize_rate_targets(from: &str, targets: Vec<String>) -> Vec<String> {
     let normalized_from =
-        supported_toss_currency(from).unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
+        sanitize_persisted_currency(from).unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
     let opposite = opposite_currency(&normalized_from);
     let mut values = targets
         .into_iter()
-        .filter_map(|value| supported_toss_currency(&value))
+        .filter_map(|value| sanitize_persisted_currency(&value))
         .filter(|value| value != &normalized_from)
         .collect::<Vec<_>>();
     values.dedup();
@@ -501,7 +567,9 @@ fn rate_target_field(key: &'static str, label: &'static str) -> SettingsField {
     SettingsField {
         key,
         label,
-        help_text: Some("Leave blank to skip this slot in the /rate result list."),
+        help_text: Some(
+            "Only KRW and USD are supported. Leave blank or repeat the base currency to use the opposite currency.",
+        ),
         required: false,
         kind: SettingsFieldKind::Select {
             options: currency_select_options(true),
@@ -753,10 +821,11 @@ fn opposite_currency(from: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        CurrencyModule, TOSS_EXCHANGE_PROVIDER_FOOTER, TOSS_EXCHANGE_SUPPORT_ERROR,
+        CurrencyModule, DEFAULT_EXCHANGE_AMOUNT, TOSS_EXCHANGE_PROVIDER_FOOTER, TOSS_EXCHANGE_SUPPORT_ERROR,
         currency_display_label, currency_option_label, currency_select_options, format_decimal,
-        format_rate_board_value, normalize_currency, sanitize_exchange_pair,
-        sanitize_rate_targets, supported_toss_currency,
+        format_rate_board_value, normalize_currency, resolve_explicit_exchange_pair,
+        resolve_rate_base_currency, sanitize_exchange_pair, sanitize_rate_targets,
+        supported_toss_currency, ResolvedExchangeDefaults,
     };
     use chrono::Utc;
     use dynamo_domain_currency::{
@@ -855,11 +924,24 @@ mod tests {
         let schema = CurrencyModule.command_settings_schema("rate");
         let fields = &schema.sections[0].fields;
 
+        assert_eq!(
+            schema.sections[0].description,
+            Some(
+                "Only KRW and USD are supported. Blank or matching values fall back to the opposite currency for the selected base."
+            )
+        );
+
         for field in fields {
             let SettingsFieldKind::Select { options } = &field.kind else {
                 panic!("rate field should be a select");
             };
 
+            assert_eq!(
+                field.help_text,
+                Some(
+                    "Only KRW and USD are supported. Leave blank or repeat the base currency to use the opposite currency."
+                )
+            );
             assert_eq!(
                 options.iter().map(|option| option.value).collect::<Vec<_>>(),
                 vec!["", "KRW", "USD"]
@@ -873,9 +955,39 @@ mod tests {
             sanitize_exchange_pair("eur".to_string(), "jpy".to_string()),
             ("USD".to_string(), "KRW".to_string())
         );
+    }
+
+    #[test]
+    fn explicit_unsupported_exchange_input_returns_support_error() {
+        let defaults = ResolvedExchangeDefaults::default();
+
         assert_eq!(
-            sanitize_exchange_pair("usd".to_string(), "usd".to_string()),
-            ("USD".to_string(), "KRW".to_string())
+            resolve_explicit_exchange_pair(Some("EUR"), Some("JPY"), &defaults),
+            Err(TOSS_EXCHANGE_SUPPORT_ERROR)
+        );
+    }
+
+    #[test]
+    fn explicit_same_currency_exchange_remains_same_currency() {
+        let defaults = ResolvedExchangeDefaults::default();
+
+        assert_eq!(
+            resolve_explicit_exchange_pair(Some("USD"), Some("USD"), &defaults),
+            Ok(("USD".to_string(), "USD".to_string()))
+        );
+    }
+
+    #[test]
+    fn explicit_exchange_with_omitted_side_uses_opposite_of_resolved_base() {
+        let defaults = ResolvedExchangeDefaults {
+            default_from: "USD".to_string(),
+            default_to: "USD".to_string(),
+            default_amount: DEFAULT_EXCHANGE_AMOUNT,
+        };
+
+        assert_eq!(
+            resolve_explicit_exchange_pair(Some("USD"), None, &defaults),
+            Ok(("USD".to_string(), "KRW".to_string()))
         );
     }
 
@@ -904,6 +1016,30 @@ mod tests {
         assert_eq!(
             sanitize_rate_targets("KRW", vec!["krw".to_string()]),
             vec!["USD".to_string()]
+        );
+    }
+
+    #[test]
+    fn explicit_unsupported_rate_from_fails_validation() {
+        let defaults = ResolvedExchangeDefaults::default();
+
+        assert_eq!(
+            resolve_rate_base_currency(Some("EUR"), &defaults),
+            Err(TOSS_EXCHANGE_SUPPORT_ERROR)
+        );
+    }
+
+    #[test]
+    fn persisted_rate_from_still_sanitizes_to_default_supported_currency() {
+        let defaults = ResolvedExchangeDefaults {
+            default_from: "EUR".to_string(),
+            default_to: "KRW".to_string(),
+            default_amount: DEFAULT_EXCHANGE_AMOUNT,
+        };
+
+        assert_eq!(
+            resolve_rate_base_currency(None, &defaults),
+            Ok("USD".to_string())
         );
     }
 
