@@ -1,5 +1,5 @@
 use dynamo_access::module_access_for_context;
-use dynamo_domain_currency::{ExchangeRateSourceKind, supported_currency_specs};
+use dynamo_domain_currency::supported_currency_specs;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingOption,
     SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
@@ -13,10 +13,13 @@ use serde::{Deserialize, Serialize};
 const MODULE_ID: &str = "currency";
 const CURRENCY_THUMBNAIL_URL: &str = "https://cdn.discordapp.com/attachments/1138398345065414657/1138816034049105940/gil.png?ex=65c37c14&is=65b10714&hm=725d32835f239f48cf0a3485491431c7d02a1750b53c9086210d765b89e798f8&";
 const BOT_EMBED_COLOR: u32 = 0x068ADD;
-const DEFAULT_RATE_TARGETS: [&str; 6] = ["USD", "KRW", "JPY", "EUR", "TRY", "UAH"];
+const DEFAULT_RATE_TARGETS: [&str; 6] = ["KRW", "", "", "", "", ""];
 const DEFAULT_EXCHANGE_FROM: &str = "USD";
 const DEFAULT_EXCHANGE_TO: &str = "KRW";
 const DEFAULT_EXCHANGE_AMOUNT: f64 = 1.0;
+const TOSS_EXCHANGE_PROVIDER_FOOTER: &str = "Toss Invest · midRate";
+const TOSS_EXCHANGE_SUPPORT_ERROR: &str =
+    "Only KRW and USD are supported by the current Toss Invest exchange-rate provider.";
 
 pub struct CurrencyModule;
 
@@ -25,7 +28,7 @@ impl Module<AppState, Error> for CurrencyModule {
         ModuleManifest::new(
             MODULE_ID,
             "Currency",
-            "Exchange rate commands backed by Google Finance with cached fallback.",
+            "Exchange rate commands backed by Toss Invest midRate data.",
             ModuleCategory::Currency,
             true,
             GatewayIntents::GUILDS,
@@ -161,8 +164,10 @@ async fn exchange(
     }
 
     let defaults = load_exchange_defaults(ctx).await?;
-    let from = normalize_currency(from.as_deref().unwrap_or(defaults.default_from.as_str()));
-    let to = normalize_currency(to.as_deref().unwrap_or(defaults.default_to.as_str()));
+    let (from, to) = sanitize_exchange_pair(
+        from.unwrap_or(defaults.default_from),
+        to.unwrap_or(defaults.default_to),
+    );
     let amount = amount.unwrap_or(defaults.default_amount);
     let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
         ctx.say("The exchange-rate service is not available in this deployment.")
@@ -171,25 +176,28 @@ async fn exchange(
     };
     let quote = match service.fetch_pair(&from, &to).await {
         Ok(quote) => quote,
-        Err(_) => {
-            ctx.say("Failed to fetch latest exchange data and no cached data is available.")
+        Err(error) => {
+            let message = if error.to_string().contains("KRW")
+                && error.to_string().contains("USD")
+            {
+                TOSS_EXCHANGE_SUPPORT_ERROR
+            } else {
+                "Failed to fetch the latest Toss Invest exchange rate."
+            };
+            ctx.say(message)
                 .await?;
             return Ok(());
         }
     };
     let converted = quote.rate * amount;
-    let mut embed = CreateEmbed::new()
+    let embed = CreateEmbed::new()
         .title(format!("Exchange rate from {from} to {to}"))
         .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new("Data from Google Finance."))
+        .footer(CreateEmbedFooter::new(TOSS_EXCHANGE_PROVIDER_FOOTER))
         .timestamp(Timestamp::now())
         .field("From", format!("{} {from}", format_decimal(amount)), false)
         .field("To", format!("{} {to}", format_decimal(converted)), false);
-
-    if quote.source_kind == ExchangeRateSourceKind::Cache {
-        embed = embed.field("Data Source", source_label(quote.source_kind), false);
-    }
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
@@ -213,9 +221,10 @@ async fn rate(
     }
 
     let defaults = load_exchange_defaults(ctx).await?;
-    let from = normalize_currency(from.as_deref().unwrap_or(defaults.default_from.as_str()));
+    let from = supported_toss_currency(from.as_deref().unwrap_or(defaults.default_from.as_str()))
+        .unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
     let amount = amount.unwrap_or(defaults.default_amount);
-    let rate_targets = load_rate_targets(ctx).await?;
+    let rate_targets = sanitize_rate_targets(&from, load_rate_targets(ctx).await?);
     let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
         ctx.say("The exchange-rate service is not available in this deployment.")
             .await?;
@@ -234,7 +243,7 @@ async fn rate(
 
     let responses = join_all(requests).await;
     if responses.iter().all(|(_, quote)| quote.is_none()) {
-        ctx.say("Failed to fetch latest exchange data and no cached data is available.")
+        ctx.say("Failed to fetch the latest Toss Invest exchange rates.")
             .await?;
         return Ok(());
     }
@@ -245,7 +254,7 @@ async fn rate(
         ))
         .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new("Data from Google Finance."))
+        .footer(CreateEmbedFooter::new(TOSS_EXCHANGE_PROVIDER_FOOTER))
         .timestamp(Timestamp::now());
 
     for (currency, rate) in responses {
@@ -438,10 +447,44 @@ fn first_non_empty(value: &str, fallback: &str) -> String {
 }
 
 fn default_rate_targets() -> Vec<String> {
-    DEFAULT_RATE_TARGETS
-        .iter()
-        .map(|value| (*value).to_string())
-        .collect()
+    normalize_rate_targets(DEFAULT_RATE_TARGETS.iter().map(|value| (*value).to_string()).collect())
+}
+
+fn supported_toss_currency(input: &str) -> Option<String> {
+    let normalized = normalize_currency(input);
+    match normalized.as_str() {
+        "KRW" | "USD" => Some(normalized),
+        _ => None,
+    }
+}
+
+fn sanitize_exchange_pair(from: String, to: String) -> (String, String) {
+    let from = supported_toss_currency(&from).unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
+    let to = supported_toss_currency(&to).unwrap_or_else(|| opposite_currency(&from));
+
+    if from == to {
+        return (from.clone(), opposite_currency(&from));
+    }
+
+    (from, to)
+}
+
+fn sanitize_rate_targets(from: &str, targets: Vec<String>) -> Vec<String> {
+    let normalized_from =
+        supported_toss_currency(from).unwrap_or_else(|| DEFAULT_EXCHANGE_FROM.to_string());
+    let opposite = opposite_currency(&normalized_from);
+    let mut values = targets
+        .into_iter()
+        .filter_map(|value| supported_toss_currency(&value))
+        .filter(|value| value != &normalized_from)
+        .collect::<Vec<_>>();
+    values.dedup();
+
+    if values.is_empty() {
+        values.push(opposite);
+    }
+
+    values
 }
 
 fn normalize_rate_targets(targets: Vec<String>) -> Vec<String> {
@@ -649,13 +692,6 @@ fn normalize_currency(input: &str) -> String {
     input.trim().to_ascii_uppercase()
 }
 
-fn source_label(kind: ExchangeRateSourceKind) -> &'static str {
-    match kind {
-        ExchangeRateSourceKind::Live => "Live",
-        ExchangeRateSourceKind::Cache => "Cached fallback",
-    }
-}
-
 fn currency_display_label(currency: &str) -> String {
     let normalized = normalize_currency(currency);
     dynamo_domain_currency::currency_display_label(&normalized)
@@ -667,12 +703,7 @@ fn format_rate_board_value(
     quote: &dynamo_domain_currency::ExchangeRateQuote,
     amount: f64,
 ) -> String {
-    let value = format_decimal(quote.rate * amount);
-    if quote.source_kind == ExchangeRateSourceKind::Cache && quote.from != quote.to {
-        format!("{value}\nCached fallback")
-    } else {
-        value
-    }
+    format_decimal(quote.rate * amount)
 }
 
 fn format_decimal(value: f64) -> String {
@@ -711,16 +742,27 @@ fn format_grouped_integer(value: i64) -> String {
     output.chars().rev().collect()
 }
 
+fn opposite_currency(from: &str) -> String {
+    if from == "KRW" {
+        "USD".to_string()
+    } else {
+        "KRW".to_string()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        currency_display_label, currency_option_label, format_decimal, format_rate_board_value,
-        normalize_currency,
+        CurrencyModule, TOSS_EXCHANGE_PROVIDER_FOOTER, TOSS_EXCHANGE_SUPPORT_ERROR,
+        currency_display_label, currency_option_label, currency_select_options, format_decimal,
+        format_rate_board_value, normalize_currency, sanitize_exchange_pair,
+        sanitize_rate_targets, supported_toss_currency,
     };
     use chrono::Utc;
     use dynamo_domain_currency::{
         ExchangeRateQuote, ExchangeRateSourceKind, supported_currency_specs,
     };
+    use dynamo_module_kit::{Module, SettingsFieldKind};
 
     #[test]
     fn formats_grouped_decimals_like_js_locale_output() {
@@ -758,22 +800,7 @@ mod tests {
     }
 
     #[test]
-    fn same_currency_cache_row_does_not_show_fallback_label() {
-        let quote = ExchangeRateQuote {
-            from: "USD".to_string(),
-            to: "USD".to_string(),
-            rate: 1.0,
-            source_kind: ExchangeRateSourceKind::Cache,
-            source_timestamp: Utc::now(),
-            source_timestamp_text: "now".to_string(),
-            fetched_at_utc: Utc::now(),
-        };
-
-        assert_eq!(format_rate_board_value(&quote, 1.0), "1");
-    }
-
-    #[test]
-    fn different_currency_cache_row_keeps_fallback_label() {
+    fn rate_row_does_not_render_cached_fallback_text() {
         let quote = ExchangeRateQuote {
             from: "USD".to_string(),
             to: "KRW".to_string(),
@@ -784,9 +811,113 @@ mod tests {
             fetched_at_utc: Utc::now(),
         };
 
+        assert_eq!(format_rate_board_value(&quote, 1.0), "1,450");
+    }
+
+    #[test]
+    fn exchange_manifest_mentions_toss_invest_without_cached_fallback_copy() {
+        let manifest = CurrencyModule.manifest();
+
+        assert!(manifest.description.contains("Toss Invest"));
+        assert!(!manifest.description.contains("cached fallback"));
+    }
+
+    #[test]
+    fn exchange_footer_text_mentions_toss_mid_rate() {
+        assert_eq!(TOSS_EXCHANGE_PROVIDER_FOOTER, "Toss Invest · midRate");
+    }
+
+    #[test]
+    fn dropdown_contains_only_krw_and_usd_with_blank_only_where_requested() {
+        let exchange_options = currency_select_options(false);
+        let rate_options = currency_select_options(true);
+
         assert_eq!(
-            format_rate_board_value(&quote, 1.0),
-            "1,450\nCached fallback"
+            exchange_options
+                .iter()
+                .map(|option| option.value)
+                .collect::<Vec<_>>(),
+            vec!["KRW", "USD"]
         );
+        assert_eq!(rate_options.first().map(|option| option.value), Some(""));
+        assert_eq!(
+            rate_options
+                .iter()
+                .skip(1)
+                .map(|option| option.value)
+                .collect::<Vec<_>>(),
+            vec!["KRW", "USD"]
+        );
+    }
+
+    #[test]
+    fn rate_settings_schema_selects_only_krw_and_usd_targets() {
+        let schema = CurrencyModule.command_settings_schema("rate");
+        let fields = &schema.sections[0].fields;
+
+        for field in fields {
+            let SettingsFieldKind::Select { options } = &field.kind else {
+                panic!("rate field should be a select");
+            };
+
+            assert_eq!(
+                options.iter().map(|option| option.value).collect::<Vec<_>>(),
+                vec!["", "KRW", "USD"]
+            );
+        }
+    }
+
+    #[test]
+    fn persisted_exchange_defaults_sanitize_unsupported_currencies_to_usd_krw() {
+        assert_eq!(
+            sanitize_exchange_pair("eur".to_string(), "jpy".to_string()),
+            ("USD".to_string(), "KRW".to_string())
+        );
+        assert_eq!(
+            sanitize_exchange_pair("usd".to_string(), "usd".to_string()),
+            ("USD".to_string(), "KRW".to_string())
+        );
+    }
+
+    #[test]
+    fn persisted_rate_targets_sanitize_to_opposite_supported_currency() {
+        assert_eq!(
+            sanitize_rate_targets(
+                "USD",
+                vec!["usd".to_string(), "krw".to_string(), "usd".to_string()]
+            ),
+            vec!["KRW".to_string()]
+        );
+        assert_eq!(
+            sanitize_rate_targets("KRW", vec!["krw".to_string(), "usd".to_string()]),
+            vec!["USD".to_string()]
+        );
+    }
+
+    #[test]
+    fn blank_or_unsupported_rate_targets_fall_back_to_valid_opposite_currency() {
+        assert_eq!(sanitize_rate_targets("USD", vec![]), vec!["KRW".to_string()]);
+        assert_eq!(
+            sanitize_rate_targets("USD", vec!["".to_string(), "eur".to_string()]),
+            vec!["KRW".to_string()]
+        );
+        assert_eq!(
+            sanitize_rate_targets("KRW", vec!["krw".to_string()]),
+            vec!["USD".to_string()]
+        );
+    }
+
+    #[test]
+    fn supported_toss_currency_accepts_only_krw_and_usd() {
+        assert_eq!(supported_toss_currency("krw"), Some("KRW".to_string()));
+        assert_eq!(supported_toss_currency("usd"), Some("USD".to_string()));
+        assert_eq!(supported_toss_currency("eur"), None);
+    }
+
+    #[test]
+    fn toss_support_error_mentions_only_krw_and_usd() {
+        assert!(TOSS_EXCHANGE_SUPPORT_ERROR.contains("KRW"));
+        assert!(TOSS_EXCHANGE_SUPPORT_ERROR.contains("USD"));
+        assert!(!TOSS_EXCHANGE_SUPPORT_ERROR.contains("EUR"));
     }
 }
