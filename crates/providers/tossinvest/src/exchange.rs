@@ -19,6 +19,7 @@ use crate::{
 const USD: &str = "USD";
 const KRW: &str = "KRW";
 const EXCHANGE_RATE_PATH: &str = "/api/v1/exchange-rate?baseCurrency=USD&quoteCurrency=KRW";
+const EXCHANGE_RATE_GROUP: TossRateLimitGroup = TossRateLimitGroup::MarketInfo;
 const SUPPORTED_PAIR_COUNT: usize = 2;
 const WARMED_PAIR_COUNT: usize = 1;
 const UNSUPPORTED_PAIR_ERROR: &str =
@@ -172,7 +173,7 @@ async fn fetch_exchange_rate(
     let response = tokio::task::spawn_blocking(move || {
         handle.block_on(async move {
             client
-                .send_authenticated(TossRateLimitGroup::MarketData, Method::GET, &path)
+                .send_authenticated(EXCHANGE_RATE_GROUP, Method::GET, &path)
                 .await
         })
     })
@@ -252,8 +253,9 @@ mod tests {
 
     use chrono::{TimeDelta, TimeZone, Utc};
     use dynamo_domain_currency::ExchangeRateSourceKind;
+    use crate::TossRateLimitGroup;
 
-    use super::{FetchedExchangeRate, TossInvestMarketDataService};
+    use super::{EXCHANGE_RATE_GROUP, FetchedExchangeRate, TossInvestMarketDataService};
 
     fn test_service() -> TossInvestMarketDataService {
         let client = crate::TossInvestClient::new(
@@ -419,5 +421,10 @@ mod tests {
             .unwrap();
 
         assert_eq!(quote.source_timestamp, fetched_at);
+    }
+
+    #[test]
+    fn exchange_endpoint_uses_market_info_rate_limit_group() {
+        assert_eq!(EXCHANGE_RATE_GROUP, TossRateLimitGroup::MarketInfo);
     }
 }
