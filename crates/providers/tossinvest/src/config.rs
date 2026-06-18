@@ -57,6 +57,39 @@ fn required_value(env: &BTreeMap<String, String>, key: &str) -> Result<String> {
 #[cfg(test)]
 mod tests {
     use super::TossInvestConfig;
+    use std::{ffi::OsString, sync::Mutex};
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: this test module serializes environment mutation with ENV_LOCK,
+            // and scoped guards restore the variables before the lock is released.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            // SAFETY: ScopedEnvVar values are dropped while ENV_LOCK is still held
+            // by the test that created them, so restore mutation is serialized too.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn config_rejects_missing_credentials() {
@@ -68,10 +101,34 @@ mod tests {
     #[test]
     fn config_reads_credentials_without_logging_values() {
         let env = std::collections::BTreeMap::from([
-            ("TOSSINVEST_CLIENT_ID".to_string(), "id".to_string()),
-            ("TOSSINVEST_CLIENT_SECRET".to_string(), "secret".to_string()),
+            (
+                "TOSSINVEST_CLIENT_ID".to_string(),
+                "configured-client-id".to_string(),
+            ),
+            (
+                "TOSSINVEST_CLIENT_SECRET".to_string(),
+                "configured-client-secret".to_string(),
+            ),
         ]);
         let config = TossInvestConfig::from_map(&env).unwrap();
+        assert_eq!(config.base_url.as_str(), "https://openapi.tossinvest.com");
+
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("configured-client-id"));
+        assert!(!debug.contains("configured-client-secret"));
+        assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn config_reads_credentials_from_env() {
+        let _guard = ENV_LOCK.lock().expect("env lock should not be poisoned");
+        let _client_id = ScopedEnvVar::set("TOSSINVEST_CLIENT_ID", "env-client-id");
+        let _client_secret = ScopedEnvVar::set("TOSSINVEST_CLIENT_SECRET", "env-client-secret");
+
+        let config = TossInvestConfig::from_env().unwrap();
+
+        assert_eq!(config.client_id(), "env-client-id");
+        assert_eq!(config.client_secret(), "env-client-secret");
         assert_eq!(config.base_url.as_str(), "https://openapi.tossinvest.com");
     }
 }
