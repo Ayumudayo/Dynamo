@@ -75,12 +75,65 @@ impl TossRateLimiter {
     ) -> Duration {
         retry_delay_for_too_many_requests(group, headers, attempt)
     }
+
+    pub async fn observe_too_many_requests(
+        &self,
+        group: TossRateLimitGroup,
+        headers: &HeaderMap,
+        attempt: u32,
+    ) -> Duration {
+        self.observe_too_many_requests_at(
+            group,
+            headers,
+            attempt,
+            Instant::now(),
+            Utc::now(),
+            rand::thread_rng().gen_range(50..=100),
+        )
+        .await
+    }
+
+    async fn observe_too_many_requests_at(
+        &self,
+        group: TossRateLimitGroup,
+        headers: &HeaderMap,
+        attempt: u32,
+        now_instant: Instant,
+        now_utc: DateTime<Utc>,
+        jitter_percent: u32,
+    ) -> Duration {
+        let delay = retry_delay_for_too_many_requests_at(
+            group,
+            headers,
+            attempt,
+            now_utc,
+            jitter_percent,
+        );
+        let mut next_allowed_at = self.next_allowed_at.lock().await;
+        let next_slot = next_allowed_at.entry(group).or_insert(now_instant);
+        let base = (*next_slot).max(now_instant);
+        *next_slot = base + delay;
+        delay
+    }
 }
 
 #[cfg(test)]
 impl TossRateLimiter {
     pub(crate) async fn test_has_scheduled_slot(&self, group: TossRateLimitGroup) -> bool {
         self.next_allowed_at.lock().await.contains_key(&group)
+    }
+
+    pub(crate) async fn test_remaining_delay_from(
+        &self,
+        group: TossRateLimitGroup,
+        now: Instant,
+    ) -> Option<Duration> {
+        self.next_allowed_at
+            .lock()
+            .await
+            .get(&group)
+            .copied()
+            .map(|next_allowed| next_allowed.saturating_duration_since(now))
     }
 }
 
@@ -167,10 +220,10 @@ fn backoff_with_jitter(
 
 #[cfg(test)]
 mod tests {
+    use super::{TossRateLimitGroup, TossRateLimiter, backoff_with_jitter, retry_delay_for_too_many_requests_at};
     use chrono::{DateTime, Utc};
-    use super::{TossRateLimitGroup, backoff_with_jitter, retry_delay_for_too_many_requests_at};
     use reqwest::header::{HeaderMap, HeaderValue, HeaderName, RETRY_AFTER};
-    use std::time::Duration;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn rate_limit_retry_delay_prefers_retry_after_over_x_rate_limit_reset() {
@@ -220,5 +273,37 @@ mod tests {
         assert_eq!(low, Duration::from_millis(250));
         assert_eq!(high, Duration::from_millis(500));
         assert_ne!(low, high);
+    }
+
+    #[tokio::test]
+    async fn rate_limit_observed_cooldown_is_shared_across_clones() {
+        let limiter = TossRateLimiter::new();
+        let shared = limiter.clone();
+        let now_instant = Instant::now();
+        let now_utc = DateTime::<Utc>::from_timestamp(1_700_000_000, 0).unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            HeaderName::from_static("x-ratelimit-reset"),
+            HeaderValue::from_static("5"),
+        );
+
+        let delay = limiter
+            .observe_too_many_requests_at(
+                TossRateLimitGroup::MarketData,
+                &headers,
+                0,
+                now_instant,
+                now_utc,
+                100,
+            )
+            .await;
+
+        assert_eq!(delay, Duration::from_secs(5));
+        assert_eq!(
+            shared
+                .test_remaining_delay_from(TossRateLimitGroup::MarketData, now_instant)
+                .await,
+            Some(Duration::from_secs(5))
+        );
     }
 }

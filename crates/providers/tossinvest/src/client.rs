@@ -7,9 +7,10 @@ use std::{
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeDelta, Utc};
 use reqwest::{
-    Client, Method, RequestBuilder, Url,
+    Client, Method, RequestBuilder, StatusCode, Url,
     header::{ACCEPT, AUTHORIZATION, HeaderValue},
 };
+use serde::de::DeserializeOwned;
 use tokio::sync::Mutex;
 
 use crate::{
@@ -20,6 +21,62 @@ use crate::{
 
 const OAUTH_TOKEN_PATH: &str = "/oauth2/token";
 const TOKEN_REFRESH_SKEW_SECONDS: i64 = 60;
+
+#[derive(Debug, Clone)]
+pub struct TossInvestResponse {
+    status: StatusCode,
+    headers: reqwest::header::HeaderMap,
+    body: Vec<u8>,
+}
+
+impl TossInvestResponse {
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub fn headers(&self) -> &reqwest::header::HeaderMap {
+        &self.headers
+    }
+
+    pub fn body(&self) -> &[u8] {
+        &self.body
+    }
+
+    pub fn text(&self) -> Result<String> {
+        String::from_utf8(self.body.clone()).context("Toss response body was not valid UTF-8")
+    }
+
+    pub fn json<T>(&self) -> Result<T>
+    where
+        T: DeserializeOwned,
+    {
+        serde_json::from_slice(&self.body).context("failed to deserialize Toss response body")
+    }
+
+    async fn from_reqwest(response: reqwest::Response) -> Result<Self> {
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response
+            .bytes()
+            .await
+            .context("failed to read Toss API response body")?
+            .to_vec();
+        Ok(Self {
+            status,
+            headers,
+            body,
+        })
+    }
+
+    #[cfg(test)]
+    fn test_json(status: StatusCode, body: &str) -> Self {
+        Self {
+            status,
+            headers: reqwest::header::HeaderMap::new(),
+            body: body.as_bytes().to_vec(),
+        }
+    }
+}
 
 #[derive(Clone)]
 pub struct TossInvestClient {
@@ -47,12 +104,29 @@ impl TossInvestClient {
         &self.shared_state.rate_limiter
     }
 
-    pub async fn authenticated_request(
+    pub async fn send_authenticated(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+    ) -> Result<TossInvestResponse> {
+        self.send_authenticated_with(group, method, path, |request| async move {
+            let response = request
+                .send()
+                .await
+                .context("failed to send Toss API request")?;
+            TossInvestResponse::from_reqwest(response).await
+        })
+        .await
+    }
+
+    async fn authenticated_request(
         &self,
         group: TossRateLimitGroup,
         method: Method,
         path: &str,
     ) -> Result<RequestBuilder> {
+        reject_authenticated_group(group)?;
         let url = self.api_url(path)?;
         let token = self.ensure_access_token().await?;
         self.shared_state.rate_limiter.acquire(group).await;
@@ -63,6 +137,44 @@ impl TossInvestClient {
             .request(method, url)
             .header(ACCEPT, "application/json")
             .header(AUTHORIZATION, authorization))
+    }
+
+    async fn send_authenticated_with<E, Fut>(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+        mut execute: E,
+    ) -> Result<TossInvestResponse>
+    where
+        E: FnMut(RequestBuilder) -> Fut,
+        Fut: std::future::Future<Output = Result<TossInvestResponse>>,
+    {
+        for attempt in 0..=1 {
+            let request = self
+                .authenticated_request(group, method.clone(), path)
+                .await?;
+            let response = execute(request).await?;
+
+            if response.status() == StatusCode::TOO_MANY_REQUESTS {
+                self.shared_state
+                    .rate_limiter
+                    .observe_too_many_requests(group, response.headers(), attempt)
+                    .await;
+                return Ok(response);
+            }
+
+            if self
+                .should_retry_unauthorized_response(&response, attempt == 0)
+                .await?
+            {
+                continue;
+            }
+
+            return Ok(response);
+        }
+
+        Err(anyhow!("Toss authenticated send exhausted retry attempts"))
     }
 
     async fn ensure_access_token(&self) -> Result<CachedAccessToken> {
@@ -76,6 +188,32 @@ impl TossInvestClient {
         }
 
         self.refresh_access_token().await
+    }
+
+    async fn clear_cached_token(&self) {
+        let mut cached = self.shared_state.access_token.lock().await;
+        *cached = None;
+    }
+
+    async fn should_retry_unauthorized_response(
+        &self,
+        response: &TossInvestResponse,
+        retry_allowed: bool,
+    ) -> Result<bool> {
+        if response.status() != StatusCode::UNAUTHORIZED {
+            return Ok(false);
+        }
+
+        if !retry_allowed {
+            return Ok(false);
+        }
+
+        if retryable_token_error_code(response)? {
+            self.clear_cached_token().await;
+            return Ok(true);
+        }
+
+        Ok(false)
     }
 
     async fn refresh_access_token(&self) -> Result<CachedAccessToken> {
@@ -250,6 +388,30 @@ fn build_oauth_error(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
     anyhow!("Toss OAuth token request failed with status {status}")
 }
 
+fn reject_authenticated_group(group: TossRateLimitGroup) -> Result<()> {
+    if group == TossRateLimitGroup::Auth {
+        return Err(anyhow!(
+            "Toss authenticated endpoint calls must use a market/info rate-limit group, not Auth"
+        ));
+    }
+
+    Ok(())
+}
+
+fn retryable_token_error_code(response: &TossInvestResponse) -> Result<bool> {
+    if response.status() != StatusCode::UNAUTHORIZED {
+        return Ok(false);
+    }
+
+    match serde_json::from_slice::<TossErrorEnvelope>(response.body()) {
+        Ok(parsed) => Ok(matches!(
+            parsed.error.code.as_str(),
+            "invalid-token" | "expired-token"
+        )),
+        Err(_) => Ok(false),
+    }
+}
+
 fn shared_state_for(config: &TossInvestConfig) -> Arc<SharedClientState> {
     static SHARED_CLIENT_STATES: OnceLock<StdMutex<BTreeMap<ClientIdentity, Weak<SharedClientState>>>> =
         OnceLock::new();
@@ -282,6 +444,10 @@ impl TossInvestClient {
         let mut cached = self.shared_state.access_token.lock().await;
         *cached = Some(CachedAccessToken::new(access_token, token_type, expires_at));
     }
+
+    async fn test_has_cached_token(&self) -> bool {
+        self.shared_state.access_token.lock().await.is_some()
+    }
 }
 
 #[cfg(test)]
@@ -290,13 +456,13 @@ mod tests {
 
     use chrono::{TimeDelta, Utc};
     use reqwest::{
-        Method,
+        Method, StatusCode,
         header::{AUTHORIZATION, HeaderValue},
     };
 
     use crate::TossRateLimitGroup;
 
-    use super::{CachedAccessToken, TossInvestClient, build_oauth_error};
+    use super::{CachedAccessToken, TossInvestClient, TossInvestResponse, build_oauth_error};
 
     #[test]
     fn oauth_cached_token_refreshes_when_expiring_within_60_seconds() {
@@ -314,7 +480,10 @@ mod tests {
     async fn oauth_authenticated_request_uses_base_url_and_cached_token() {
         let client = TossInvestClient::new(
             crate::TossInvestConfig::from_map(&BTreeMap::from([
-                ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-retryable".to_string(),
+                ),
                 (
                     "TOSSINVEST_CLIENT_SECRET".to_string(),
                     "client-secret".to_string(),
@@ -362,7 +531,10 @@ mod tests {
     async fn oauth_authenticated_request_rejects_absolute_urls() {
         let client = TossInvestClient::new(
             crate::TossInvestConfig::from_map(&BTreeMap::from([
-                ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-expired".to_string(),
+                ),
                 (
                     "TOSSINVEST_CLIENT_SECRET".to_string(),
                     "client-secret".to_string(),
@@ -397,7 +569,10 @@ mod tests {
     async fn oauth_authenticated_request_rejects_scheme_relative_urls() {
         let client = TossInvestClient::new(
             crate::TossInvestConfig::from_map(&BTreeMap::from([
-                ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-nonretryable".to_string(),
+                ),
                 (
                     "TOSSINVEST_CLIENT_SECRET".to_string(),
                     "client-secret".to_string(),
@@ -425,10 +600,52 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn oauth_authenticated_request_rejects_auth_group_without_scheduling_auth_bucket() {
+        let client = TossInvestClient::new(
+            crate::TossInvestConfig::from_map(&BTreeMap::from([
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-expired".to_string(),
+                ),
+                (
+                    "TOSSINVEST_CLIENT_SECRET".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ]))
+            .unwrap(),
+        );
+
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let error = client
+            .authenticated_request(TossRateLimitGroup::Auth, Method::GET, "/api/v1/prices")
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("market/info"));
+        assert!(
+            !client
+                .rate_limiter()
+                .test_has_scheduled_slot(TossRateLimitGroup::Auth)
+                .await
+        );
+    }
+
+    #[tokio::test]
     async fn oauth_client_debug_redacts_token_and_secret_values() {
         let client = TossInvestClient::new(
             crate::TossInvestConfig::from_map(&BTreeMap::from([
-                ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-nonretryable".to_string(),
+                ),
                 (
                     "TOSSINVEST_CLIENT_SECRET".to_string(),
                     "client-secret".to_string(),
@@ -481,6 +698,120 @@ mod tests {
         assert!(error.contains("invalid_client"));
         assert!(!error.contains("description"));
         assert!(!error.contains("None"));
+    }
+
+    #[tokio::test]
+    async fn oauth_retryable_unauthorized_response_clears_cached_token() {
+        let client = TossInvestClient::new(
+            crate::TossInvestConfig::from_map(&BTreeMap::from([
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-retryable".to_string(),
+                ),
+                (
+                    "TOSSINVEST_CLIENT_SECRET".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ]))
+            .unwrap(),
+        );
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let should_retry = client
+            .should_retry_unauthorized_response(
+                &TossInvestResponse::test_json(
+                    StatusCode::UNAUTHORIZED,
+                    r#"{"error":{"code":"invalid-token","message":"expired","requestId":"req-1"}}"#,
+                ),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(should_retry);
+        assert!(!client.test_has_cached_token().await);
+    }
+
+    #[tokio::test]
+    async fn oauth_expired_token_response_is_retryable() {
+        let client = TossInvestClient::new(
+            crate::TossInvestConfig::from_map(&BTreeMap::from([
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-expired".to_string(),
+                ),
+                (
+                    "TOSSINVEST_CLIENT_SECRET".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ]))
+            .unwrap(),
+        );
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let should_retry = client
+            .should_retry_unauthorized_response(
+                &TossInvestResponse::test_json(
+                    StatusCode::UNAUTHORIZED,
+                    r#"{"error":{"code":"expired-token","message":"expired","requestId":"req-1"}}"#,
+                ),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(should_retry);
+        assert!(!client.test_has_cached_token().await);
+    }
+
+    #[tokio::test]
+    async fn oauth_non_retryable_unauthorized_response_keeps_cached_token() {
+        let client = TossInvestClient::new(
+            crate::TossInvestConfig::from_map(&BTreeMap::from([
+                (
+                    "TOSSINVEST_CLIENT_ID".to_string(),
+                    "client-id-nonretryable".to_string(),
+                ),
+                (
+                    "TOSSINVEST_CLIENT_SECRET".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ]))
+            .unwrap(),
+        );
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let should_retry = client
+            .should_retry_unauthorized_response(
+                &TossInvestResponse::test_json(
+                    StatusCode::UNAUTHORIZED,
+                    r#"{"error":{"code":"permission-denied","message":"denied","requestId":"req-1"}}"#,
+                ),
+                true,
+            )
+            .await
+            .unwrap();
+
+        assert!(!should_retry);
+        assert!(client.test_has_cached_token().await);
     }
 
     #[test]
