@@ -452,7 +452,7 @@ impl TossInvestClient {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeMap, sync::Arc};
+    use std::{collections::{BTreeMap, BTreeSet}, sync::Arc};
 
     use chrono::{TimeDelta, Utc};
     use reqwest::{
@@ -463,6 +463,41 @@ mod tests {
     use crate::TossRateLimitGroup;
 
     use super::{CachedAccessToken, TossInvestClient, TossInvestResponse, build_oauth_error};
+
+    const DEFAULT_TEST_BASE_URL: &str = "https://sandbox.openapi.tossinvest.example";
+
+    fn test_config(client_id: &str) -> crate::TossInvestConfig {
+        test_config_with_base_url(client_id, DEFAULT_TEST_BASE_URL)
+    }
+
+    fn test_config_with_base_url(client_id: &str, base_url: &str) -> crate::TossInvestConfig {
+        crate::TossInvestConfig::from_map(&BTreeMap::from([
+            ("TOSSINVEST_CLIENT_ID".to_string(), client_id.to_string()),
+            (
+                "TOSSINVEST_CLIENT_SECRET".to_string(),
+                "client-secret".to_string(),
+            ),
+            ("TOSSINVEST_BASE_URL".to_string(), base_url.to_string()),
+        ]))
+        .unwrap()
+    }
+
+    #[test]
+    fn oauth_mutating_test_identities_are_unique() {
+        let identities = [
+            ("client-id-request-url", DEFAULT_TEST_BASE_URL),
+            ("client-id-reject-absolute", DEFAULT_TEST_BASE_URL),
+            ("client-id-reject-scheme-relative", DEFAULT_TEST_BASE_URL),
+            ("client-id-reject-auth-group", DEFAULT_TEST_BASE_URL),
+            ("client-id-debug-redaction", DEFAULT_TEST_BASE_URL),
+            ("client-id-invalid-token", DEFAULT_TEST_BASE_URL),
+            ("client-id-expired-token", DEFAULT_TEST_BASE_URL),
+            ("client-id-nonretryable-401", DEFAULT_TEST_BASE_URL),
+        ];
+
+        let unique = identities.iter().copied().collect::<BTreeSet<_>>();
+        assert_eq!(unique.len(), identities.len());
+    }
 
     #[test]
     fn oauth_cached_token_refreshes_when_expiring_within_60_seconds() {
@@ -478,23 +513,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_authenticated_request_uses_base_url_and_cached_token() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-retryable".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-                (
-                    "TOSSINVEST_BASE_URL".to_string(),
-                    "https://sandbox.openapi.tossinvest.example".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-request-url"));
 
         client
             .test_set_cached_token(
@@ -529,19 +548,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_authenticated_request_rejects_absolute_urls() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-expired".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-reject-absolute"));
 
         client
             .test_set_cached_token(
@@ -567,19 +574,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_authenticated_request_rejects_scheme_relative_urls() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-nonretryable".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-reject-scheme-relative"));
 
         client
             .test_set_cached_token(
@@ -601,19 +596,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_authenticated_request_rejects_auth_group_without_scheduling_auth_bucket() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-expired".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-reject-auth-group"));
 
         client
             .test_set_cached_token(
@@ -640,19 +623,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_client_debug_redacts_token_and_secret_values() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-nonretryable".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-debug-redaction"));
 
         client
             .test_set_cached_token(
@@ -702,19 +673,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_retryable_unauthorized_response_clears_cached_token() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-retryable".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-invalid-token"));
         client
             .test_set_cached_token(
                 "cached-token",
@@ -740,19 +699,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_expired_token_response_is_retryable() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-expired".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-expired-token"));
         client
             .test_set_cached_token(
                 "cached-token",
@@ -778,19 +725,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_non_retryable_unauthorized_response_keeps_cached_token() {
-        let client = TossInvestClient::new(
-            crate::TossInvestConfig::from_map(&BTreeMap::from([
-                (
-                    "TOSSINVEST_CLIENT_ID".to_string(),
-                    "client-id-nonretryable".to_string(),
-                ),
-                (
-                    "TOSSINVEST_CLIENT_SECRET".to_string(),
-                    "client-secret".to_string(),
-                ),
-            ]))
-            .unwrap(),
-        );
+        let client = TossInvestClient::new(test_config("client-id-nonretryable-401"));
         client
             .test_set_cached_token(
                 "cached-token",
@@ -816,14 +751,7 @@ mod tests {
 
     #[test]
     fn oauth_clients_with_same_identity_share_in_process_state() {
-        let config = crate::TossInvestConfig::from_map(&BTreeMap::from([
-            ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
-            (
-                "TOSSINVEST_CLIENT_SECRET".to_string(),
-                "client-secret".to_string(),
-            ),
-        ]))
-        .unwrap();
+        let config = test_config("client-id-shared-state");
 
         let first = TossInvestClient::new(config.clone());
         let second = TossInvestClient::new(config);
