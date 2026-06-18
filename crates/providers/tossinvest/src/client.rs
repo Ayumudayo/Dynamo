@@ -76,6 +76,23 @@ impl TossInvestResponse {
             body: body.as_bytes().to_vec(),
         }
     }
+
+    #[cfg(test)]
+    fn test_with_headers(status: StatusCode, body: &str, headers: &[(&str, &str)]) -> Self {
+        let mut header_map = reqwest::header::HeaderMap::new();
+        for (name, value) in headers {
+            header_map.insert(
+                reqwest::header::HeaderName::from_bytes(name.as_bytes()).unwrap(),
+                HeaderValue::from_str(value).unwrap(),
+            );
+        }
+
+        Self {
+            status,
+            headers: header_map,
+            body: body.as_bytes().to_vec(),
+        }
+    }
 }
 
 #[derive(Clone)]
@@ -225,6 +242,15 @@ impl TossInvestClient {
             return Ok(token.clone());
         }
 
+        #[cfg(test)]
+        {
+            let mut next_refresh_token = self.shared_state.next_refresh_token.lock().await;
+            if let Some(token) = next_refresh_token.take() {
+                *cached = Some(token.clone());
+                return Ok(token);
+            }
+        }
+
         self.shared_state
             .rate_limiter
             .acquire(TossRateLimitGroup::Auth)
@@ -299,7 +325,7 @@ struct ClientIdentity {
 impl ClientIdentity {
     fn from_config(config: &TossInvestConfig) -> Self {
         Self {
-            base_url: config.base_url().to_string(),
+            base_url: config.base_url().trim_end_matches('/').to_string(),
             client_id: config.client_id().to_string(),
         }
     }
@@ -308,6 +334,8 @@ impl ClientIdentity {
 struct SharedClientState {
     access_token: Mutex<Option<CachedAccessToken>>,
     rate_limiter: TossRateLimiter,
+    #[cfg(test)]
+    next_refresh_token: Mutex<Option<CachedAccessToken>>,
 }
 
 impl Default for SharedClientState {
@@ -315,6 +343,8 @@ impl Default for SharedClientState {
         Self {
             access_token: Mutex::new(None),
             rate_limiter: TossRateLimiter::new(),
+            #[cfg(test)]
+            next_refresh_token: Mutex::new(None),
         }
     }
 }
@@ -447,6 +477,16 @@ impl TossInvestClient {
 
     async fn test_has_cached_token(&self) -> bool {
         self.shared_state.access_token.lock().await.is_some()
+    }
+
+    async fn test_set_next_refresh_token(
+        &self,
+        access_token: &str,
+        token_type: &str,
+        expires_at: DateTime<Utc>,
+    ) {
+        let mut next_refresh_token = self.shared_state.next_refresh_token.lock().await;
+        *next_refresh_token = Some(CachedAccessToken::new(access_token, token_type, expires_at));
     }
 }
 
@@ -757,5 +797,118 @@ mod tests {
         let second = TossInvestClient::new(config);
 
         assert!(Arc::ptr_eq(&first.shared_state, &second.shared_state));
+    }
+
+    #[test]
+    fn oauth_clients_share_state_across_trailing_slash_base_url_spellings() {
+        let first = TossInvestClient::new(test_config_with_base_url(
+            "client-id-shared-trailing-slash",
+            "https://sandbox.openapi.tossinvest.example",
+        ));
+        let second = TossInvestClient::new(test_config_with_base_url(
+            "client-id-shared-trailing-slash",
+            "https://sandbox.openapi.tossinvest.example/",
+        ));
+
+        assert!(Arc::ptr_eq(&first.shared_state, &second.shared_state));
+    }
+
+    #[tokio::test]
+    async fn oauth_send_authenticated_retries_once_with_refreshed_token_for_invalid_token() {
+        let client = TossInvestClient::new(test_config("client-id-send-retry-invalid-token"));
+        client
+            .test_set_cached_token(
+                "old-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+        client
+            .test_set_next_refresh_token(
+                "new-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let seen_headers = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen_headers_for_execute = seen_headers.clone();
+        let response = client
+            .send_authenticated_with(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                move |request| {
+                    let seen_headers_for_execute = seen_headers_for_execute.clone();
+                    async move {
+                        let request = request.build().unwrap();
+                        let authorization = request
+                            .headers()
+                            .get(AUTHORIZATION)
+                            .unwrap()
+                            .to_str()
+                            .unwrap()
+                            .to_string();
+                        seen_headers_for_execute.lock().unwrap().push(authorization);
+
+                        let attempt = seen_headers_for_execute.lock().unwrap().len();
+                        Ok(if attempt == 1 {
+                            TossInvestResponse::test_json(
+                                StatusCode::UNAUTHORIZED,
+                                r#"{"error":{"code":"invalid-token","message":"expired","requestId":"req-1"}}"#,
+                            )
+                        } else {
+                            TossInvestResponse::test_json(
+                                StatusCode::OK,
+                                r#"{"result":{"ok":true}}"#,
+                            )
+                        })
+                    }
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            seen_headers.lock().unwrap().as_slice(),
+            ["Bearer old-token", "Bearer new-token"]
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_send_authenticated_returns_429_and_propagates_shared_cooldown() {
+        let client = TossInvestClient::new(test_config("client-id-send-429"));
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let response = client
+            .send_authenticated_with(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                |_| async {
+                    Ok(TossInvestResponse::test_with_headers(
+                        StatusCode::TOO_MANY_REQUESTS,
+                        r#"{"error":{"code":"too-many-requests","message":"slow down","requestId":"req-1"}}"#,
+                        &[("x-ratelimit-reset", "5")],
+                    ))
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+        let remaining = client
+            .rate_limiter()
+            .test_remaining_delay_from(TossRateLimitGroup::MarketData, std::time::Instant::now())
+            .await
+            .unwrap();
+        assert!(remaining >= std::time::Duration::from_secs(5));
     }
 }
