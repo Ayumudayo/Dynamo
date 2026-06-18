@@ -15,6 +15,13 @@ pub struct OAuth2TokenResponse {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
+pub struct OAuth2ErrorResponse {
+    pub error: String,
+    #[serde(rename = "error_description")]
+    pub error_description: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
 pub struct ApiEnvelope<T> {
     pub result: T,
 }
@@ -72,8 +79,8 @@ pub struct TossCandleRaw {
 #[cfg(test)]
 mod tests {
     use super::{
-        ApiEnvelope, OAuth2TokenResponse, TossCandleRaw, TossErrorEnvelope, TossExchangeRateRaw,
-        TossInvestApiError, TossPriceRaw,
+        ApiEnvelope, OAuth2ErrorResponse, OAuth2TokenResponse, TossCandleRaw, TossErrorEnvelope,
+        TossExchangeRateRaw, TossInvestApiError, TossPriceRaw,
     };
 
     #[test]
@@ -90,6 +97,20 @@ mod tests {
         assert_eq!(response.access_token, "token-value");
         assert_eq!(response.token_type, "Bearer");
         assert_eq!(response.expires_in, 3600);
+    }
+
+    #[test]
+    fn oauth_error_response_deserializes() {
+        let response = serde_json::from_str::<OAuth2ErrorResponse>(
+            r#"{
+                "error": "invalid_client",
+                "error_description": "Client authentication failed."
+            }"#,
+        )
+        .unwrap();
+
+        assert_eq!(response.error, "invalid_client");
+        assert_eq!(response.error_description, "Client authentication failed.");
     }
 
     #[test]

@@ -1,4 +1,8 @@
-use std::{fmt, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
+};
 
 use anyhow::{Context, Result, anyhow};
 use chrono::{DateTime, TimeDelta, Utc};
@@ -10,7 +14,7 @@ use tokio::sync::Mutex;
 
 use crate::{
     TossInvestConfig,
-    models::{OAuth2TokenResponse, TossErrorEnvelope, TossInvestApiError},
+    models::{OAuth2ErrorResponse, OAuth2TokenResponse, TossErrorEnvelope, TossInvestApiError},
     rate_limit::{TossRateLimitGroup, TossRateLimiter},
 };
 
@@ -21,17 +25,17 @@ const TOKEN_REFRESH_SKEW_SECONDS: i64 = 60;
 pub struct TossInvestClient {
     http_client: Client,
     config: TossInvestConfig,
-    access_token: Arc<Mutex<Option<CachedAccessToken>>>,
-    rate_limiter: TossRateLimiter,
+    shared_state: Arc<SharedClientState>,
 }
 
 impl TossInvestClient {
+    /// Reuses one in-process token cache and limiter per `(base_url, client_id)` identity
+    /// so later provider tasks can safely construct shared service wrappers around one client.
     pub fn new(config: TossInvestConfig) -> Self {
         Self {
             http_client: Client::new(),
+            shared_state: shared_state_for(&config),
             config,
-            access_token: Arc::new(Mutex::new(None)),
-            rate_limiter: TossRateLimiter::new(),
         }
     }
 
@@ -40,12 +44,18 @@ impl TossInvestClient {
     }
 
     pub fn rate_limiter(&self) -> &TossRateLimiter {
-        &self.rate_limiter
+        &self.shared_state.rate_limiter
     }
 
-    pub async fn authenticated_request(&self, method: Method, path: &str) -> Result<RequestBuilder> {
-        let token = self.ensure_access_token().await?;
+    pub async fn authenticated_request(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+    ) -> Result<RequestBuilder> {
         let url = self.api_url(path)?;
+        let token = self.ensure_access_token().await?;
+        self.shared_state.rate_limiter.acquire(group).await;
         let authorization = token.authorization_header_value()?;
 
         Ok(self
@@ -57,7 +67,7 @@ impl TossInvestClient {
 
     async fn ensure_access_token(&self) -> Result<CachedAccessToken> {
         {
-            let cached = self.access_token.lock().await;
+            let cached = self.shared_state.access_token.lock().await;
             if let Some(token) = cached.as_ref()
                 && !token.needs_refresh(Utc::now())
             {
@@ -69,7 +79,7 @@ impl TossInvestClient {
     }
 
     async fn refresh_access_token(&self) -> Result<CachedAccessToken> {
-        let mut cached = self.access_token.lock().await;
+        let mut cached = self.shared_state.access_token.lock().await;
         let now = Utc::now();
         if let Some(token) = cached.as_ref()
             && !token.needs_refresh(now)
@@ -77,7 +87,10 @@ impl TossInvestClient {
             return Ok(token.clone());
         }
 
-        self.rate_limiter.acquire(TossRateLimitGroup::Auth).await;
+        self.shared_state
+            .rate_limiter
+            .acquire(TossRateLimitGroup::Auth)
+            .await;
         let token_url = self.api_url(OAUTH_TOKEN_PATH)?;
         let response = self
             .http_client
@@ -107,9 +120,24 @@ impl TossInvestClient {
     }
 
     fn api_url(&self, path: &str) -> Result<Url> {
+        let trimmed = path.trim();
+        if trimmed.is_empty() {
+            return Err(anyhow!("Toss API path must not be empty"));
+        }
+        if trimmed.starts_with("//") {
+            return Err(anyhow!(
+                "Toss API path must be relative to the configured base URL"
+            ));
+        }
+        if Url::parse(trimmed).is_ok() {
+            return Err(anyhow!(
+                "Toss API path must be relative to the configured base URL"
+            ));
+        }
+
         let base_url = format!("{}/", self.config.base_url().trim_end_matches('/'));
         Url::parse(&base_url)
-            .and_then(|url| url.join(path.trim_start_matches('/')))
+            .and_then(|url| url.join(trimmed.trim_start_matches('/')))
             .map_err(|error| anyhow!("failed to build Toss API URL: {error}"))
     }
 }
@@ -119,8 +147,37 @@ impl fmt::Debug for TossInvestClient {
         f.debug_struct("TossInvestClient")
             .field("config", &self.config)
             .field("access_token", &"<redacted>")
-            .field("rate_limiter", &self.rate_limiter)
+            .field("rate_limiter", &self.shared_state.rate_limiter)
             .finish()
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+struct ClientIdentity {
+    base_url: String,
+    client_id: String,
+}
+
+impl ClientIdentity {
+    fn from_config(config: &TossInvestConfig) -> Self {
+        Self {
+            base_url: config.base_url().to_string(),
+            client_id: config.client_id().to_string(),
+        }
+    }
+}
+
+struct SharedClientState {
+    access_token: Mutex<Option<CachedAccessToken>>,
+    rate_limiter: TossRateLimiter,
+}
+
+impl Default for SharedClientState {
+    fn default() -> Self {
+        Self {
+            access_token: Mutex::new(None),
+            rate_limiter: TossRateLimiter::new(),
+        }
     }
 }
 
@@ -165,6 +222,14 @@ impl CachedAccessToken {
 }
 
 fn build_oauth_error(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
+    if let Ok(error) = serde_json::from_str::<OAuth2ErrorResponse>(body) {
+        return anyhow!(
+            "Toss OAuth token request failed with status {status} (error: {}, description: {})",
+            error.error,
+            error.error_description,
+        );
+    }
+
     if let Ok(envelope) = serde_json::from_str::<TossErrorEnvelope>(body) {
         let error = TossInvestApiError::from(envelope.error);
         return anyhow!(
@@ -178,6 +243,27 @@ fn build_oauth_error(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
     anyhow!("Toss OAuth token request failed with status {status}")
 }
 
+fn shared_state_for(config: &TossInvestConfig) -> Arc<SharedClientState> {
+    static SHARED_CLIENT_STATES: OnceLock<StdMutex<BTreeMap<ClientIdentity, Weak<SharedClientState>>>> =
+        OnceLock::new();
+
+    let identity = ClientIdentity::from_config(config);
+    let registry = SHARED_CLIENT_STATES.get_or_init(|| StdMutex::new(BTreeMap::new()));
+    let mut registry = registry
+        .lock()
+        .expect("shared TossInvest client registry should not be poisoned");
+
+    if let Some(existing) = registry.get(&identity).and_then(Weak::upgrade) {
+        return existing;
+    }
+
+    registry.retain(|_, state| state.upgrade().is_some());
+
+    let state = Arc::new(SharedClientState::default());
+    registry.insert(identity, Arc::downgrade(&state));
+    state
+}
+
 #[cfg(test)]
 impl TossInvestClient {
     async fn test_set_cached_token(
@@ -186,14 +272,14 @@ impl TossInvestClient {
         token_type: &str,
         expires_at: DateTime<Utc>,
     ) {
-        let mut cached = self.access_token.lock().await;
+        let mut cached = self.shared_state.access_token.lock().await;
         *cached = Some(CachedAccessToken::new(access_token, token_type, expires_at));
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, sync::Arc};
 
     use chrono::{TimeDelta, Utc};
     use reqwest::{
@@ -201,7 +287,9 @@ mod tests {
         header::{AUTHORIZATION, HeaderValue},
     };
 
-    use super::{CachedAccessToken, TossInvestClient};
+    use crate::TossRateLimitGroup;
+
+    use super::{CachedAccessToken, TossInvestClient, build_oauth_error};
 
     #[test]
     fn oauth_cached_token_refreshes_when_expiring_within_60_seconds() {
@@ -217,7 +305,7 @@ mod tests {
 
     #[tokio::test]
     async fn oauth_authenticated_request_uses_base_url_and_cached_token() {
-        let config = TossInvestClient::new(
+        let client = TossInvestClient::new(
             crate::TossInvestConfig::from_map(&BTreeMap::from([
                 ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
                 (
@@ -232,7 +320,7 @@ mod tests {
             .unwrap(),
         );
 
-        config
+        client
             .test_set_cached_token(
                 "cached-token",
                 "Bearer",
@@ -240,8 +328,8 @@ mod tests {
             )
             .await;
 
-        let request = config
-            .authenticated_request(Method::GET, "/api/v1/prices")
+        let request = client
+            .authenticated_request(TossRateLimitGroup::MarketData, Method::GET, "/api/v1/prices")
             .await
             .unwrap()
             .build()
@@ -255,6 +343,78 @@ mod tests {
             request.headers().get(AUTHORIZATION),
             Some(&HeaderValue::from_static("Bearer cached-token"))
         );
+        assert!(
+            client
+                .rate_limiter()
+                .test_has_scheduled_slot(TossRateLimitGroup::MarketData)
+                .await
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_authenticated_request_rejects_absolute_urls() {
+        let client = TossInvestClient::new(
+            crate::TossInvestConfig::from_map(&BTreeMap::from([
+                ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_SECRET".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ]))
+            .unwrap(),
+        );
+
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let error = client
+            .authenticated_request(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "https://evil.example/api/v1/prices",
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("relative"));
+        assert!(error.contains("base URL"));
+    }
+
+    #[tokio::test]
+    async fn oauth_authenticated_request_rejects_scheme_relative_urls() {
+        let client = TossInvestClient::new(
+            crate::TossInvestConfig::from_map(&BTreeMap::from([
+                ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+                (
+                    "TOSSINVEST_CLIENT_SECRET".to_string(),
+                    "client-secret".to_string(),
+                ),
+            ]))
+            .unwrap(),
+        );
+
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+
+        let error = client
+            .authenticated_request(TossRateLimitGroup::MarketData, Method::GET, "//evil.example/api")
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(error.contains("relative"));
+        assert!(error.contains("base URL"));
     }
 
     #[tokio::test]
@@ -282,5 +442,39 @@ mod tests {
         assert!(!debug.contains("client-secret"));
         assert!(!debug.contains("cached-token"));
         assert!(debug.contains("<redacted>"));
+    }
+
+    #[test]
+    fn oauth_standard_error_is_sanitized_and_includes_error_description() {
+        let error = build_oauth_error(
+            reqwest::StatusCode::UNAUTHORIZED,
+            r#"{
+                "error": "invalid_client",
+                "error_description": "Client authentication failed."
+            }"#,
+        )
+        .to_string();
+
+        assert!(error.contains("invalid_client"));
+        assert!(error.contains("Client authentication failed."));
+        assert!(!error.contains("client-secret"));
+        assert!(!error.contains("access_token"));
+    }
+
+    #[test]
+    fn oauth_clients_with_same_identity_share_in_process_state() {
+        let config = crate::TossInvestConfig::from_map(&BTreeMap::from([
+            ("TOSSINVEST_CLIENT_ID".to_string(), "client-id".to_string()),
+            (
+                "TOSSINVEST_CLIENT_SECRET".to_string(),
+                "client-secret".to_string(),
+            ),
+        ]))
+        .unwrap();
+
+        let first = TossInvestClient::new(config.clone());
+        let second = TossInvestClient::new(config);
+
+        assert!(Arc::ptr_eq(&first.shared_state, &second.shared_state));
     }
 }
