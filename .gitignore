@@ -468,3 +468,5 @@ hs_err_pid*
 /.idea/indexLayout.xml
 /.idea/material_theme_project_new.xml
 /.idea/codeStyles/Project.xml
+
+docs/
