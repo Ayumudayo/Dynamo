@@ -28,8 +28,10 @@ const STOCK_METADATA_GROUP: TossRateLimitGroup = TossRateLimitGroup::Stock;
 const CANDLE_GROUP: TossRateLimitGroup = TossRateLimitGroup::MarketDataChart;
 const PRICE_BATCH_LIMIT: usize = 200;
 const STOCK_METADATA_BATCH_LIMIT: usize = 200;
+const CANDLE_COUNT: usize = 10;
 const PRICE_BATCH_DELAY: Duration = Duration::from_millis(10);
 const MARKET_CALENDAR_TTL: TimeDelta = TimeDelta::seconds(30);
+const REGULAR_CLOSE_SETTLE_GRACE: TimeDelta = TimeDelta::minutes(10);
 const INVALID_TICKER: &str = "Invalid Ticker";
 
 #[derive(Clone)]
@@ -115,7 +117,7 @@ impl StockQuoteService for TossInvestStockQuoteService {
             .fetch_at(now, &self.market_calendar)
             .await?;
         let phase = calendar.classify_at(now);
-        let baseline_date = baseline_date_for_phase(&calendar, phase, now);
+        let baseline_target = baseline_close_target_for_phase(&calendar, phase, now);
 
         let priced_symbols = price_results
             .iter()
@@ -148,7 +150,7 @@ impl StockQuoteService for TossInvestStockQuoteService {
 
             let baseline = match self
                 .baseline_cache
-                .close_for(&price.symbol, baseline_date, {
+                .close_for(&price.symbol, baseline_target, {
                     let client = self.client.clone();
                     move |symbol| {
                         let client = client.clone();
@@ -209,6 +211,12 @@ impl From<TossStockRaw> for StockMetadata {
 struct PriceChange {
     change: Option<f64>,
     change_percent: Option<f64>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum BaselineCloseTarget {
+    Exact(NaiveDate),
+    Before(NaiveDate),
 }
 
 #[derive(Clone)]
@@ -463,7 +471,7 @@ impl BaselineCloseCache {
     async fn close_for<F, Fut>(
         &self,
         symbol: &str,
-        date: NaiveDate,
+        target: BaselineCloseTarget,
         fetch_candles: F,
     ) -> Result<Option<f64>, Error>
     where
@@ -472,7 +480,7 @@ impl BaselineCloseCache {
     {
         let key = BaselineCloseCacheKey {
             symbol: normalize_symbol(symbol),
-            date,
+            target,
         };
 
         let (receiver, should_fetch) = {
@@ -490,7 +498,9 @@ impl BaselineCloseCache {
 
         if should_fetch {
             let result = match fetch_candles(key.symbol.clone()).await {
-                Ok(candles) => close_for_date(&candles, date).map_err(|error| error.to_string()),
+                Ok(candles) => {
+                    close_for_target(&candles, target).map_err(|error| error.to_string())
+                }
                 Err(error) => Err(error.to_string()),
             };
             self.complete_fetch(key.clone(), result).await;
@@ -519,7 +529,7 @@ impl BaselineCloseCache {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct BaselineCloseCacheKey {
     symbol: String,
-    date: NaiveDate,
+    target: BaselineCloseTarget,
 }
 
 async fn flush_price_batch<F, Fut>(state: Arc<Mutex<PriceBatchState>>, fetch_batch: F)
@@ -730,22 +740,99 @@ fn calculate_change(price: f64, baseline_close: Option<f64>) -> PriceChange {
     }
 }
 
-fn baseline_date_for_phase(
+fn baseline_close_target_for_phase(
     calendar: &crate::models::TossMarketCalendarRaw,
     phase: TossMarketSessionPhase,
     at: DateTime<Utc>,
-) -> NaiveDate {
+) -> BaselineCloseTarget {
     match phase {
-        TossMarketSessionPhase::AfterMarket | TossMarketSessionPhase::Closed => {
-            most_recent_regular_close_date(calendar, at)
-                .unwrap_or(calendar.previous_business_day.date)
+        TossMarketSessionPhase::AfterMarket => {
+            let date = active_session_day_date(calendar, phase, at)
+                .or_else(|| most_recent_regular_close_date(calendar, at))
+                .unwrap_or(calendar.previous_business_day.date);
+            settled_regular_close_target(calendar, date, at)
         }
-        TossMarketSessionPhase::Unknown => most_recent_regular_close_date(calendar, at)
-            .unwrap_or(calendar.previous_business_day.date),
+        TossMarketSessionPhase::Closed | TossMarketSessionPhase::Unknown => {
+            let date = most_recent_regular_close_date(calendar, at)
+                .unwrap_or(calendar.previous_business_day.date);
+            settled_regular_close_target(calendar, date, at)
+        }
         TossMarketSessionPhase::DayMarket
         | TossMarketSessionPhase::PreMarket
-        | TossMarketSessionPhase::RegularMarket => calendar.previous_business_day.date,
+        | TossMarketSessionPhase::RegularMarket => BaselineCloseTarget::Before(
+            active_session_day_date(calendar, phase, at).unwrap_or(calendar.today.date),
+        ),
     }
+}
+
+fn settled_regular_close_target(
+    calendar: &crate::models::TossMarketCalendarRaw,
+    date: NaiveDate,
+    at: DateTime<Utc>,
+) -> BaselineCloseTarget {
+    if regular_close_is_settled(calendar, date, at) {
+        BaselineCloseTarget::Exact(date)
+    } else {
+        BaselineCloseTarget::Before(date)
+    }
+}
+
+fn active_session_day_date(
+    calendar: &crate::models::TossMarketCalendarRaw,
+    phase: TossMarketSessionPhase,
+    at: DateTime<Utc>,
+) -> Option<NaiveDate> {
+    [
+        &calendar.previous_business_day,
+        &calendar.today,
+        &calendar.next_business_day,
+    ]
+    .into_iter()
+    .find(|day| {
+        day_session_for_phase(day, phase).is_some_and(|session| session_contains(session, at))
+    })
+    .map(|day| day.date)
+}
+
+fn regular_close_is_settled(
+    calendar: &crate::models::TossMarketCalendarRaw,
+    date: NaiveDate,
+    at: DateTime<Utc>,
+) -> bool {
+    [
+        &calendar.previous_business_day,
+        &calendar.today,
+        &calendar.next_business_day,
+    ]
+    .into_iter()
+    .find(|day| day.date == date)
+    .and_then(|day| day.regular_market.as_ref())
+    .and_then(|session| {
+        session
+            .end_time
+            .to_utc()
+            .checked_add_signed(REGULAR_CLOSE_SETTLE_GRACE)
+    })
+    .is_none_or(|settled_at| settled_at <= at)
+}
+
+fn day_session_for_phase(
+    day: &crate::models::TossMarketDayRaw,
+    phase: TossMarketSessionPhase,
+) -> Option<&crate::models::TossMarketSessionRaw> {
+    match phase {
+        TossMarketSessionPhase::DayMarket => day.day_market.as_ref(),
+        TossMarketSessionPhase::PreMarket => day.pre_market.as_ref(),
+        TossMarketSessionPhase::RegularMarket => day.regular_market.as_ref(),
+        TossMarketSessionPhase::AfterMarket => day.after_market.as_ref(),
+        TossMarketSessionPhase::Closed | TossMarketSessionPhase::Unknown => None,
+    }
+}
+
+fn session_contains(session: &crate::models::TossMarketSessionRaw, at: DateTime<Utc>) -> bool {
+    let start = session.start_time.to_utc();
+    let end = session.end_time.to_utc();
+    start < end && start <= at && at < end
 }
 
 fn most_recent_regular_close_date(
@@ -784,22 +871,40 @@ enum ActivePriceField {
     PostMarket,
 }
 
-fn close_for_date(candles: &[TossCandleRaw], date: NaiveDate) -> Result<Option<f64>, Error> {
-    for candle in candles {
-        if candle
-            .timestamp
-            .as_deref()
-            .and_then(candle_date)
-            .is_some_and(|candle_date| candle_date == date)
-        {
-            let close = candle.close_price.parse::<f64>().map_err(|error| {
-                anyhow!("Toss Invest candle close for {date} was invalid: {error}")
-            })?;
-            return Ok(Some(close));
+fn close_for_target(
+    candles: &[TossCandleRaw],
+    target: BaselineCloseTarget,
+) -> Result<Option<f64>, Error> {
+    let matched = candles
+        .iter()
+        .filter_map(|candle| {
+            let date = candle
+                .timestamp
+                .as_deref()
+                .and_then(candle_date)
+                .filter(|date| target.matches(*date))?;
+            Some((date, candle))
+        })
+        .max_by_key(|(date, _)| *date);
+
+    let Some((date, candle)) = matched else {
+        return Ok(None);
+    };
+
+    let close = candle
+        .close_price
+        .parse::<f64>()
+        .map_err(|error| anyhow!("Toss Invest candle close for {date} was invalid: {error}"))?;
+    Ok(Some(close))
+}
+
+impl BaselineCloseTarget {
+    fn matches(self, candle_date: NaiveDate) -> bool {
+        match self {
+            Self::Exact(date) => candle_date == date,
+            Self::Before(date) => candle_date < date,
         }
     }
-
-    Ok(None)
 }
 
 fn candle_date(value: &str) -> Option<NaiveDate> {
@@ -822,7 +927,7 @@ fn stocks_path(symbols: &[String]) -> String {
 
 fn candles_path(symbol: &str) -> String {
     format!(
-        "/api/v1/candles?symbol={}&interval=1d&count=5&adjusted=true",
+        "/api/v1/candles?symbol={}&interval=1d&count={CANDLE_COUNT}&adjusted=true",
         normalize_symbol(symbol)
     )
 }
@@ -1110,7 +1215,7 @@ mod tests {
         let baseline_date = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
 
         let first = cache
-            .close_for("NVDA", baseline_date, {
+            .close_for("NVDA", BaselineCloseTarget::Exact(baseline_date), {
                 let call_count = call_count.clone();
                 move |_symbol| {
                     let call_count = call_count.clone();
@@ -1127,7 +1232,7 @@ mod tests {
             .await
             .unwrap();
         let second = cache
-            .close_for("NVDA", baseline_date, {
+            .close_for("NVDA", BaselineCloseTarget::Exact(baseline_date), {
                 let call_count = call_count.clone();
                 move |_symbol| {
                     let call_count = call_count.clone();
@@ -1140,20 +1245,24 @@ mod tests {
             .await
             .unwrap();
         let third = cache
-            .close_for("NVDA", NaiveDate::from_ymd_opt(2026, 6, 16).unwrap(), {
-                let call_count = call_count.clone();
-                move |_symbol| {
+            .close_for(
+                "NVDA",
+                BaselineCloseTarget::Exact(NaiveDate::from_ymd_opt(2026, 6, 16).unwrap()),
+                {
                     let call_count = call_count.clone();
-                    async move {
-                        call_count.fetch_add(1, Ordering::SeqCst);
-                        Ok(vec![TossCandleRaw {
-                            symbol: Some("NVDA".to_string()),
-                            close_price: "98.00".to_string(),
-                            timestamp: Some("2026-06-16".to_string()),
-                        }])
+                    move |_symbol| {
+                        let call_count = call_count.clone();
+                        async move {
+                            call_count.fetch_add(1, Ordering::SeqCst);
+                            Ok(vec![TossCandleRaw {
+                                symbol: Some("NVDA".to_string()),
+                                close_price: "98.00".to_string(),
+                                timestamp: Some("2026-06-16".to_string()),
+                            }])
+                        }
                     }
-                }
-            })
+                },
+            )
             .await
             .unwrap();
 
@@ -1170,7 +1279,7 @@ mod tests {
         let baseline_date = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
 
         let first = cache
-            .close_for("NVDA", baseline_date, {
+            .close_for("NVDA", BaselineCloseTarget::Exact(baseline_date), {
                 let call_count = call_count.clone();
                 move |_symbol| {
                     let call_count = call_count.clone();
@@ -1183,7 +1292,7 @@ mod tests {
             .await
             .unwrap();
         let second = cache
-            .close_for("NVDA", baseline_date, {
+            .close_for("NVDA", BaselineCloseTarget::Exact(baseline_date), {
                 let call_count = call_count.clone();
                 move |_symbol| {
                     let call_count = call_count.clone();
@@ -1211,7 +1320,7 @@ mod tests {
         let call_count = Arc::new(AtomicUsize::new(0));
         let baseline_date = NaiveDate::from_ymd_opt(2026, 6, 17).unwrap();
 
-        let first = cache.close_for("NVDA", baseline_date, {
+        let first = cache.close_for("NVDA", BaselineCloseTarget::Exact(baseline_date), {
             let call_count = call_count.clone();
             move |_symbol| {
                 let call_count = call_count.clone();
@@ -1226,7 +1335,7 @@ mod tests {
                 }
             }
         });
-        let second = cache.close_for("NVDA", baseline_date, {
+        let second = cache.close_for("NVDA", BaselineCloseTarget::Exact(baseline_date), {
             let call_count = call_count.clone();
             move |_symbol| {
                 let call_count = call_count.clone();
@@ -1361,7 +1470,7 @@ mod tests {
         );
         assert_eq!(
             candles_path("SOXL"),
-            "/api/v1/candles?symbol=SOXL&interval=1d&count=5&adjusted=true"
+            "/api/v1/candles?symbol=SOXL&interval=1d&count=10&adjusted=true"
         );
     }
 
@@ -1390,7 +1499,7 @@ mod tests {
     }
 
     #[test]
-    fn baseline_date_uses_recent_regular_close_for_after_and_closed() {
+    fn baseline_target_uses_previous_candle_before_regular_and_recent_close_afterwards() {
         let mut calendar = closed_calendar();
         calendar.today.regular_market = Some(crate::models::TossMarketSessionRaw {
             start_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T22:30:00+09:00").unwrap(),
@@ -1398,28 +1507,165 @@ mod tests {
         });
 
         assert_eq!(
-            baseline_date_for_phase(
+            baseline_close_target_for_phase(
                 &calendar,
                 TossMarketSessionPhase::RegularMarket,
                 Utc.with_ymd_and_hms(2026, 6, 18, 14, 0, 0).unwrap(),
             ),
-            NaiveDate::from_ymd_opt(2026, 6, 17).unwrap()
+            BaselineCloseTarget::Before(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
         );
         assert_eq!(
-            baseline_date_for_phase(
+            baseline_close_target_for_phase(
                 &calendar,
                 TossMarketSessionPhase::AfterMarket,
                 Utc.with_ymd_and_hms(2026, 6, 18, 21, 0, 0).unwrap(),
             ),
-            NaiveDate::from_ymd_opt(2026, 6, 18).unwrap()
+            BaselineCloseTarget::Exact(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
         );
         assert_eq!(
-            baseline_date_for_phase(
+            baseline_close_target_for_phase(
                 &calendar,
                 TossMarketSessionPhase::Closed,
                 Utc.with_ymd_and_hms(2026, 6, 19, 1, 0, 0).unwrap(),
             ),
-            NaiveDate::from_ymd_opt(2026, 6, 18).unwrap()
+            BaselineCloseTarget::Exact(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
+        );
+    }
+
+    #[test]
+    fn regular_market_baseline_uses_candle_before_active_market_day_after_kst_midnight() {
+        let mut calendar = closed_calendar();
+        calendar.previous_business_day = TossMarketDayRaw {
+            date: NaiveDate::from_ymd_opt(2026, 6, 18).unwrap(),
+            day_market: Some(crate::models::TossMarketSessionRaw {
+                start_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T10:00:00+09:00")
+                    .unwrap(),
+                end_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T16:00:00+09:00")
+                    .unwrap(),
+            }),
+            pre_market: Some(crate::models::TossMarketSessionRaw {
+                start_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T17:00:00+09:00")
+                    .unwrap(),
+                end_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T22:30:00+09:00")
+                    .unwrap(),
+            }),
+            regular_market: Some(crate::models::TossMarketSessionRaw {
+                start_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T22:30:00+09:00")
+                    .unwrap(),
+                end_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T05:00:00+09:00")
+                    .unwrap(),
+            }),
+            after_market: Some(crate::models::TossMarketSessionRaw {
+                start_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T05:00:00+09:00")
+                    .unwrap(),
+                end_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T09:00:00+09:00")
+                    .unwrap(),
+            }),
+        };
+        calendar.today = TossMarketDayRaw {
+            date: NaiveDate::from_ymd_opt(2026, 6, 19).unwrap(),
+            day_market: None,
+            pre_market: None,
+            regular_market: None,
+            after_market: None,
+        };
+
+        let at = Utc.with_ymd_and_hms(2026, 6, 18, 16, 0, 0).unwrap();
+        assert_eq!(
+            calendar.classify_at(at),
+            TossMarketSessionPhase::RegularMarket
+        );
+        assert_eq!(
+            baseline_close_target_for_phase(&calendar, TossMarketSessionPhase::RegularMarket, at),
+            BaselineCloseTarget::Before(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
+        );
+    }
+
+    #[test]
+    fn after_market_baseline_waits_for_regular_close_settlement_grace() {
+        let mut calendar = closed_calendar();
+        calendar.today.regular_market = Some(crate::models::TossMarketSessionRaw {
+            start_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T22:30:00+09:00").unwrap(),
+            end_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T05:00:00+09:00").unwrap(),
+        });
+        calendar.today.after_market = Some(crate::models::TossMarketSessionRaw {
+            start_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T05:00:00+09:00").unwrap(),
+            end_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T09:00:00+09:00").unwrap(),
+        });
+
+        assert_eq!(
+            baseline_close_target_for_phase(
+                &calendar,
+                TossMarketSessionPhase::AfterMarket,
+                chrono::DateTime::parse_from_rfc3339("2026-06-19T05:05:00+09:00")
+                    .unwrap()
+                    .to_utc(),
+            ),
+            BaselineCloseTarget::Before(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
+        );
+        assert_eq!(
+            baseline_close_target_for_phase(
+                &calendar,
+                TossMarketSessionPhase::AfterMarket,
+                chrono::DateTime::parse_from_rfc3339("2026-06-19T05:10:00+09:00")
+                    .unwrap()
+                    .to_utc(),
+            ),
+            BaselineCloseTarget::Exact(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
+        );
+    }
+
+    #[test]
+    fn closed_post_close_gap_also_waits_for_regular_close_settlement_grace() {
+        let mut calendar = closed_calendar();
+        calendar.today.regular_market = Some(crate::models::TossMarketSessionRaw {
+            start_time: chrono::DateTime::parse_from_rfc3339("2026-06-18T22:30:00+09:00").unwrap(),
+            end_time: chrono::DateTime::parse_from_rfc3339("2026-06-19T05:00:00+09:00").unwrap(),
+        });
+        calendar.today.after_market = None;
+
+        assert_eq!(
+            calendar.classify_at(
+                chrono::DateTime::parse_from_rfc3339("2026-06-19T05:05:00+09:00")
+                    .unwrap()
+                    .to_utc()
+            ),
+            TossMarketSessionPhase::Closed
+        );
+        assert_eq!(
+            baseline_close_target_for_phase(
+                &calendar,
+                TossMarketSessionPhase::Closed,
+                chrono::DateTime::parse_from_rfc3339("2026-06-19T05:05:00+09:00")
+                    .unwrap()
+                    .to_utc(),
+            ),
+            BaselineCloseTarget::Before(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
+        );
+    }
+
+    #[test]
+    fn baseline_close_target_before_active_day_ignores_live_current_day_candle() {
+        let candles = vec![
+            TossCandleRaw {
+                symbol: Some("SOXL".to_string()),
+                close_price: "278.96".to_string(),
+                timestamp: Some("2026-06-18T13:00:00+09:00".to_string()),
+            },
+            TossCandleRaw {
+                symbol: Some("SOXL".to_string()),
+                close_price: "233.86".to_string(),
+                timestamp: Some("2026-06-17T13:00:00+09:00".to_string()),
+            },
+        ];
+
+        assert_eq!(
+            close_for_target(
+                &candles,
+                BaselineCloseTarget::Before(NaiveDate::from_ymd_opt(2026, 6, 18).unwrap())
+            )
+            .unwrap(),
+            Some(233.86)
         );
     }
 }
