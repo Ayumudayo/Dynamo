@@ -1,6 +1,7 @@
 use std::{collections::BTreeMap, fmt};
 
 use anyhow::{Result, anyhow};
+use reqwest::Url;
 
 const CLIENT_ID_ENV: &str = "TOSSINVEST_CLIENT_ID";
 const CLIENT_SECRET_ENV: &str = "TOSSINVEST_CLIENT_SECRET";
@@ -11,7 +12,7 @@ const DEFAULT_BASE_URL: &str = "https://openapi.tossinvest.com";
 pub struct TossInvestConfig {
     client_id: String,
     client_secret: String,
-    pub base_url: String,
+    base_url: String,
 }
 
 impl TossInvestConfig {
@@ -19,7 +20,7 @@ impl TossInvestConfig {
         Ok(Self {
             client_id: required_env_value(CLIENT_ID_ENV)?,
             client_secret: required_env_value(CLIENT_SECRET_ENV)?,
-            base_url: optional_env_value(BASE_URL_ENV)?.unwrap_or_else(default_base_url),
+            base_url: build_base_url(optional_env_value(BASE_URL_ENV)?)?,
         })
     }
 
@@ -27,7 +28,7 @@ impl TossInvestConfig {
         Ok(Self {
             client_id: required_value(env, CLIENT_ID_ENV)?,
             client_secret: required_value(env, CLIENT_SECRET_ENV)?,
-            base_url: optional_value(env, BASE_URL_ENV).unwrap_or_else(default_base_url),
+            base_url: build_base_url(optional_value(env, BASE_URL_ENV))?,
         })
     }
 
@@ -37,6 +38,10 @@ impl TossInvestConfig {
 
     pub fn client_secret(&self) -> &str {
         &self.client_secret
+    }
+
+    pub fn base_url(&self) -> &str {
+        &self.base_url
     }
 }
 
@@ -99,6 +104,25 @@ fn optional_env_value(key: &str) -> Result<Option<String>> {
             Err(anyhow!("Environment variable {key} is not valid Unicode"))
         }
     }
+}
+
+fn build_base_url(override_value: Option<String>) -> Result<String> {
+    validate_base_url(&override_value.unwrap_or_else(default_base_url))
+}
+
+fn validate_base_url(value: &str) -> Result<String> {
+    let parsed = Url::parse(value)
+        .map_err(|error| anyhow!("{BASE_URL_ENV} must be a valid URL: {error}"))?;
+
+    if parsed.scheme() != "https" {
+        return Err(anyhow!("{BASE_URL_ENV} must use HTTPS"));
+    }
+
+    if parsed.host_str().is_none() {
+        return Err(anyhow!("{BASE_URL_ENV} must include a host"));
+    }
+
+    Ok(value.to_string())
 }
 
 fn default_base_url() -> String {
@@ -205,7 +229,7 @@ mod tests {
             ),
         ]);
         let config = TossInvestConfig::from_map(&env).unwrap();
-        assert_eq!(config.base_url.as_str(), "https://openapi.tossinvest.com");
+        assert_eq!(config.base_url(), "https://openapi.tossinvest.com");
     }
 
     #[test]
@@ -226,9 +250,64 @@ mod tests {
         ]);
         let config = TossInvestConfig::from_map(&env).unwrap();
         assert_eq!(
-            config.base_url.as_str(),
+            config.base_url(),
             "https://sandbox.openapi.tossinvest.example"
         );
+    }
+
+    #[test]
+    fn config_rejects_malformed_base_url_override() {
+        let env = std::collections::BTreeMap::from([
+            (
+                "TOSSINVEST_CLIENT_ID".to_string(),
+                "configured-client-id".to_string(),
+            ),
+            (
+                "TOSSINVEST_CLIENT_SECRET".to_string(),
+                "configured-client-secret".to_string(),
+            ),
+            ("TOSSINVEST_BASE_URL".to_string(), "not a url".to_string()),
+        ]);
+        let error = TossInvestConfig::from_map(&env).unwrap_err().to_string();
+        assert!(error.contains("TOSSINVEST_BASE_URL"));
+    }
+
+    #[test]
+    fn config_rejects_non_https_base_url_override() {
+        let env = std::collections::BTreeMap::from([
+            (
+                "TOSSINVEST_CLIENT_ID".to_string(),
+                "configured-client-id".to_string(),
+            ),
+            (
+                "TOSSINVEST_CLIENT_SECRET".to_string(),
+                "configured-client-secret".to_string(),
+            ),
+            (
+                "TOSSINVEST_BASE_URL".to_string(),
+                "http://openapi.tossinvest.example".to_string(),
+            ),
+        ]);
+        let error = TossInvestConfig::from_map(&env).unwrap_err().to_string();
+        assert!(error.contains("TOSSINVEST_BASE_URL"));
+        assert!(error.contains("HTTPS"));
+    }
+
+    #[test]
+    fn config_uses_default_base_url_for_whitespace_override() {
+        let env = std::collections::BTreeMap::from([
+            (
+                "TOSSINVEST_CLIENT_ID".to_string(),
+                "configured-client-id".to_string(),
+            ),
+            (
+                "TOSSINVEST_CLIENT_SECRET".to_string(),
+                "configured-client-secret".to_string(),
+            ),
+            ("TOSSINVEST_BASE_URL".to_string(), "   ".to_string()),
+        ]);
+        let config = TossInvestConfig::from_map(&env).unwrap();
+        assert_eq!(config.base_url(), "https://openapi.tossinvest.com");
     }
 
     #[test]
@@ -244,7 +323,7 @@ mod tests {
             ),
         ]);
         let config = TossInvestConfig::from_map(&env).unwrap();
-        assert_eq!(config.base_url.as_str(), "https://openapi.tossinvest.com");
+        assert_eq!(config.base_url(), "https://openapi.tossinvest.com");
 
         let debug = format!("{config:?}");
         assert!(!debug.contains("configured-client-id"));
@@ -263,7 +342,7 @@ mod tests {
 
         assert_eq!(config.client_id(), "env-client-id");
         assert_eq!(config.client_secret(), "env-client-secret");
-        assert_eq!(config.base_url.as_str(), "https://openapi.tossinvest.com");
+        assert_eq!(config.base_url(), "https://openapi.tossinvest.com");
     }
 
     #[test]
@@ -279,7 +358,7 @@ mod tests {
         let config = TossInvestConfig::from_env().unwrap();
 
         assert_eq!(
-            config.base_url.as_str(),
+            config.base_url(),
             "https://sandbox.openapi.tossinvest.example"
         );
     }
