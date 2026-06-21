@@ -3,6 +3,40 @@ use std::{collections::BTreeMap, fmt};
 use dynamo_enablement::{resolve_command_states, resolve_module_states};
 use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
 use dynamo_settings::{DeploymentSettings, GuildSettings};
+use tracing::Level;
+use tracing_subscriber::{EnvFilter, fmt::writer::MakeWriterExt};
+
+const DEFAULT_LOG_FILTER: &str = "info";
+
+pub fn init_tracing() {
+    let env_value = std::env::var("RUST_LOG").ok();
+    let directives = log_filter_directives(env_value.as_deref());
+    let filter = EnvFilter::new(directives);
+
+    let _ = tracing_subscriber::fmt()
+        .compact()
+        .without_time()
+        .with_writer(
+            std::io::stderr
+                .with_min_level(Level::WARN)
+                .or_else(std::io::stdout),
+        )
+        .with_env_filter(filter)
+        .try_init();
+}
+
+fn log_filter_directives(env_value: Option<&str>) -> String {
+    let candidate = env_value
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(DEFAULT_LOG_FILTER);
+
+    if EnvFilter::try_new(candidate).is_ok() {
+        candidate.to_string()
+    } else {
+        DEFAULT_LOG_FILTER.to_string()
+    }
+}
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Ord, PartialOrd)]
 pub enum StartupStatus {
@@ -537,5 +571,28 @@ pub fn format_gateway_intents(intents: GatewayIntents) -> String {
         "none".to_string()
     } else {
         names.join(", ")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::log_filter_directives;
+
+    #[test]
+    fn log_filter_defaults_to_info_when_env_is_missing() {
+        assert_eq!(log_filter_directives(None), "info");
+    }
+
+    #[test]
+    fn log_filter_uses_valid_env_filter() {
+        assert_eq!(
+            log_filter_directives(Some("dynamo_bot=debug,poise=warn")),
+            "dynamo_bot=debug,poise=warn"
+        );
+    }
+
+    #[test]
+    fn log_filter_falls_back_to_info_when_env_filter_is_invalid() {
+        assert_eq!(log_filter_directives(Some("[")), "info");
     }
 }

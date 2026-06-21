@@ -1,0 +1,22 @@
+[package]
+name = "dynamo-provider-tossinvest"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
+dynamo-domain-currency = { path = "../../domain-currency" }
+dynamo-domain-stock = { path = "../../domain-stock" }
+dynamo-repositories = { path = "../../repositories" }
+dynamo-service-exchange = { path = "../../service-exchange" }
+dynamo-service-stock = { path = "../../service-stock" }
+rand.workspace = true
+reqwest.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true

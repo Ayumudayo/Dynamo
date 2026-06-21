@@ -1,5 +1,7 @@
 use anyhow::Result;
-use dynamo_observability::{StartupPhase, StartupReport, StartupStatus, format_preview_list};
+use dynamo_observability::{
+    StartupPhase, StartupReport, StartupStatus, format_preview_list, init_tracing,
+};
 use dynamo_persistence_mongo::{DEFAULT_DATABASE_NAME, MongoPersistence, MongoPersistenceConfig};
 
 #[tokio::main]
@@ -88,16 +90,6 @@ async fn main() -> Result<()> {
     );
 
     Ok(())
-}
-
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stdout)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dynamo_bootstrap=info,dynamo_persistence_mongo=info".into()),
-        )
-        .try_init();
 }
 
 fn redact_connection_target(connection_string: &str) -> String {

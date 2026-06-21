@@ -26,8 +26,7 @@ members = [
   "crates/domain-moderation",
   "crates/bot",
   "crates/persistence-mongo",
-  "crates/providers/google-finance",
-  "crates/providers/yahoo",
+  "crates/providers/tossinvest",
   "crates/modules/gameinfo",
   "crates/modules/currency",
   "crates/modules/giveaway",
@@ -67,6 +66,7 @@ rss = "2.0.12"
 scraper = "0.24.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.149"
+sha2 = "0.10.9"
 tokio = { version = "1.48.0", features = ["macros", "rt-multi-thread", "signal", "net"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "fmt"] }

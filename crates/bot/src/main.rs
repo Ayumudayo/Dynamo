@@ -1,4 +1,4 @@
-use std::{collections::HashMap, sync::OnceLock, time::Duration};
+use std::{collections::HashMap, fmt, sync::OnceLock, time::Duration};
 
 use chrono::Utc;
 use dynamo_access::command_access_for_context;
@@ -6,7 +6,7 @@ use dynamo_config::{AppConfig, CommandSyncConfig, DiscordConfig};
 use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
 use dynamo_observability::{
     StartupPhase, StartupReport, StartupStatus, catalog_startup_summary, format_gateway_intents,
-    format_preview_kv_list, format_preview_list, scope_startup_summary,
+    format_preview_kv_list, format_preview_list, init_tracing, scope_startup_summary,
 };
 use dynamo_ops::{COMMAND_SYNC_PROVIDER_ID, CommandSyncStateStore};
 use dynamo_persistence_api::Persistence;
@@ -19,6 +19,7 @@ use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
 const GIVEAWAY_POLL_INTERVAL_SECONDS: u64 = 15;
+const CLEARED_COMMAND_FINGERPRINT: &str = "<cleared>";
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -118,16 +119,7 @@ async fn main() -> Result<(), Error> {
     Ok(())
 }
 
-fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stdout)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "dynamo_bot=info,dynamo_runtime_api=info,poise=info".into()),
-        )
-        .try_init();
-}
-
+#[allow(clippy::too_many_arguments)]
 fn build_bot_preconnect_report(
     config: &AppConfig,
     module_catalog: &ModuleCatalog,
@@ -256,20 +248,12 @@ fn build_bot_preconnect_report(
             },
         )
         .detail(
-            "exchange_rate_cache_targets",
+            "exchange_rate_targets",
             services
                 .exchange_rates
                 .as_ref()
                 .map(|service| service.cache_target_count().to_string())
                 .unwrap_or_else(|| "0".to_string()),
-        )
-        .detail(
-            "exchange_rate_cache_persistence",
-            services
-                .exchange_rates
-                .as_ref()
-                .map(|service| service.uses_persisted_cache().to_string())
-                .unwrap_or_else(|| "false".to_string()),
         ),
     );
 
@@ -358,7 +342,7 @@ async fn build_bot_runtime_report(
             .len();
 
     let mut report = StartupReport::new("bot");
-    let exchange_cache_status = if let Some(service) = &app_state.services.exchange_rates {
+    let exchange_rate_status = if let Some(service) = &app_state.services.exchange_rates {
         Some(service.cache_status().await?)
     } else {
         None
@@ -389,26 +373,25 @@ async fn build_bot_runtime_report(
             if app_state.services.exchange_rates.is_some() {
                 format!(
                     "enabled every {}s",
-                    dynamo_provider_google_finance::cache_refresh_interval_seconds()
+                    dynamo_provider_tossinvest::exchange_refresh_interval_seconds()
                 )
             } else {
                 "disabled".to_string()
             },
         )
         .detail(
-            "exchange_rate_cache_status",
-            exchange_cache_status
+            "exchange_rate_status",
+            exchange_rate_status
                 .as_ref()
                 .map(|status| {
                     format!(
-                        "targets={} cached={} persisted={} last_refresh={}",
+                        "targets={} last_refresh={} persisted={}",
                         status.target_currency_count,
-                        status.cached_currency_count,
-                        status.uses_persisted_cache,
                         status
                             .last_refresh_at
                             .map(|value| value.to_rfc3339())
-                            .unwrap_or_else(|| "none".to_string())
+                            .unwrap_or_else(|| "none".to_string()),
+                        status.uses_persisted_cache
                     )
                 })
                 .unwrap_or_else(|| "not configured".to_string()),
@@ -598,6 +581,18 @@ fn command_sync_started() -> &'static OnceLock<()> {
     &STARTED
 }
 
+fn command_scope_needs_sync(
+    cached_fingerprint: Option<&str>,
+    current_fingerprint: &str,
+    manual_request_pending: bool,
+) -> bool {
+    manual_request_pending || cached_fingerprint != Some(current_fingerprint)
+}
+
+fn command_scope_needs_clear(cached_fingerprint: Option<&str>) -> bool {
+    cached_fingerprint != Some(CLEARED_COMMAND_FINGERPRINT)
+}
+
 fn spawn_command_sync_loop(
     ctx: serenity::Context,
     discord_config: DiscordConfig,
@@ -610,10 +605,18 @@ fn spawn_command_sync_loop(
 
     tokio::spawn(async move {
         let interval = Duration::from_secs(sync_interval_seconds.max(5));
+        let mut warning_throttle = WarningThrottle::default();
         loop {
             tokio::time::sleep(interval).await;
             if let Err(error) = sync_registered_commands(&ctx, &discord_config, &data).await {
-                warn!(?error, "failed to sync application commands");
+                if let Some(suppressed_repetitions) = warning_throttle.record_error(&error) {
+                    warn!(
+                        ?error,
+                        suppressed_repetitions, "failed to sync application commands"
+                    );
+                }
+            } else {
+                warning_throttle.record_success();
             }
         }
     });
@@ -632,42 +635,50 @@ async fn sync_registered_commands(
     if discord_config.register_globally {
         let global_commands = dynamo_app::create_application_commands_for_scope(&deployment, None);
         let global_command_count = global_commands.len();
-        let global_fingerprint = format!("{global_commands:#?}");
+        let global_fingerprint = dynamo_app::application_command_fingerprint(&global_commands);
         let manual_request_pending = sync_state.global.has_pending_request();
 
-        {
-            let mut fingerprints = command_sync_fingerprints().lock().await;
-            if fingerprints.global.as_ref() != Some(&global_fingerprint) || manual_request_pending {
-                if let Err(error) =
-                    serenity::Command::set_global_commands(&ctx.http, global_commands).await
-                {
-                    sync_state
-                        .global
-                        .mark_failure(Utc::now(), error.to_string());
-                    sync_state_dirty = true;
-                    if sync_state_dirty {
-                        save_command_sync_state(&data.persistence, &sync_state).await?;
-                    }
-                    return Err(error.into());
-                }
-                fingerprints.global = Some(global_fingerprint);
-                sync_state.global.mark_success(
-                    Utc::now(),
-                    fingerprints.global.clone().unwrap_or_default(),
-                    global_command_count,
-                );
+        let should_sync = {
+            let fingerprints = command_sync_fingerprints().lock().await;
+            command_scope_needs_sync(
+                fingerprints.global.as_deref(),
+                &global_fingerprint,
+                manual_request_pending,
+            )
+        };
+
+        if should_sync {
+            if let Err(error) =
+                serenity::Command::set_global_commands(&ctx.http, global_commands).await
+            {
+                sync_state
+                    .global
+                    .mark_failure(Utc::now(), error.to_string());
                 sync_state_dirty = true;
-                info!(
-                    command_count = global_command_count,
-                    "Synchronized global application commands"
-                );
+                if sync_state_dirty {
+                    save_command_sync_state(&data.persistence, &sync_state).await?;
+                }
+                return Err(error.into());
             }
+            let mut fingerprints = command_sync_fingerprints().lock().await;
+            fingerprints.global = Some(global_fingerprint.clone());
+            drop(fingerprints);
+            sync_state
+                .global
+                .mark_success(Utc::now(), global_fingerprint, global_command_count);
+            sync_state_dirty = true;
+            info!(
+                command_count = global_command_count,
+                "Synchronized global application commands"
+            );
         }
 
         for guild_id in all_cached_guilds {
             let should_clear = {
                 let fingerprints = command_sync_fingerprints().lock().await;
-                fingerprints.guilds.get(&guild_id.get()) != Some(&"<cleared>".to_string())
+                command_scope_needs_clear(
+                    fingerprints.guilds.get(&guild_id.get()).map(String::as_str),
+                )
             };
 
             if should_clear {
@@ -675,7 +686,7 @@ async fn sync_registered_commands(
                 let mut fingerprints = command_sync_fingerprints().lock().await;
                 fingerprints
                     .guilds
-                    .insert(guild_id.get(), "<cleared>".to_string());
+                    .insert(guild_id.get(), CLEARED_COMMAND_FINGERPRINT.to_string());
                 info!(
                     guild_id = guild_id.get(),
                     command_count = 0,
@@ -684,13 +695,16 @@ async fn sync_registered_commands(
             }
         }
     } else {
-        {
+        let should_clear_global = {
+            let fingerprints = command_sync_fingerprints().lock().await;
+            command_scope_needs_clear(fingerprints.global.as_deref())
+        };
+
+        if should_clear_global {
+            serenity::Command::set_global_commands(&ctx.http, vec![]).await?;
             let mut fingerprints = command_sync_fingerprints().lock().await;
-            if fingerprints.global.as_deref() != Some("<cleared>") {
-                serenity::Command::set_global_commands(&ctx.http, vec![]).await?;
-                fingerprints.global = Some("<cleared>".to_string());
-                info!("Cleared global application commands");
-            }
+            fingerprints.global = Some(CLEARED_COMMAND_FINGERPRINT.to_string());
+            info!("Cleared global application commands");
         }
 
         for guild_id in guild_ids_for_sync(ctx, discord_config, &sync_state) {
@@ -703,7 +717,7 @@ async fn sync_registered_commands(
                 Some(&guild_settings),
             );
             let guild_command_count = guild_commands.len();
-            let guild_fingerprint = format!("{guild_commands:#?}");
+            let guild_fingerprint = dynamo_app::application_command_fingerprint(&guild_commands);
             let manual_request_pending = sync_state
                 .guild(guild_id.get())
                 .map(|state| state.has_pending_request())
@@ -711,8 +725,11 @@ async fn sync_registered_commands(
 
             let should_sync = {
                 let fingerprints = command_sync_fingerprints().lock().await;
-                fingerprints.guilds.get(&guild_id.get()) != Some(&guild_fingerprint)
-                    || manual_request_pending
+                command_scope_needs_sync(
+                    fingerprints.guilds.get(&guild_id.get()).map(String::as_str),
+                    &guild_fingerprint,
+                    manual_request_pending,
+                )
             };
 
             if should_sync {
@@ -730,6 +747,7 @@ async fn sync_registered_commands(
                 fingerprints
                     .guilds
                     .insert(guild_id.get(), guild_fingerprint.clone());
+                drop(fingerprints);
                 sync_state.guild_mut(guild_id.get()).mark_success(
                     Utc::now(),
                     guild_fingerprint,
@@ -800,10 +818,18 @@ fn spawn_giveaway_poll_loop(ctx: serenity::Context, data: AppState) {
 
     tokio::spawn(async move {
         let interval = Duration::from_secs(GIVEAWAY_POLL_INTERVAL_SECONDS);
+        let mut warning_throttle = WarningThrottle::default();
         loop {
             tokio::time::sleep(interval).await;
             if let Err(error) = dynamo_module_giveaway::poll_due_giveaways(&ctx, &data).await {
-                warn!(?error, "failed to poll due giveaways");
+                if let Some(suppressed_repetitions) = warning_throttle.record_error(&error) {
+                    warn!(
+                        ?error,
+                        suppressed_repetitions, "failed to poll due giveaways"
+                    );
+                }
+            } else {
+                warning_throttle.record_success();
             }
         }
     });
@@ -825,16 +851,182 @@ fn spawn_exchange_rate_refresh_loop(data: AppState) {
 
     tokio::spawn(async move {
         if let Err(error) = service.refresh_cache().await {
-            warn!(?error, "failed to warm exchange-rate cache");
+            warn!(?error, "failed to preflight exchange-rate data");
         }
 
         let interval =
-            Duration::from_secs(dynamo_provider_google_finance::cache_refresh_interval_seconds());
+            Duration::from_secs(dynamo_provider_tossinvest::exchange_refresh_interval_seconds());
+        let mut warning_throttle = WarningThrottle::default();
         loop {
             tokio::time::sleep(interval).await;
             if let Err(error) = service.refresh_cache().await {
-                warn!(?error, "failed to refresh exchange-rate cache");
+                if let Some(suppressed_repetitions) = warning_throttle.record_error(&error) {
+                    warn!(
+                        ?error,
+                        suppressed_repetitions, "failed to refresh exchange-rate data"
+                    );
+                }
+            } else {
+                warning_throttle.record_success();
             }
         }
     });
+}
+
+const WARNING_THROTTLE_REPEAT_LOG_INTERVAL: u64 = 60;
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+enum WarningThrottleAction {
+    Log { suppressed_repetitions: u64 },
+    Suppress,
+}
+
+#[derive(Debug, Default)]
+struct WarningThrottle {
+    last_fingerprint: Option<String>,
+    suppressed_repetitions: u64,
+}
+
+impl WarningThrottle {
+    fn record_success(&mut self) {
+        self.last_fingerprint = None;
+        self.suppressed_repetitions = 0;
+    }
+
+    fn record_error(&mut self, error: &(impl fmt::Display + ?Sized)) -> Option<u64> {
+        match self.record(&error.to_string()) {
+            WarningThrottleAction::Log {
+                suppressed_repetitions,
+            } => Some(suppressed_repetitions),
+            WarningThrottleAction::Suppress => None,
+        }
+    }
+
+    fn record(&mut self, fingerprint: &str) -> WarningThrottleAction {
+        if self.last_fingerprint.as_deref() == Some(fingerprint) {
+            self.suppressed_repetitions = self.suppressed_repetitions.saturating_add(1);
+            if self
+                .suppressed_repetitions
+                .is_multiple_of(WARNING_THROTTLE_REPEAT_LOG_INTERVAL)
+            {
+                return WarningThrottleAction::Log {
+                    suppressed_repetitions: self.suppressed_repetitions,
+                };
+            }
+            return WarningThrottleAction::Suppress;
+        }
+
+        let suppressed_repetitions = self.suppressed_repetitions;
+        self.last_fingerprint = Some(fingerprint.to_string());
+        self.suppressed_repetitions = 0;
+        WarningThrottleAction::Log {
+            suppressed_repetitions,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use dynamo_services_api::ServiceRegistry;
+
+    use super::{
+        WarningThrottle, WarningThrottleAction, collect_service_labels, command_scope_needs_sync,
+    };
+
+    #[test]
+    fn warning_throttle_logs_first_error_and_suppresses_identical_repeats() {
+        let mut throttle = WarningThrottle::default();
+
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Log {
+                suppressed_repetitions: 0
+            }
+        );
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Suppress
+        );
+    }
+
+    #[test]
+    fn warning_throttle_logs_when_error_changes_with_suppressed_count() {
+        let mut throttle = WarningThrottle::default();
+
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Log {
+                suppressed_repetitions: 0
+            }
+        );
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Suppress
+        );
+        assert_eq!(
+            throttle.record("audit write failed"),
+            WarningThrottleAction::Log {
+                suppressed_repetitions: 1
+            }
+        );
+    }
+
+    #[test]
+    fn warning_throttle_logs_same_error_after_success() {
+        let mut throttle = WarningThrottle::default();
+
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Log {
+                suppressed_repetitions: 0
+            }
+        );
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Suppress
+        );
+
+        throttle.record_success();
+
+        assert_eq!(
+            throttle.record("settings sync failed"),
+            WarningThrottleAction::Log {
+                suppressed_repetitions: 0
+            }
+        );
+    }
+
+    #[test]
+    fn command_scope_sync_is_skipped_when_cached_fingerprint_matches() {
+        assert!(!command_scope_needs_sync(
+            Some("application-command-v1:abc"),
+            "application-command-v1:abc",
+            false
+        ));
+    }
+
+    #[test]
+    fn service_labels_omit_exchange_when_exchange_service_is_disabled() {
+        let labels = collect_service_labels(&ServiceRegistry::new(None, None));
+
+        assert!(!labels.contains(&"exchange_rates".to_string()));
+    }
+
+    #[test]
+    fn command_scope_sync_is_required_when_cached_fingerprint_differs() {
+        assert!(command_scope_needs_sync(
+            Some("application-command-v1:old"),
+            "application-command-v1:new",
+            false
+        ));
+    }
+
+    #[test]
+    fn command_scope_sync_is_required_when_manual_request_is_pending() {
+        assert!(command_scope_needs_sync(
+            Some("application-command-v1:abc"),
+            "application-command-v1:abc",
+            true
+        ));
+    }
 }

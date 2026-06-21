@@ -58,8 +58,70 @@ fi
 
 echo "Using pm2 from: $(command -v pm2)"
 echo "Using node from: $(command -v node || echo missing)"
-if ! pm2 startOrRestart ecosystem.config.js --update-env; then
-  echo "pm2 startOrRestart failed. Dumping pm2 status and recent logs..." >&2
+
+pm2_log_paths_current() {
+  local pm2_json_file
+  pm2_json_file="$(mktemp)"
+  pm2 jlist >"$pm2_json_file"
+  APP_DIR="$APP_DIR" PM2_JSON_FILE="$pm2_json_file" node <<'NODE'
+const fs = require("fs");
+const path = require("path");
+
+const appDir = process.env.APP_DIR;
+const logDir = path.join(appDir, "logs");
+const apps = JSON.parse(fs.readFileSync(process.env.PM2_JSON_FILE, "utf8"));
+const expected = {
+  "dynamo-dashboard": {
+    out: path.join(logDir, "dynamo-dashboard.out.log"),
+    err: path.join(logDir, "dynamo-dashboard.error.log"),
+    combined: path.join(logDir, "dynamo-dashboard.combined.log"),
+  },
+  "dynamo-bot": {
+    out: path.join(logDir, "dynamo-bot.out.log"),
+    err: path.join(logDir, "dynamo-bot.error.log"),
+    combined: path.join(logDir, "dynamo-bot.combined.log"),
+  },
+};
+
+let stale = false;
+for (const processInfo of apps) {
+  const target = expected[processInfo.name];
+  if (!target) {
+    continue;
+  }
+
+  const env = processInfo.pm2_env || {};
+  if (
+    env.pm_out_log_path !== target.out ||
+    env.pm_err_log_path !== target.err ||
+    env.pm_log_path !== target.combined
+  ) {
+    console.error(`PM2 log path drift for ${processInfo.name}; process entry will be recreated.`);
+    stale = true;
+  }
+}
+
+process.exit(stale ? 10 : 0);
+NODE
+  local status=$?
+  rm -f "$pm2_json_file"
+  return "$status"
+}
+
+if pm2_log_paths_current; then
+  pm2_action=(startOrRestart ecosystem.config.js --update-env)
+else
+  status=$?
+  if [[ "$status" -eq 10 ]]; then
+    pm2 delete dynamo-dashboard dynamo-bot || true
+    pm2_action=(start ecosystem.config.js --update-env)
+  else
+    exit "$status"
+  fi
+fi
+
+if ! pm2 "${pm2_action[@]}"; then
+  echo "pm2 ${pm2_action[*]} failed. Dumping pm2 status and recent logs..." >&2
   pm2 status || true
   pm2 logs dynamo-dashboard --lines 80 --nostream || true
   pm2 logs dynamo-bot --lines 80 --nostream || true

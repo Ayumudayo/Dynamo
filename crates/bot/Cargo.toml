@@ -16,7 +16,7 @@ dynamo-module-kit = { path = "../module-kit" }
 dynamo-observability = { path = "../observability" }
 dynamo-ops = { path = "../ops" }
 dynamo-persistence-api = { path = "../persistence-api" }
-dynamo-provider-google-finance = { path = "../providers/google-finance" }
+dynamo-provider-tossinvest = { path = "../providers/tossinvest" }
 dynamo-registry = { path = "../registry" }
 dynamo-runtime-api = { path = "../runtime-api" }
 dynamo-services-api = { path = "../services-api" }

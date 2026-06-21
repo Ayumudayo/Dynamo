@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{fmt::Write as _, sync::Arc};
 
 use dynamo_config::OptionalModulesConfig;
 use dynamo_enablement::resolve_command_state;
@@ -17,7 +17,10 @@ use dynamo_service_stock::StockQuoteService;
 use dynamo_services_api::ServiceRegistry;
 use dynamo_settings::{DeploymentSettings, GuildSettings};
 use poise::serenity_prelude::{Context, CreateCommand, FullEvent};
+use sha2::{Digest, Sha256};
 use tracing::info;
+
+const APPLICATION_COMMAND_FINGERPRINT_VERSION: &str = "application-command-v1";
 
 pub fn module_registry() -> ModuleRegistry {
     let optional_modules = OptionalModulesConfig::from_env().unwrap_or_default();
@@ -83,19 +86,39 @@ pub async fn persistence_from_env() -> anyhow::Result<Persistence> {
     ))
 }
 
-pub fn services_from_persistence(persistence: &Persistence) -> anyhow::Result<ServiceRegistry> {
-    let stock_quotes: Arc<dyn StockQuoteService> = Arc::new(
-        dynamo_provider_yahoo::YahooFinanceClient::new(persistence.provider_state.clone())?,
-    );
-    let exchange_rates: Arc<dyn ExchangeRateService> = Arc::new(
-        dynamo_provider_google_finance::GoogleFinanceExchangeService::new(
-            persistence.provider_state.clone(),
-        )?,
-    );
+pub fn services_from_persistence(_persistence: &Persistence) -> anyhow::Result<ServiceRegistry> {
+    let Some(toss_client) = toss_client_from_env()? else {
+        return Ok(ServiceRegistry::new(None, None));
+    };
+
+    let stock_quotes: Arc<dyn StockQuoteService> =
+        Arc::new(dynamo_provider_tossinvest::TossInvestStockQuoteService::new(toss_client.clone()));
+    let exchange_rates: Arc<dyn ExchangeRateService> =
+        Arc::new(dynamo_provider_tossinvest::TossInvestMarketDataService::new(toss_client));
     Ok(ServiceRegistry::new(
         Some(stock_quotes),
         Some(exchange_rates),
     ))
+}
+
+fn toss_client_from_env() -> anyhow::Result<Option<dynamo_provider_tossinvest::TossInvestClient>> {
+    let config = match dynamo_provider_tossinvest::TossInvestConfig::from_env() {
+        Ok(config) => config,
+        Err(error) if is_missing_tossinvest_credential_error(&error) => return Ok(None),
+        Err(error) => return Err(error.context("failed to load Toss Invest configuration")),
+    };
+
+    Ok(Some(dynamo_provider_tossinvest::TossInvestClient::new(
+        config,
+    )))
+}
+
+fn is_missing_tossinvest_credential_error(error: &anyhow::Error) -> bool {
+    matches!(
+        error.to_string().as_str(),
+        "Missing required environment variable TOSSINVEST_CLIENT_ID"
+            | "Missing required environment variable TOSSINVEST_CLIENT_SECRET"
+    )
 }
 
 pub fn create_application_commands_for_scope(
@@ -119,7 +142,52 @@ pub fn application_command_fingerprint_for_scope(
 ) -> (String, usize) {
     let commands = create_application_commands_for_scope(deployment, guild);
     let count = commands.len();
-    (format!("{commands:#?}"), count)
+    (application_command_fingerprint(&commands), count)
+}
+
+pub fn application_command_fingerprint(commands: &[CreateCommand]) -> String {
+    let payload =
+        serde_json::to_value(commands).expect("Discord application command payloads serialize");
+    fingerprint_canonical_json_value(payload)
+}
+
+fn fingerprint_canonical_json_value(value: serde_json::Value) -> String {
+    let canonical_value = canonicalize_json_value(value);
+    let canonical_payload =
+        serde_json::to_vec(&canonical_value).expect("canonical command JSON serializes");
+    let digest = Sha256::digest(canonical_payload);
+
+    format!(
+        "{APPLICATION_COMMAND_FINGERPRINT_VERSION}:{}",
+        hex_lower(&digest)
+    )
+}
+
+fn canonicalize_json_value(value: serde_json::Value) -> serde_json::Value {
+    match value {
+        serde_json::Value::Array(values) => {
+            serde_json::Value::Array(values.into_iter().map(canonicalize_json_value).collect())
+        }
+        serde_json::Value::Object(map) => {
+            let mut entries = map.into_iter().collect::<Vec<_>>();
+            entries.sort_by(|(left_key, _), (right_key, _)| left_key.cmp(right_key));
+
+            let mut sorted = serde_json::Map::new();
+            for (key, value) in entries {
+                sorted.insert(key, canonicalize_json_value(value));
+            }
+            serde_json::Value::Object(sorted)
+        }
+        value => value,
+    }
+}
+
+fn hex_lower(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        write!(&mut output, "{byte:02x}").expect("writing to a String cannot fail");
+    }
+    output
 }
 
 pub async fn handle_framework_event(
@@ -130,14 +198,19 @@ pub async fn handle_framework_event(
     match event {
         FullEvent::CacheReady { guilds } => {
             for guild_id in guilds {
-                dynamo_module_invite::preload_guild_cache(ctx, data, *guild_id).await?;
+                dynamo_module_invite::events::preload_guild_cache(ctx, data, *guild_id).await?;
             }
         }
         FullEvent::GuildMemberAddition { new_member } => {
             let inviter_data =
-                dynamo_module_invite::track_joined_member(ctx, data, new_member).await?;
-            dynamo_module_greeting::send_welcome(ctx, data, new_member, inviter_data.as_ref())
-                .await?;
+                dynamo_module_invite::events::track_joined_member(ctx, data, new_member).await?;
+            dynamo_module_greeting::events::send_welcome(
+                ctx,
+                data,
+                new_member,
+                inviter_data.as_ref(),
+            )
+            .await?;
         }
         FullEvent::GuildMemberRemoval {
             guild_id,
@@ -145,8 +218,8 @@ pub async fn handle_framework_event(
             member_data_if_available,
         } => {
             let inviter_data =
-                dynamo_module_invite::track_left_member(ctx, data, *guild_id, user).await?;
-            dynamo_module_greeting::send_farewell(
+                dynamo_module_invite::events::track_left_member(ctx, data, *guild_id, user).await?;
+            dynamo_module_greeting::events::send_farewell(
                 ctx,
                 data,
                 *guild_id,
@@ -157,34 +230,35 @@ pub async fn handle_framework_event(
             .await?;
         }
         FullEvent::InviteCreate { data: invite } => {
-            dynamo_module_invite::handle_invite_create(ctx, data, invite).await?;
+            dynamo_module_invite::events::handle_invite_create(ctx, data, invite).await?;
         }
         FullEvent::InviteDelete { data: invite } => {
-            dynamo_module_invite::handle_invite_delete(ctx, data, invite).await?;
+            dynamo_module_invite::events::handle_invite_delete(ctx, data, invite).await?;
         }
         FullEvent::Message { new_message } => {
-            dynamo_module_stats::handle_message(ctx, data, new_message).await?;
+            dynamo_module_stats::events::handle_message(ctx, data, new_message).await?;
         }
         FullEvent::VoiceStateUpdate { old, new } => {
-            dynamo_module_stats::handle_voice_state_update(ctx, data, old.as_ref(), new).await?;
+            dynamo_module_stats::events::handle_voice_state_update(ctx, data, old.as_ref(), new)
+                .await?;
         }
         _ => {}
     }
 
     if let FullEvent::InteractionCreate { interaction } = event {
-        if dynamo_module_stock::handle_component_interaction(ctx, interaction).await? {
+        if dynamo_module_stock::interactions::handle(ctx, interaction).await? {
             return Ok(());
         }
-        if dynamo_module_suggestion::handle_interaction(ctx, interaction, data).await? {
+        if dynamo_module_suggestion::interactions::handle(ctx, interaction, data).await? {
             return Ok(());
         }
-        if dynamo_module_ticket::handle_interaction(ctx, interaction, data).await? {
+        if dynamo_module_ticket::interactions::handle(ctx, interaction, data).await? {
             return Ok(());
         }
-        if dynamo_module_giveaway::handle_interaction(ctx, interaction, data).await? {
+        if dynamo_module_giveaway::interactions::handle(ctx, interaction, data).await? {
             return Ok(());
         }
-        dynamo_module_stats::handle_interaction(ctx, data, interaction).await?;
+        dynamo_module_stats::events::handle_interaction(ctx, data, interaction).await?;
     }
 
     Ok(())
@@ -262,9 +336,59 @@ fn filter_command_recursive(
 
 #[cfg(test)]
 mod tests {
-    use dynamo_config::OptionalModulesConfig;
+    use std::{ffi::OsString, sync::Mutex};
 
-    use super::{module_registry, module_registry_with_optional};
+    use dynamo_config::OptionalModulesConfig;
+    use dynamo_persistence_api::Persistence;
+    use dynamo_service_exchange::ExchangeRateService;
+
+    use super::{
+        application_command_fingerprint_for_scope, fingerprint_canonical_json_value,
+        module_registry, module_registry_with_optional, services_from_persistence,
+        toss_client_from_env,
+    };
+
+    static TOSS_ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    struct ScopedEnvVar {
+        key: &'static str,
+        previous: Option<OsString>,
+    }
+
+    impl ScopedEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests that mutate Toss environment variables hold TOSS_ENV_LOCK,
+            // and ScopedEnvVar restores the original value before releasing the lock.
+            unsafe {
+                std::env::set_var(key, value);
+            }
+            Self { key, previous }
+        }
+
+        fn remove(key: &'static str) -> Self {
+            let previous = std::env::var_os(key);
+            // SAFETY: tests that mutate Toss environment variables hold TOSS_ENV_LOCK,
+            // and ScopedEnvVar restores the original value before releasing the lock.
+            unsafe {
+                std::env::remove_var(key);
+            }
+            Self { key, previous }
+        }
+    }
+
+    impl Drop for ScopedEnvVar {
+        fn drop(&mut self) {
+            // SAFETY: ScopedEnvVar values are dropped while TOSS_ENV_LOCK is still held,
+            // so environment mutation stays serialized for the full test scope.
+            unsafe {
+                match &self.previous {
+                    Some(value) => std::env::set_var(self.key, value),
+                    None => std::env::remove_var(self.key),
+                }
+            }
+        }
+    }
 
     #[test]
     fn default_registry_commands_have_explicit_descriptions() {
@@ -298,5 +422,124 @@ mod tests {
                 entry.command.id
             );
         }
+    }
+
+    #[test]
+    fn module_hook_namespaces_are_exposed() {
+        let _ = dynamo_module_stock::interactions::handle;
+        let _ = dynamo_module_ticket::interactions::handle;
+        let _ = dynamo_module_suggestion::interactions::handle;
+        let _ = dynamo_module_giveaway::interactions::handle;
+
+        let _ = dynamo_module_invite::events::preload_guild_cache;
+        let _ = dynamo_module_invite::events::handle_invite_create;
+        let _ = dynamo_module_invite::events::handle_invite_delete;
+        let _ = dynamo_module_invite::events::track_joined_member;
+        let _ = dynamo_module_invite::events::track_left_member;
+
+        let _ = dynamo_module_greeting::events::send_welcome;
+        let _ = dynamo_module_greeting::events::send_farewell;
+        let _ = dynamo_module_stats::events::handle_message;
+        let _ = dynamo_module_stats::events::handle_interaction;
+        let _ = dynamo_module_stats::events::handle_voice_state_update;
+    }
+
+    #[test]
+    fn services_keep_market_data_optional_without_toss_credentials() {
+        let _lock = TOSS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _client_id = ScopedEnvVar::remove("TOSSINVEST_CLIENT_ID");
+        let _client_secret = ScopedEnvVar::remove("TOSSINVEST_CLIENT_SECRET");
+        let _base_url = ScopedEnvVar::remove("TOSSINVEST_BASE_URL");
+
+        let services = services_from_persistence(&Persistence::default()).unwrap();
+
+        assert!(services.stock_quotes.is_none());
+        assert!(services.exchange_rates.is_none());
+    }
+
+    #[test]
+    fn services_build_toss_market_data_when_credentials_are_present() {
+        let _lock = TOSS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _client_id = ScopedEnvVar::set("TOSSINVEST_CLIENT_ID", "test-client-id");
+        let _client_secret = ScopedEnvVar::set("TOSSINVEST_CLIENT_SECRET", "test-client-secret");
+        let _base_url = ScopedEnvVar::set("TOSSINVEST_BASE_URL", "https://openapi.tossinvest.com");
+
+        let client = toss_client_from_env().unwrap().expect("Toss client");
+        let service = dynamo_provider_tossinvest::TossInvestMarketDataService::new(client);
+
+        assert_eq!(service.cache_target_count(), 2);
+        assert!(!service.uses_persisted_cache());
+
+        let services = services_from_persistence(&Persistence::default()).unwrap();
+        assert!(services.stock_quotes.is_some());
+        assert!(services.exchange_rates.is_some());
+    }
+
+    #[test]
+    fn services_reject_invalid_toss_configuration_when_credentials_are_present() {
+        let _lock = TOSS_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        let _client_id = ScopedEnvVar::set("TOSSINVEST_CLIENT_ID", "test-client-id");
+        let _client_secret = ScopedEnvVar::set("TOSSINVEST_CLIENT_SECRET", "test-client-secret");
+        let _base_url = ScopedEnvVar::set("TOSSINVEST_BASE_URL", "http://not-allowed.example");
+
+        let error = match services_from_persistence(&Persistence::default()) {
+            Ok(_) => panic!("invalid Toss configuration should fail"),
+            Err(error) => error,
+        };
+
+        assert!(
+            error
+                .to_string()
+                .contains("failed to load Toss Invest configuration")
+        );
+    }
+
+    #[test]
+    fn application_command_fingerprint_has_version_prefix() {
+        let deployment = Default::default();
+
+        let (fingerprint, command_count) =
+            application_command_fingerprint_for_scope(&deployment, None);
+
+        assert!(command_count > 0);
+        assert!(
+            fingerprint.starts_with("application-command-v1:"),
+            "unexpected fingerprint prefix: {fingerprint}"
+        );
+    }
+
+    #[test]
+    fn application_command_fingerprint_is_stable_across_json_object_key_order() {
+        let first = serde_json::json!([
+            {
+                "name": "quote",
+                "description": "Lookup a quote",
+                "name_localizations": {
+                    "fr": "Cours",
+                    "en-US": "Quote"
+                }
+            }
+        ]);
+        let second = serde_json::json!([
+            {
+                "name_localizations": {
+                    "en-US": "Quote",
+                    "fr": "Cours"
+                },
+                "description": "Lookup a quote",
+                "name": "quote"
+            }
+        ]);
+
+        assert_eq!(
+            fingerprint_canonical_json_value(first),
+            fingerprint_canonical_json_value(second)
+        );
     }
 }

@@ -12,6 +12,7 @@ chrono.workspace = true
 dynamo-domain-currency = { path = "../../domain-currency" }
 dynamo-repositories = { path = "../../repositories" }
 dynamo-service-exchange = { path = "../../service-exchange" }
+futures-util.workspace = true
 reqwest.workspace = true
 scraper.workspace = true
 serde.workspace = true

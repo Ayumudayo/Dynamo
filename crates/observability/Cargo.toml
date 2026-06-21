@@ -11,3 +11,4 @@ dynamo-module-kit = { path = "../module-kit" }
 dynamo-settings = { path = "../settings" }
 poise.workspace = true
 tracing.workspace = true
+tracing-subscriber.workspace = true

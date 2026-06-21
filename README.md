@@ -25,18 +25,17 @@ This repository is the active Rust product line. The legacy JavaScript bot and d
 - [`crates/observability`](./crates/observability): startup reporting and rendering
 - [`crates/domain-*`](./crates): shared domain crates for currency, stock, giveaway, invite, stats, suggestion, and moderation
 - [`crates/persistence-mongo`](./crates/persistence-mongo): MongoDB repositories and bootstrap
-- [`crates/providers/google-finance`](./crates/providers/google-finance): Google Finance exchange-rate provider with persisted USD-base cache
-- [`crates/providers/yahoo`](./crates/providers/yahoo): Yahoo Finance provider with persisted crumb/cookie enrichment
+- [`crates/providers/tossinvest`](./crates/providers/tossinvest): Toss Invest market data provider for KRW/USD exchange rates and US stock/ETF quotes
 - [`crates/modules`](./crates/modules): first-party modules
 
 See [`docs/workspace-architecture.md`](./docs/workspace-architecture.md) for the intended dependency boundaries and stacked merge order for the current refactor chain.
 
 ## Included Core Modules
 
-- `currency`: Google Finance backed `/exchange` and `/rate` commands with cached fallback
+- `currency`: Toss Invest backed KRW/USD `/exchange` and `/rate` commands using `midRate`
 - `info`: basic bot diagnostics
 - `gameinfo`: FFXIV world transfer, maintenance, and PLL lookups with fallback cache
-- `stock`: Yahoo-backed quote lookups, ETF summaries, refresh sessions
+- `stock`: Toss Invest backed stock lookups, ETF summaries, and refresh sessions
 - `greeting`: welcome/farewell templates and preview command
 - `invite`: invite attribution, reward role evaluation, invite cache tracking
 - `suggestion`: suggestion board workflow with moderator buttons and modal reasons
@@ -76,7 +75,7 @@ Common optional variables:
 - `GOOGLE_TRANSLATE_API_KEY` optional: enables Korean translation for Lodestone `maint` and `pll` notice text
 - `DASHBOARD_ADMIN_USER_IDS` optional comma-separated override for deployment-wide dashboard admins
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
-- `RUST_LOG`
+- `RUST_LOG` optional tracing filter; defaults to `info`
 
 The checked-in [`.env.example`](./.env.example) uses `DASHBOARD_PORT=4000` and matching `DASHBOARD_BASE_URL` as a sample external dashboard port for home-server deployments. The application defaults are still `3000` unless you set them explicitly.
 
@@ -121,7 +120,7 @@ Use the launcher scripts under [`scripts/`](./scripts) to bootstrap MongoDB and 
 They prebuild `dynamo-bootstrap`, `dynamo-dashboard`, and `dynamo-bot` once with a single `cargo build` invocation, then run the shared binaries from `target/debug/`.
 Bot startup logs include the resolved command scope, loaded module count, loaded leaf command count, and loaded module ids. Dashboard startup logs include the listening URL plus loaded module and command counts.
 Long startup lists are compacted as `count + preview` so the report stays readable in terminals and server logs.
-The bot startup report also shows whether the Google Finance exchange-rate cache service is wired and whether the 30-minute refresh loop is active.
+The bot startup report also shows whether Toss Invest market-data services are wired and whether the exchange-rate refresh loop is active.
 
 PowerShell:
 
@@ -153,6 +152,26 @@ Stop managed dashboard and bot processes:
 ```
 
 The launchers print the effective command scope resolved from `.env`.
+
+## Logging
+
+Rust application logs use compact tracing output without application-side timestamps. PM2 is responsible for runtime timestamp display in `pm2 monit` and `pm2 logs`; the checked-in PM2 configs set `time: false` so log files are not double-prefixed with PM2 timestamp injection.
+
+The PM2 configs write repo-local files under `logs/`:
+
+- `logs/dynamo-dashboard.out.log`
+- `logs/dynamo-dashboard.error.log`
+- `logs/dynamo-dashboard.combined.log`
+- `logs/dynamo-bot.out.log`
+- `logs/dynamo-bot.error.log`
+- `logs/dynamo-bot.combined.log`
+
+Set `RUST_LOG` to tune verbosity. Examples:
+
+```bash
+RUST_LOG=info pm2 start ecosystem.config.js --update-env
+RUST_LOG=dynamo_dashboard=debug,dynamo_bot=info,poise=warn pm2 restart ecosystem.config.js --update-env
+```
 
 ## Raspberry Pi / PM2
 
@@ -192,6 +211,7 @@ Notes:
 - The PM2 wrappers run the release binaries from `target/release/`.
 - They expect `.env` to exist in the repo root.
 - The Rust binaries still load `.env` themselves, so the wrapper scripts only need to `cd` into the repo root before `exec`.
+- PM2 writes dashboard and bot stdout, stderr, and combined log files under `logs/` as documented in the Logging section.
 - On a Raspberry Pi, `cargo build --release` can take noticeably longer than debug builds.
 
 ### Cross-build On This PC And Deploy To Raspberry Pi
@@ -254,15 +274,24 @@ These are the baseline checks used during development and CI:
 cargo fmt --all --check
 cargo check
 cargo test --workspace
+```
+
+Use the workspace structure check as a manual refactor hygiene guard when touching crate boundaries or legacy cutover artifacts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\check-workspace-structure.ps1
+```
+
+Unix-like shells can use the Bash entrypoint:
+
+```bash
 bash scripts/check-workspace-structure.sh
 ```
 
-Live network smoke checks for Yahoo enrichment are available but intentionally ignored by default:
+Live Toss Invest smoke checks require local API credentials and are run outside the default workspace suite:
 
 ```powershell
-cargo test -p dynamo-provider-yahoo live_quote_summary_enrichment_returns_rich_nvda_quote -- --ignored --nocapture
-cargo test -p dynamo-provider-yahoo live_quote_summary_persists_yahoo_session_to_mongodb -- --ignored --nocapture
-cargo test -p dynamo-provider-google-finance
+powershell -ExecutionPolicy Bypass -File scripts\validate-tossinvest.ps1 -KeyPath E:\Toss\Invest\API-Key.md
 ```
 
 Node tooling at the repository root is now limited to Playwright smoke only. The root `package.json` is no longer a bot runtime manifest.
