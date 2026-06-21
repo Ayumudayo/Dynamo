@@ -40,7 +40,7 @@ fn skips_blank_tickers_in_symbol_lists() {
 
 #[test]
 fn computes_total_updates_from_refresh_window() {
-    assert_eq!(total_updates(), 12);
+    assert_eq!(total_updates(), 24);
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn footer_marks_final_refresh_as_complete() {
     let total = total_updates();
     assert_eq!(
         refresh_footer_text(total, total, None),
-        "Toss Invest · Done 12/12"
+        "Toss Invest · Done 24/24"
     );
 }
 

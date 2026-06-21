@@ -17,7 +17,7 @@ const DEFAULT_RATE_TARGETS: [&str; 6] = ["KRW", "", "", "", "", ""];
 const DEFAULT_EXCHANGE_FROM: &str = "USD";
 const DEFAULT_EXCHANGE_TO: &str = "KRW";
 const DEFAULT_EXCHANGE_AMOUNT: f64 = 1.0;
-const TOSS_EXCHANGE_PROVIDER_FOOTER: &str = "Toss Invest · midRate";
+const TOSS_EXCHANGE_PROVIDER_FOOTER: &str = "Toss Invest";
 const TOSS_EXCHANGE_SUPPORT_ERROR: &str =
     "Only KRW and USD are supported by the current Toss Invest exchange-rate provider.";
 
@@ -903,8 +903,9 @@ mod tests {
     }
 
     #[test]
-    fn exchange_footer_text_mentions_toss_mid_rate() {
-        assert_eq!(TOSS_EXCHANGE_PROVIDER_FOOTER, "Toss Invest · midRate");
+    fn exchange_footer_text_uses_provider_name_only() {
+        assert_eq!(TOSS_EXCHANGE_PROVIDER_FOOTER, "Toss Invest");
+        assert!(!TOSS_EXCHANGE_PROVIDER_FOOTER.contains("midRate"));
     }
 
     #[test]
