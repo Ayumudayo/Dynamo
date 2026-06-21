@@ -131,6 +131,25 @@ fn current_data_prefers_pre_market_values_when_active() {
 }
 
 #[test]
+fn current_data_prefers_day_market_values_when_active() {
+    let quote = StockQuote {
+        phase: "Day Market".to_string(),
+        pre_market_price: Some(101.0),
+        pre_market_change: Some(1.0),
+        pre_market_change_percent: Some(0.01),
+        regular_market_price: None,
+        regular_market_change: None,
+        regular_market_change_percent: None,
+        ..StockQuote::default()
+    };
+
+    let current = current_market_data(&quote, &quote.phase);
+    assert_eq!(current.price, Some(101.0));
+    assert_eq!(current.change, Some(1.0));
+    assert_eq!(current.change_percent, Some(0.01));
+}
+
+#[test]
 fn stock_primary_values_follow_active_phase() {
     let quote = StockQuote {
         phase: "Pre Market".to_string(),
@@ -153,6 +172,18 @@ fn stock_primary_values_follow_active_phase() {
 fn stock_embed_color_uses_pre_market_change_when_active() {
     let quote = StockQuote {
         phase: "Pre Market".to_string(),
+        pre_market_change: Some(1.0),
+        regular_market_change: Some(-2.0),
+        ..StockQuote::default()
+    };
+
+    assert_eq!(stock_embed_color_change(&quote), Some(1.0));
+}
+
+#[test]
+fn stock_embed_color_uses_day_market_change_when_active() {
+    let quote = StockQuote {
+        phase: "Day Market".to_string(),
         pre_market_change: Some(1.0),
         regular_market_change: Some(-2.0),
         ..StockQuote::default()

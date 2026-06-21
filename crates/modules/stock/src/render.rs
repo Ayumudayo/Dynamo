@@ -223,7 +223,7 @@ pub(crate) fn primary_stock_market_data(snapshot: &StockQuote) -> CurrentMarketD
 
 pub(crate) fn stock_embed_color_change(snapshot: &StockQuote) -> Option<f64> {
     match snapshot.phase.as_str() {
-        "Pre Market" => snapshot
+        "Day Market" | "Pre Market" => snapshot
             .pre_market_change
             .or(snapshot.regular_market_change),
         "After Market" => snapshot
@@ -235,7 +235,7 @@ pub(crate) fn stock_embed_color_change(snapshot: &StockQuote) -> Option<f64> {
 
 pub(crate) fn current_market_data(snapshot: &StockQuote, phase: &str) -> CurrentMarketData {
     match phase {
-        "Pre Market" if snapshot.pre_market_price.is_some() => CurrentMarketData {
+        "Day Market" | "Pre Market" if snapshot.pre_market_price.is_some() => CurrentMarketData {
             price: snapshot.pre_market_price,
             change: snapshot.pre_market_change,
             change_percent: snapshot.pre_market_change_percent,
