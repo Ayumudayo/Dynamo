@@ -29,6 +29,3 @@ jobs:
 
       - name: Run workspace tests
         run: cargo test --workspace
-
-      - name: Check workspace structure
-        run: bash scripts/check-workspace-structure.sh

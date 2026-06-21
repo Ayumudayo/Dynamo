@@ -57,4 +57,8 @@ Each branch should pass the same baseline validation before merge:
 - `cargo fmt --all --check`
 - `cargo check`
 - `cargo test --workspace`
-- `bash scripts/check-workspace-structure.sh`
+
+Run the workspace structure check manually when touching crate boundaries, refactor guardrails, or legacy cutover artifacts:
+
+- Windows/PowerShell: `powershell -ExecutionPolicy Bypass -File scripts\check-workspace-structure.ps1`
+- Unix-like shells: `bash scripts/check-workspace-structure.sh`

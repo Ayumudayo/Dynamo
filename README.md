@@ -274,6 +274,17 @@ These are the baseline checks used during development and CI:
 cargo fmt --all --check
 cargo check
 cargo test --workspace
+```
+
+Use the workspace structure check as a manual refactor hygiene guard when touching crate boundaries or legacy cutover artifacts:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts\check-workspace-structure.ps1
+```
+
+Unix-like shells can use the Bash entrypoint:
+
+```bash
 bash scripts/check-workspace-structure.sh
 ```
 
