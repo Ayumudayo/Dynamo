@@ -5,10 +5,11 @@ use crate::{
         primary_stock_market_data, refresh_footer_text, representative_phase,
         stock_embed_color_change, stop_reason_for_phase,
     },
-    settings::{normalize_symbol, normalize_symbols},
+    settings::{StockSettings, normalize_symbol, normalize_symbols, parse_stock_settings},
     state::total_updates,
 };
 use dynamo_domain_stock::StockQuote;
+use dynamo_settings::GuildModuleSettings;
 use poise::serenity_prelude::CreateEmbed;
 use serde_json::Value;
 
@@ -39,8 +40,176 @@ fn skips_blank_tickers_in_symbol_lists() {
 }
 
 #[test]
-fn computes_total_updates_from_refresh_window() {
-    assert_eq!(total_updates(), 24);
+fn computes_total_updates_from_default_refresh_schedule() {
+    assert_eq!(total_updates(), 40);
+}
+
+#[test]
+fn default_refresh_schedule_is_three_seconds_for_two_minutes() {
+    let settings = StockSettings::default();
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.duration_seconds, 120);
+    assert_eq!(schedule.total_updates(), 40);
+}
+
+#[test]
+fn refresh_schedule_clamps_interval_below_minimum() {
+    let settings = StockSettings {
+        refresh_interval_seconds: 1,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.duration_seconds, 120);
+    assert_eq!(schedule.total_updates(), 40);
+}
+
+#[test]
+fn refresh_schedule_allows_slower_intervals() {
+    let settings = StockSettings {
+        refresh_interval_seconds: 5,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.interval_seconds, 5);
+    assert_eq!(schedule.duration_seconds, 120);
+    assert_eq!(schedule.total_updates(), 24);
+}
+
+#[test]
+fn refresh_schedule_clamps_duration_to_minimum() {
+    let settings = StockSettings {
+        refresh_duration_seconds: 30,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.duration_seconds, 60);
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.total_updates(), 20);
+}
+
+#[test]
+fn refresh_schedule_clamps_duration_to_maximum() {
+    let settings = StockSettings {
+        refresh_duration_seconds: 300,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.duration_seconds, 180);
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.total_updates(), 60);
+}
+
+#[test]
+fn refresh_schedule_caps_interval_to_effective_duration() {
+    let settings = StockSettings {
+        refresh_interval_seconds: 999,
+        refresh_duration_seconds: 60,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.duration_seconds, 60);
+    assert_eq!(schedule.interval_seconds, 60);
+    assert_eq!(schedule.total_updates(), 1);
+}
+
+#[test]
+fn refresh_interval_deserialization_defaults_malformed_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_interval_seconds": "not-a-number"
+    }))
+    .expect("stock settings should tolerate malformed refresh interval only");
+
+    assert_eq!(settings.refresh_schedule().interval_seconds, 3);
+}
+
+#[test]
+fn refresh_duration_deserialization_defaults_malformed_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_duration_seconds": "not-a-number"
+    }))
+    .expect("stock settings should tolerate malformed refresh duration only");
+
+    assert_eq!(settings.refresh_schedule().duration_seconds, 120);
+}
+
+#[test]
+fn refresh_interval_deserialization_accepts_numeric_strings() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_interval_seconds": "5"
+    }))
+    .expect("numeric string refresh interval should parse");
+
+    assert_eq!(settings.refresh_schedule().interval_seconds, 5);
+}
+
+#[test]
+fn refresh_duration_deserialization_accepts_numeric_strings() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_duration_seconds": "180"
+    }))
+    .expect("numeric string refresh duration should parse");
+
+    assert_eq!(settings.refresh_schedule().duration_seconds, 180);
+}
+
+#[test]
+fn refresh_interval_deserialization_defaults_null_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_interval_seconds": null
+    }))
+    .expect("null refresh interval should default");
+
+    assert_eq!(settings.refresh_schedule().interval_seconds, 3);
+}
+
+#[test]
+fn refresh_duration_deserialization_defaults_null_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_duration_seconds": null
+    }))
+    .expect("null refresh duration should default");
+
+    assert_eq!(settings.refresh_schedule().duration_seconds, 120);
+}
+
+#[test]
+fn null_stock_module_configuration_loads_defaults() {
+    let module = GuildModuleSettings {
+        enabled: true,
+        configuration: serde_json::Value::Null,
+    };
+
+    let settings =
+        parse_stock_settings(&module).expect("null stock module configuration should use defaults");
+
+    assert_eq!(settings.default_symbol, "NVDA");
+    assert_eq!(settings.refresh_schedule().interval_seconds, 3);
+    assert_eq!(settings.refresh_schedule().duration_seconds, 120);
 }
 
 #[test]
@@ -56,7 +225,7 @@ fn footer_marks_final_refresh_as_complete() {
     let total = total_updates();
     assert_eq!(
         refresh_footer_text(total, total, None),
-        "Toss Invest · Done 24/24"
+        "Toss Invest · Done 40/40"
     );
 }
 

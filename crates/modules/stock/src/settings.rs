@@ -1,4 +1,8 @@
-use crate::constants::{DEFAULT_ETF_TICKERS, DEFAULT_SYMBOL, MODULE_ID};
+use crate::constants::{
+    DEFAULT_ETF_TICKERS, DEFAULT_REFRESH_DURATION_SECONDS, DEFAULT_REFRESH_INTERVAL_SECONDS,
+    DEFAULT_SYMBOL, MAX_REFRESH_DURATION_SECONDS, MIN_REFRESH_DURATION_SECONDS,
+    MIN_REFRESH_INTERVAL_SECONDS, MODULE_ID,
+};
 use dynamo_module_kit::{SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection};
 use dynamo_runtime_api::{Context, Error};
 use dynamo_settings::{DeploymentCommandSettings, GuildCommandSettings, GuildModuleSettings};
@@ -9,6 +13,16 @@ use serde::{Deserialize, Serialize};
 pub(crate) struct StockSettings {
     pub(crate) default_symbol: String,
     pub(crate) etf_tickers: Vec<String>,
+    #[serde(
+        default = "default_refresh_interval_seconds",
+        deserialize_with = "deserialize_refresh_interval_seconds"
+    )]
+    pub(crate) refresh_interval_seconds: u32,
+    #[serde(
+        default = "default_refresh_duration_seconds",
+        deserialize_with = "deserialize_refresh_duration_seconds"
+    )]
+    pub(crate) refresh_duration_seconds: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -29,6 +43,37 @@ impl Default for StockSettings {
                 .iter()
                 .map(|value| value.to_string())
                 .collect(),
+            refresh_interval_seconds: DEFAULT_REFRESH_INTERVAL_SECONDS,
+            refresh_duration_seconds: DEFAULT_REFRESH_DURATION_SECONDS,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) struct RefreshSchedule {
+    pub(crate) interval_seconds: u32,
+    pub(crate) duration_seconds: u32,
+}
+
+impl RefreshSchedule {
+    pub(crate) fn total_updates(self) -> u32 {
+        (self.duration_seconds / self.interval_seconds).max(1)
+    }
+}
+
+impl StockSettings {
+    pub(crate) fn refresh_schedule(&self) -> RefreshSchedule {
+        let duration_seconds = self
+            .refresh_duration_seconds
+            .clamp(MIN_REFRESH_DURATION_SECONDS, MAX_REFRESH_DURATION_SECONDS);
+        let interval_seconds = self
+            .refresh_interval_seconds
+            .max(MIN_REFRESH_INTERVAL_SECONDS)
+            .min(duration_seconds);
+
+        RefreshSchedule {
+            interval_seconds,
+            duration_seconds,
         }
     }
 }
@@ -53,6 +98,28 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                     help_text: Some("Array of ETF tickers used by /etf."),
                     required: false,
                     kind: SettingsFieldKind::Text,
+                },
+                SettingsField {
+                    key: "refresh_interval_seconds",
+                    label: "Refresh interval seconds",
+                    help_text: Some("Controls live embed edit cadence. Minimum 3 seconds."),
+                    required: false,
+                    kind: SettingsFieldKind::Integer {
+                        min: Some(MIN_REFRESH_INTERVAL_SECONDS as i64),
+                        max: None,
+                    },
+                },
+                SettingsField {
+                    key: "refresh_duration_seconds",
+                    label: "Refresh duration seconds",
+                    help_text: Some(
+                        "Controls how long live embeds update. Allowed range: 60-180 seconds.",
+                    ),
+                    required: false,
+                    kind: SettingsFieldKind::Integer {
+                        min: Some(MIN_REFRESH_DURATION_SECONDS as i64),
+                        max: Some(MAX_REFRESH_DURATION_SECONDS as i64),
+                    },
                 },
             ],
         }],
@@ -118,10 +185,56 @@ pub(crate) async fn load_effective_etf_tickers(ctx: Context<'_>) -> Result<Vec<S
     Ok(normalize_symbols(settings.etf_tickers))
 }
 
-fn parse_stock_settings(module: &GuildModuleSettings) -> Result<StockSettings, Error> {
+pub(crate) fn parse_stock_settings(module: &GuildModuleSettings) -> Result<StockSettings, Error> {
+    if module.configuration.is_null() {
+        return Ok(StockSettings::default());
+    }
+
     Ok(serde_json::from_value::<StockSettings>(
         module.configuration.clone(),
     )?)
+}
+
+fn default_refresh_interval_seconds() -> u32 {
+    DEFAULT_REFRESH_INTERVAL_SECONDS
+}
+
+fn default_refresh_duration_seconds() -> u32 {
+    DEFAULT_REFRESH_DURATION_SECONDS
+}
+
+fn deserialize_refresh_interval_seconds<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(parse_u32_setting(
+        value.as_ref(),
+        DEFAULT_REFRESH_INTERVAL_SECONDS,
+    ))
+}
+
+fn deserialize_refresh_duration_seconds<'de, D>(deserializer: D) -> Result<u32, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
+    Ok(parse_u32_setting(
+        value.as_ref(),
+        DEFAULT_REFRESH_DURATION_SECONDS,
+    ))
+}
+
+fn parse_u32_setting(value: Option<&serde_json::Value>, default: u32) -> u32 {
+    match value {
+        Some(serde_json::Value::Number(number)) => number
+            .as_u64()
+            .and_then(|value| u32::try_from(value).ok())
+            .unwrap_or(default),
+        Some(serde_json::Value::String(value)) => value.trim().parse::<u32>().unwrap_or(default),
+        Some(serde_json::Value::Null) | None => default,
+        _ => default,
+    }
 }
 
 fn parse_etf_command_settings(command: &GuildCommandSettings) -> Option<Vec<String>> {
