@@ -1,8 +1,8 @@
 use crate::{
     constants::{MODULE_ID, STOCK_REFRESH_BUTTON_ID},
     render::{build_etf_response, build_stock_response, refresh_components},
-    settings::{load_effective_etf_tickers, load_settings, normalize_symbol},
-    state::{SessionKind, StockSession, initialize_session_loop, register_session, total_updates},
+    settings::{load_effective_etf_tickers_for_settings, load_settings, normalize_symbol},
+    state::{SessionKind, StockSession, initialize_session_loop, register_session},
 };
 use dynamo_access::module_access_for_context;
 use dynamo_runtime_api::{Context, Error};
@@ -32,8 +32,9 @@ pub(crate) async fn stock(
     };
 
     let settings = load_settings(ctx).await?;
+    let refresh_schedule = settings.refresh_schedule();
     let symbol = normalize_symbol(symbol.unwrap_or(settings.default_symbol));
-    let total_updates = total_updates();
+    let total_updates = refresh_schedule.total_updates();
     let response = build_stock_response(service.as_ref(), &symbol, 0, total_updates).await?;
     let Some(response) = response else {
         ctx.say("Failed to fetch stock data. Please try again later.")
@@ -46,6 +47,7 @@ pub(crate) async fn stock(
             symbol: symbol.clone(),
         },
         service,
+        refresh_schedule,
     )));
 
     let reply = ctx
@@ -88,7 +90,9 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
 
-    let tickers = load_effective_etf_tickers(ctx).await?;
+    let settings = load_settings(ctx).await?;
+    let refresh_schedule = settings.refresh_schedule();
+    let tickers = load_effective_etf_tickers_for_settings(ctx, &settings).await?;
     if tickers.is_empty() {
         ctx.say(
             "No stock tickers configured for this server. Please configure them in the dashboard.",
@@ -97,7 +101,7 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     }
 
-    let total_updates = total_updates();
+    let total_updates = refresh_schedule.total_updates();
     let response = build_etf_response(service.as_ref(), &tickers, 0, total_updates).await?;
     let Some(response) = response else {
         ctx.say("Failed to fetch ETF data. Please try again later.")
@@ -110,6 +114,7 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
             tickers: tickers.clone(),
         },
         service,
+        refresh_schedule,
     )));
 
     let reply = ctx

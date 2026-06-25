@@ -1,8 +1,7 @@
 use crate::{
     constants::{MAX_MANUAL_REFRESHES, STOCK_REFRESH_BUTTON_ID},
     state::{
-        edit_message, fetch_response_for_kind, initialize_session_loop, session_for_message,
-        total_updates,
+        edit_message, fetch_response_for_session, initialize_session_loop, session_for_message,
     },
 };
 use dynamo_runtime_api::Error;
@@ -102,11 +101,7 @@ async fn handle_refresh_button(
 
     component.defer_ephemeral(ctx).await?;
 
-    let (kind, service) = {
-        let state = session.lock().await;
-        (state.kind.clone(), state.service.clone())
-    };
-    let response = fetch_response_for_kind(service.as_ref(), &kind, 0, total_updates()).await?;
+    let response = fetch_response_for_session(&session, 0).await?;
 
     let Some(response) = response else {
         {

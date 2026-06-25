@@ -147,10 +147,12 @@ pub(crate) async fn load_settings(ctx: Context<'_>) -> Result<StockSettings, Err
     Ok(settings)
 }
 
-pub(crate) async fn load_effective_etf_tickers(ctx: Context<'_>) -> Result<Vec<String>, Error> {
-    let settings = load_settings(ctx).await?;
+pub(crate) async fn load_effective_etf_tickers_for_settings(
+    ctx: Context<'_>,
+    settings: &StockSettings,
+) -> Result<Vec<String>, Error> {
     let Some(guild_id) = ctx.guild_id() else {
-        return Ok(normalize_symbols(settings.etf_tickers));
+        return Ok(normalize_symbols(settings.etf_tickers.clone()));
     };
 
     let deployment = ctx
@@ -182,7 +184,7 @@ pub(crate) async fn load_effective_etf_tickers(ctx: Context<'_>) -> Result<Vec<S
         return Ok(tickers);
     }
 
-    Ok(normalize_symbols(settings.etf_tickers))
+    Ok(normalize_symbols(settings.etf_tickers.clone()))
 }
 
 pub(crate) fn parse_stock_settings(module: &GuildModuleSettings) -> Result<StockSettings, Error> {

@@ -1,8 +1,7 @@
 use crate::{
-    constants::{
-        MAX_REFRESH_TIME_MS, MAX_STORED_SESSIONS, REFRESH_INTERVAL_MS, STOCK_REFRESH_BUTTON_ID,
-    },
+    constants::{MAX_STORED_SESSIONS, STOCK_REFRESH_BUTTON_ID},
     render::{StockResponse, build_etf_response, build_stock_response, refresh_components},
+    settings::RefreshSchedule,
 };
 use dynamo_runtime_api::Error;
 use dynamo_service_stock::StockQuoteService;
@@ -26,6 +25,7 @@ pub(crate) enum SessionKind {
 pub(crate) struct StockSession {
     pub(crate) kind: SessionKind,
     pub(crate) service: Arc<dyn StockQuoteService>,
+    pub(crate) refresh_schedule: RefreshSchedule,
     pub(crate) active: bool,
     pub(crate) generation: u64,
     pub(crate) manual_restart_in_progress: bool,
@@ -34,10 +34,15 @@ pub(crate) struct StockSession {
 }
 
 impl StockSession {
-    pub(crate) fn new(kind: SessionKind, service: Arc<dyn StockQuoteService>) -> Self {
+    pub(crate) fn new(
+        kind: SessionKind,
+        service: Arc<dyn StockQuoteService>,
+        refresh_schedule: RefreshSchedule,
+    ) -> Self {
         Self {
             kind,
             service,
+            refresh_schedule,
             active: false,
             generation: 0,
             manual_restart_in_progress: false,
@@ -50,10 +55,6 @@ impl StockSession {
 fn stock_sessions() -> &'static RwLock<HashMap<u64, Arc<Mutex<StockSession>>>> {
     static SESSIONS: OnceLock<RwLock<HashMap<u64, Arc<Mutex<StockSession>>>>> = OnceLock::new();
     SESSIONS.get_or_init(|| RwLock::new(HashMap::new()))
-}
-
-pub(crate) fn total_updates() -> u32 {
-    (MAX_REFRESH_TIME_MS / REFRESH_INTERVAL_MS).max(1)
 }
 
 pub(crate) async fn register_session(message_id: u64, session: Arc<Mutex<StockSession>>) {
@@ -94,15 +95,17 @@ pub(crate) async fn initialize_session_loop(
     state.active = true;
     state.generation += 1;
     let generation = state.generation;
+    let refresh_schedule = state.refresh_schedule;
     drop(state);
 
     tokio::spawn(async move {
-        let max_updates = total_updates();
+        let max_updates = refresh_schedule.total_updates();
+        let interval = Duration::from_secs(refresh_schedule.interval_seconds as u64);
         let mut update_count = 0u32;
         let mut consecutive_failures = 0u32;
 
         loop {
-            sleep(Duration::from_millis(REFRESH_INTERVAL_MS as u64)).await;
+            sleep(interval).await;
 
             {
                 let state = session.lock().await;
@@ -113,29 +116,21 @@ pub(crate) async fn initialize_session_loop(
 
             update_count += 1;
 
-            let (kind, service) = {
-                let state = session.lock().await;
-                (state.kind.clone(), state.service.clone())
-            };
-
-            let response =
-                match fetch_response_for_kind(service.as_ref(), &kind, update_count, max_updates)
-                    .await
-                {
-                    Ok(value) => value,
-                    Err(_) => {
-                        consecutive_failures += 1;
-                        if consecutive_failures >= 3 {
-                            let mut state = session.lock().await;
-                            if state.generation == generation {
-                                state.active = false;
-                                state.last_stop_reason = Some("fetch_error_threshold");
-                            }
-                            break;
+            let response = match fetch_response_for_session(&session, update_count).await {
+                Ok(value) => value,
+                Err(_) => {
+                    consecutive_failures += 1;
+                    if consecutive_failures >= 3 {
+                        let mut state = session.lock().await;
+                        if state.generation == generation {
+                            state.active = false;
+                            state.last_stop_reason = Some("fetch_error_threshold");
                         }
-                        continue;
+                        break;
                     }
-                };
+                    continue;
+                }
+            };
 
             let Some(response) = response else {
                 consecutive_failures += 1;
@@ -184,6 +179,28 @@ pub(crate) async fn initialize_session_loop(
             }
         }
     });
+}
+
+pub(crate) async fn fetch_response_for_session(
+    session: &Arc<Mutex<StockSession>>,
+    update_count: u32,
+) -> Result<Option<StockResponse>, Error> {
+    let (kind, service, refresh_schedule) = {
+        let state = session.lock().await;
+        (
+            state.kind.clone(),
+            state.service.clone(),
+            state.refresh_schedule,
+        )
+    };
+
+    fetch_response_for_kind(
+        service.as_ref(),
+        &kind,
+        update_count,
+        refresh_schedule.total_updates(),
+    )
+    .await
 }
 
 pub(crate) async fn fetch_response_for_kind(
