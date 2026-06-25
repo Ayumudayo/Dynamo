@@ -54,7 +54,10 @@ pub(crate) async fn stock(
         .send(
             poise::CreateReply::default()
                 .embed(response.embed.clone())
-                .components(refresh_components(STOCK_REFRESH_BUTTON_ID)),
+                .components(refresh_components(
+                    STOCK_REFRESH_BUTTON_ID,
+                    response.stop_reason.is_none(),
+                )),
         )
         .await?;
     let message = reply.message().await?.into_owned();
@@ -121,7 +124,10 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
         .send(
             poise::CreateReply::default()
                 .embed(response.embed.clone())
-                .components(refresh_components(STOCK_REFRESH_BUTTON_ID)),
+                .components(refresh_components(
+                    STOCK_REFRESH_BUTTON_ID,
+                    response.stop_reason.is_none(),
+                )),
         )
         .await?;
     let message = reply.message().await?.into_owned();

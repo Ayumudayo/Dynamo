@@ -1,12 +1,18 @@
 use crate::{
-    constants::{DOWN_EMOJI, UP_EMOJI},
+    constants::{DOWN_EMOJI, STOCK_REFRESH_BUTTON_ID, UP_EMOJI},
     render::{
         build_etf_embed, build_stock_embed, current_market_data, format_money,
-        primary_stock_market_data, refresh_footer_text, representative_phase,
+        primary_stock_market_data, refresh_components, refresh_footer_text, representative_phase,
         stock_embed_color_change, stop_reason_for_phase,
     },
-    settings::{StockSettings, normalize_symbol, normalize_symbols, parse_stock_settings},
-    state::{SessionKind, StockSession, fetch_response_for_session},
+    settings::{
+        RefreshSchedule, StockSettings, normalize_symbol, normalize_symbols, parse_stock_settings,
+        settings_schema,
+    },
+    state::{
+        ManualRestartStart, SessionKind, StockSession, fetch_response_for_session,
+        try_begin_manual_restart,
+    },
 };
 use dynamo_domain_stock::StockQuote;
 use dynamo_service_stock::{Error as StockServiceError, StockQuoteService};
@@ -215,9 +221,50 @@ fn null_stock_module_configuration_loads_defaults() {
     assert_eq!(settings.refresh_schedule().duration_seconds, 120);
 }
 
+#[test]
+fn stock_settings_reject_unrelated_invalid_configuration() {
+    let module = GuildModuleSettings {
+        enabled: true,
+        configuration: serde_json::json!({
+            "default_symbol": 123,
+            "etf_tickers": ["SOXL"],
+            "refresh_interval_seconds": 3,
+            "refresh_duration_seconds": 120
+        }),
+    };
+
+    assert!(parse_stock_settings(&module).is_err());
+}
+
+#[test]
+fn stock_settings_schema_exposes_refresh_bounds() {
+    let schema = settings_schema();
+    let fields = schema
+        .sections
+        .iter()
+        .flat_map(|section| section.fields.iter())
+        .map(|field| (field.key, &field.kind))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_integer_bounds(
+        fields
+            .get("refresh_interval_seconds")
+            .expect("refresh interval field"),
+        Some(3),
+        None,
+    );
+    assert_integer_bounds(
+        fields
+            .get("refresh_duration_seconds")
+            .expect("refresh duration field"),
+        Some(60),
+        Some(180),
+    );
+}
+
 #[tokio::test]
 async fn session_response_uses_session_refresh_schedule_total() {
-    let schedule = crate::settings::RefreshSchedule {
+    let schedule = RefreshSchedule {
         interval_seconds: 4,
         duration_seconds: 120,
     };
@@ -235,6 +282,41 @@ async fn session_response_uses_session_refresh_schedule_total() {
         .expect("response");
 
     assert_eq!(embed_footer_text(&response.embed), "Toss Invest · 1/30");
+}
+
+#[test]
+fn refresh_button_renders_disabled_when_requested() {
+    let components = refresh_components(STOCK_REFRESH_BUTTON_ID, true);
+    let value = serde_json::to_value(&components).expect("serialize components");
+
+    assert!(
+        value.to_string().contains("\"disabled\":true"),
+        "serialized components should mark refresh button disabled: {value}"
+    );
+}
+
+#[test]
+fn manual_restart_gate_rejects_second_concurrent_start() {
+    let schedule = RefreshSchedule {
+        interval_seconds: 3,
+        duration_seconds: 120,
+    };
+    let mut session = StockSession::new(
+        SessionKind::Stock {
+            symbol: "SOXL".to_string(),
+        },
+        Arc::new(FakeStockQuoteService::active_quote("SOXL")),
+        schedule,
+    );
+
+    assert_eq!(
+        try_begin_manual_restart(&mut session),
+        ManualRestartStart::Started
+    );
+    assert_eq!(
+        try_begin_manual_restart(&mut session),
+        ManualRestartStart::AlreadyInProgress
+    );
 }
 
 #[test]
@@ -539,6 +621,20 @@ fn quote_with_phase(phase: &str) -> StockQuote {
 
 fn default_total_updates() -> u32 {
     StockSettings::default().refresh_schedule().total_updates()
+}
+
+fn assert_integer_bounds(
+    kind: &dynamo_module_kit::SettingsFieldKind,
+    expected_min: Option<i64>,
+    expected_max: Option<i64>,
+) {
+    match kind {
+        dynamo_module_kit::SettingsFieldKind::Integer { min, max } => {
+            assert_eq!(*min, expected_min);
+            assert_eq!(*max, expected_max);
+        }
+        other => panic!("expected integer field kind, got {other:?}"),
+    }
 }
 
 #[derive(Debug, Clone)]

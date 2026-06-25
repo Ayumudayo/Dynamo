@@ -1,5 +1,5 @@
 use crate::{
-    constants::{MAX_STORED_SESSIONS, STOCK_REFRESH_BUTTON_ID},
+    constants::{MAX_MANUAL_REFRESHES, MAX_STORED_SESSIONS, STOCK_REFRESH_BUTTON_ID},
     render::{StockResponse, build_etf_response, build_stock_response, refresh_components},
     settings::RefreshSchedule,
 };
@@ -33,6 +33,14 @@ pub(crate) struct StockSession {
     pub(crate) last_stop_reason: Option<&'static str>,
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub(crate) enum ManualRestartStart {
+    Started,
+    ActiveLoop,
+    AlreadyInProgress,
+    LimitReached,
+}
+
 impl StockSession {
     pub(crate) fn new(
         kind: SessionKind,
@@ -50,6 +58,23 @@ impl StockSession {
             last_stop_reason: None,
         }
     }
+}
+
+pub(crate) fn try_begin_manual_restart(session: &mut StockSession) -> ManualRestartStart {
+    if session.active {
+        return ManualRestartStart::ActiveLoop;
+    }
+
+    if session.manual_restart_in_progress {
+        return ManualRestartStart::AlreadyInProgress;
+    }
+
+    if session.manual_refresh_count >= MAX_MANUAL_REFRESHES {
+        return ManualRestartStart::LimitReached;
+    }
+
+    session.manual_restart_in_progress = true;
+    ManualRestartStart::Started
 }
 
 fn stock_sessions() -> &'static RwLock<HashMap<u64, Arc<Mutex<StockSession>>>> {
@@ -126,6 +151,8 @@ pub(crate) async fn initialize_session_loop(
                             state.active = false;
                             state.last_stop_reason = Some("fetch_error_threshold");
                         }
+                        drop(state);
+                        let _ = edit_refresh_components(&http, channel_id, message_id, false).await;
                         break;
                     }
                     continue;
@@ -140,16 +167,25 @@ pub(crate) async fn initialize_session_loop(
                         state.active = false;
                         state.last_stop_reason = Some("fetch_error_threshold");
                     }
+                    drop(state);
+                    let _ = edit_refresh_components(&http, channel_id, message_id, false).await;
                     break;
                 }
                 continue;
             };
 
             consecutive_failures = 0;
+            let terminal_after_edit = response.stop_reason.is_some() || update_count >= max_updates;
 
-            if edit_message(&http, channel_id, message_id, response.embed.clone())
-                .await
-                .is_err()
+            if edit_message(
+                &http,
+                channel_id,
+                message_id,
+                response.embed.clone(),
+                !terminal_after_edit,
+            )
+            .await
+            .is_err()
             {
                 let mut state = session.lock().await;
                 if state.generation == generation {
@@ -224,6 +260,7 @@ pub(crate) async fn edit_message(
     channel_id: ChannelId,
     message_id: u64,
     embed: CreateEmbed,
+    refresh_disabled: bool,
 ) -> Result<(), Error> {
     channel_id
         .edit_message(
@@ -231,7 +268,26 @@ pub(crate) async fn edit_message(
             message_id,
             EditMessage::new()
                 .embed(embed)
-                .components(refresh_components(STOCK_REFRESH_BUTTON_ID)),
+                .components(refresh_components(
+                    STOCK_REFRESH_BUTTON_ID,
+                    refresh_disabled,
+                )),
+        )
+        .await?;
+    Ok(())
+}
+
+pub(crate) async fn edit_refresh_components(
+    http: &Http,
+    channel_id: ChannelId,
+    message_id: u64,
+    disabled: bool,
+) -> Result<(), Error> {
+    channel_id
+        .edit_message(
+            http,
+            message_id,
+            EditMessage::new().components(refresh_components(STOCK_REFRESH_BUTTON_ID, disabled)),
         )
         .await?;
     Ok(())

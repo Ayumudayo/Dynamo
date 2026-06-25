@@ -301,10 +301,11 @@ fn format_change(change: Option<f64>, change_percent: Option<f64>) -> String {
     }
 }
 
-pub(crate) fn refresh_components(button_id: &str) -> Vec<CreateActionRow> {
+pub(crate) fn refresh_components(button_id: &str, disabled: bool) -> Vec<CreateActionRow> {
     vec![CreateActionRow::Buttons(vec![
         CreateButton::new(button_id)
             .label("Refresh")
-            .style(ButtonStyle::Secondary),
+            .style(ButtonStyle::Secondary)
+            .disabled(disabled),
     ])]
 }
