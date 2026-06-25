@@ -2872,15 +2872,23 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
                 help_text = help_text,
             )
         }
-        SettingsFieldKind::Integer => {
+        SettingsFieldKind::Integer { min, max } => {
             let value = field_string_value(configuration, field.key);
+            let min_attr = min
+                .map(|value| format!(" min=\"{value}\""))
+                .unwrap_or_default();
+            let max_attr = max
+                .map(|value| format!(" max=\"{value}\""))
+                .unwrap_or_default();
             format!(
-                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<input type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\" {required}/></div>",
+                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<input type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\"{min_attr}{max_attr} {required}/></div>",
                 testid = status_key(field.key),
                 label = field_label,
                 help_text = help_text,
                 key = field_key,
                 value = escape_html(&value.unwrap_or_default()),
+                min_attr = min_attr,
+                max_attr = max_attr,
                 required = required,
             )
         }
@@ -4238,6 +4246,53 @@ mod tests {
         assert!(rendered.contains("data-setting-key=\"channel_id\""));
         assert!(rendered.contains("data-setting-kind=\"text\""));
         assert!(rendered.contains("value=\"123\""));
+    }
+
+    #[test]
+    fn integer_field_renders_min_bound_when_configured() {
+        let field = SettingsField {
+            key: "refresh_interval_seconds",
+            label: "Refresh interval",
+            help_text: Some("Minimum 3 seconds."),
+            required: false,
+            kind: SettingsFieldKind::Integer {
+                min: Some(3),
+                max: None,
+            },
+        };
+
+        let rendered = render_field(
+            &field,
+            &serde_json::json!({ "refresh_interval_seconds": 3 }),
+        );
+
+        assert!(rendered.contains("type=\"number\""));
+        assert!(rendered.contains("min=\"3\""));
+        assert!(rendered.contains("value=\"3\""));
+    }
+
+    #[test]
+    fn integer_schema_serialization_preserves_unbounded_shape() {
+        assert_eq!(
+            serde_json::to_value(SettingsFieldKind::Integer {
+                min: None,
+                max: None,
+            })
+            .expect("serialize integer kind"),
+            serde_json::json!({ "type": "integer" })
+        );
+    }
+
+    #[test]
+    fn integer_schema_serialization_includes_min_when_bounded() {
+        assert_eq!(
+            serde_json::to_value(SettingsFieldKind::Integer {
+                min: Some(3),
+                max: None,
+            })
+            .expect("serialize bounded integer kind"),
+            serde_json::json!({ "type": "integer", "min": 3 })
+        );
     }
 
     #[test]

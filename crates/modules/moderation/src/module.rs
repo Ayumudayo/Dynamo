@@ -61,7 +61,10 @@ impl Module<AppState, Error> for ModerationModule {
                         label: "Max warning limit",
                         help_text: Some("Auto-action threshold for warnings. Set 0 to disable."),
                         required: false,
-                        kind: SettingsFieldKind::Integer,
+                        kind: SettingsFieldKind::Integer {
+                            min: None,
+                            max: None,
+                        },
                     },
                     SettingsField {
                         key: "max_warn.action",

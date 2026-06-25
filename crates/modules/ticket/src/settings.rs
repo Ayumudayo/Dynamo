@@ -86,7 +86,10 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                     label: "Open ticket limit",
                     help_text: Some("Maximum number of concurrently open ticket channels."),
                     required: false,
-                    kind: SettingsFieldKind::Integer,
+                    kind: SettingsFieldKind::Integer {
+                        min: None,
+                        max: None,
+                    },
                 },
                 SettingsField {
                     key: "categories",
