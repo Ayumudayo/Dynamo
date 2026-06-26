@@ -688,12 +688,20 @@ fn parse_snowflake(value: &str, field_name: &str) -> Result<u64, Error> {
         .map_err(|error| anyhow::anyhow!("Stored {field_name} is not a valid u64: {error}"))
 }
 
-fn settings_set_on_insert(document_id: &str) -> Document {
-    doc! {
+fn settings_set_on_insert(document_id: &str, excluded_parent_path: Option<&str>) -> Document {
+    let mut set_on_insert = doc! {
         "_id": document_id,
-        "modules": {},
-        "commands": {},
+    };
+
+    if excluded_parent_path != Some("modules") {
+        set_on_insert.insert("modules", Document::new());
     }
+
+    if excluded_parent_path != Some("commands") {
+        set_on_insert.insert("commands", Document::new());
+    }
+
+    set_on_insert
 }
 
 fn settings_field_path(section: &str, id_kind: &str, id: &str) -> Result<String, Error> {
@@ -719,8 +727,10 @@ fn settings_field_path(section: &str, id_kind: &str, id: &str) -> Result<String,
 }
 
 fn settings_upsert_update(document_id: &str, settings_path: &str, settings: Bson) -> Document {
+    let excluded_parent_path = settings_path.split_once('.').map(|(parent, _)| parent);
+
     doc! {
-        "$setOnInsert": settings_set_on_insert(document_id),
+        "$setOnInsert": settings_set_on_insert(document_id, excluded_parent_path),
         "$set": {
             settings_path: settings,
         },
@@ -736,7 +746,7 @@ impl GuildSettingsRepository for MongoPersistence {
             .find_one_and_update(
                 doc! { "_id": &id },
                 doc! {
-                    "$setOnInsert": settings_set_on_insert(&id),
+                    "$setOnInsert": settings_set_on_insert(&id, None),
                 },
             )
             .upsert(true)
@@ -1236,6 +1246,10 @@ mod tests {
     };
     use mongodb::bson::{Bson, doc, to_bson};
     use serde_json::json;
+    use std::{
+        collections::hash_map::DefaultHasher,
+        hash::{Hash, Hasher},
+    };
 
     fn require_mongo_test_config(test_name: &str) -> anyhow::Result<MongoPersistenceConfig> {
         let _ = dotenvy::dotenv();
@@ -1250,7 +1264,7 @@ mod tests {
         base: &MongoPersistenceConfig,
         test_name: &str,
     ) -> MongoPersistenceConfig {
-        let label: String = test_name
+        let mut label: String = test_name
             .chars()
             .map(|ch| {
                 if ch.is_ascii_alphanumeric() {
@@ -1260,10 +1274,13 @@ mod tests {
                 }
             })
             .collect();
-        let database_name = format!(
-            "dynamo_persistence_mongo_{label}_{}",
-            chrono::Utc::now().timestamp_millis().unsigned_abs()
-        );
+        label.truncate(8);
+
+        let mut hasher = DefaultHasher::new();
+        test_name.hash(&mut hasher);
+        let name_hash = hasher.finish() as u32;
+        let suffix = chrono::Utc::now().timestamp_millis().unsigned_abs() % 100_000_000;
+        let database_name = format!("dynmongo_{label}_{name_hash:08x}_{suffix:08}");
 
         MongoPersistenceConfig::new(base.connection_string.clone(), database_name)
     }
@@ -1299,7 +1316,7 @@ mod tests {
     }
 
     #[test]
-    fn guild_upsert_update_seeds_required_fields_on_insert() {
+    fn guild_upsert_update_skips_conflicting_module_parent_on_insert() {
         let settings = GuildModuleSettings {
             enabled: false,
             configuration: json!({ "threshold": 7 }),
@@ -1316,7 +1333,6 @@ mod tests {
             doc! {
                 "$setOnInsert": {
                     "_id": "42",
-                    "modules": {},
                     "commands": {},
                 },
                 "$set": {
@@ -1330,7 +1346,37 @@ mod tests {
     }
 
     #[test]
-    fn deployment_upsert_update_seeds_required_fields_on_insert() {
+    fn guild_upsert_update_skips_conflicting_command_parent_on_insert() {
+        let settings = GuildCommandSettings {
+            enabled: false,
+            configuration: json!({ "precision": 2 }),
+        };
+
+        let update = super::settings_upsert_update(
+            "42",
+            "commands.exchange::rate",
+            to_bson(&settings).expect("guild command settings serialize"),
+        );
+
+        assert_eq!(
+            update,
+            doc! {
+                "$setOnInsert": {
+                    "_id": "42",
+                    "modules": {},
+                },
+                "$set": {
+                    "commands.exchange::rate": {
+                        "enabled": false,
+                        "configuration": { "precision": 2i64 },
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn deployment_upsert_update_skips_conflicting_module_parent_on_insert() {
         let settings = DeploymentModuleSettings {
             installed: false,
             enabled: true,
@@ -1347,13 +1393,44 @@ mod tests {
             doc! {
                 "$setOnInsert": {
                     "_id": "global",
-                    "modules": {},
                     "commands": {},
                 },
                 "$set": {
                     "modules.stock": {
                         "installed": false,
                         "enabled": true,
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn deployment_upsert_update_skips_conflicting_command_parent_on_insert() {
+        let settings = DeploymentCommandSettings {
+            installed: true,
+            enabled: false,
+            configuration: json!({ "visible": true }),
+        };
+
+        let update = super::settings_upsert_update(
+            "global",
+            "commands.exchange::rate",
+            to_bson(&settings).expect("deployment command settings serialize"),
+        );
+
+        assert_eq!(
+            update,
+            doc! {
+                "$setOnInsert": {
+                    "_id": "global",
+                    "modules": {},
+                },
+                "$set": {
+                    "commands.exchange::rate": {
+                        "installed": true,
+                        "enabled": false,
+                        "configuration": { "visible": true },
                     },
                 },
             }
@@ -1373,6 +1450,16 @@ mod tests {
             to_bson(&document.commands).ok(),
             Some(Bson::Document(doc! {}))
         );
+    }
+
+    #[test]
+    fn isolated_mongo_test_config_generates_atlas_safe_database_name() {
+        let base = MongoPersistenceConfig::new("mongodb://example.invalid", "ignored");
+        let config =
+            isolated_mongo_test_config(&base, "dashboard_audit_logs_round_trip_against_mongo");
+
+        assert!(config.database_name.len() <= 38, "{}", config.database_name);
+        assert!(config.database_name.starts_with("dynmongo_dashboar_"));
     }
 
     #[test]
