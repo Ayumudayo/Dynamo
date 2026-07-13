@@ -1,3 +1,4 @@
+use crate::policy::{ModerationTargetFacts, authorize_moderation_target};
 use chrono::{Duration as ChronoDuration, Utc};
 use dynamo_access::module_access_for_context;
 use dynamo_domain_moderation::WarningLogRecord;
@@ -271,10 +272,24 @@ async fn warnings_clear(
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
-    repo.clear_for_member(guild_id.get(), user.id.get()).await?;
+    let target = guild_id.member(ctx, user.id).await?;
+    let issuer = require_author_member(ctx).await?;
+    let facts = moderation_target_facts(ctx, &issuer, &target)?;
+    let clear = authorize_warning_history_clear(&facts, || {
+        repo.clear_for_member(guild_id.get(), user.id.get())
+    })?;
+    clear.await?;
     ctx.say(format!("{}'s warnings have been cleared.", user.name))
         .await?;
     Ok(())
+}
+
+fn authorize_warning_history_clear<T>(
+    facts: &ModerationTargetFacts,
+    clear_for_member: impl FnOnce() -> T,
+) -> Result<T, Error> {
+    authorize_moderation_target(facts, Permissions::KICK_MEMBERS).map_err(anyhow::Error::new)?;
+    Ok(clear_for_member())
 }
 
 /// Timeout a guild member for a specific duration.
@@ -703,6 +718,15 @@ async fn ensure_moderatable(
     target: &Member,
     required_permission: Permissions,
 ) -> Result<(), Error> {
+    let facts = moderation_target_facts(ctx, issuer, target)?;
+    authorize_moderation_target(&facts, required_permission).map_err(anyhow::Error::new)
+}
+
+fn moderation_target_facts(
+    ctx: Context<'_>,
+    issuer: &Member,
+    target: &Member,
+) -> Result<ModerationTargetFacts, Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Err(anyhow::anyhow!("guild id missing"));
     };
@@ -712,49 +736,24 @@ async fn ensure_moderatable(
         .guild(guild_id)
         .ok_or_else(|| anyhow::anyhow!("guild cache entry missing"))?;
 
-    if !issuer
-        .permissions
-        .unwrap_or_else(Permissions::empty)
-        .contains(required_permission)
-    {
-        return Err(anyhow::anyhow!(
-            "You do not have the required Discord permission."
-        ));
-    }
-
     let bot_member = guild
         .members
         .get(&ctx.serenity_context().cache.current_user().id)
         .cloned()
         .ok_or_else(|| anyhow::anyhow!("bot member cache entry missing"))?;
 
-    if !bot_member
-        .permissions
-        .unwrap_or_else(Permissions::empty)
-        .contains(required_permission)
-    {
-        return Err(anyhow::anyhow!(
-            "The bot does not have the required Discord permission."
-        ));
-    }
-
-    if guild.owner_id != issuer.user.id
-        && highest_role_position(&guild, issuer) <= highest_role_position(&guild, target)
-    {
-        return Err(anyhow::anyhow!(
-            "You do not have permission to moderate this member."
-        ));
-    }
-
-    if guild.owner_id != bot_member.user.id
-        && highest_role_position(&guild, &bot_member) <= highest_role_position(&guild, target)
-    {
-        return Err(anyhow::anyhow!(
-            "The bot cannot moderate this member due to role hierarchy."
-        ));
-    }
-
-    Ok(())
+    Ok(ModerationTargetFacts {
+        actor_id: issuer.user.id,
+        actor_permissions: issuer.permissions.unwrap_or_else(Permissions::empty),
+        actor_top_role: highest_role_position(&guild, issuer),
+        bot_id: bot_member.user.id,
+        bot_permissions: bot_member.permissions.unwrap_or_else(Permissions::empty),
+        bot_top_role: highest_role_position(&guild, &bot_member),
+        target_id: target.user.id,
+        target_is_bot: target.user.bot,
+        target_top_role: highest_role_position(&guild, target),
+        guild_owner_id: guild.owner_id,
+    })
 }
 
 fn highest_role_position(guild: &poise::serenity_prelude::Guild, member: &Member) -> i64 {
@@ -813,7 +812,94 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{ModerationSettings, parse_user_id};
+    use super::{ModerationSettings, authorize_warning_history_clear, parse_user_id};
+    use crate::policy::{ModerationTargetDenial, ModerationTargetFacts};
+    use poise::serenity_prelude::{Permissions, UserId};
+    use std::cell::Cell;
+
+    #[derive(Default)]
+    struct WarningRepositorySpy {
+        clear_calls: Cell<usize>,
+    }
+
+    impl WarningRepositorySpy {
+        fn clear_for_member(&self, _guild_id: u64, _member_id: u64) {
+            self.clear_calls.set(self.clear_calls.get() + 1);
+        }
+    }
+
+    fn moderation_target_fixture() -> ModerationTargetFacts {
+        ModerationTargetFacts {
+            actor_id: UserId::new(1),
+            actor_permissions: Permissions::KICK_MEMBERS,
+            actor_top_role: 20,
+            bot_id: UserId::new(2),
+            bot_permissions: Permissions::KICK_MEMBERS,
+            bot_top_role: 30,
+            target_id: UserId::new(3),
+            target_is_bot: false,
+            target_top_role: 10,
+            guild_owner_id: UserId::new(4),
+        }
+    }
+
+    fn assert_warning_clear_denied(facts: ModerationTargetFacts, expected: ModerationTargetDenial) {
+        let repository = WarningRepositorySpy::default();
+        let result = authorize_warning_history_clear(&facts, || {
+            repository.clear_for_member(100, facts.target_id.get())
+        });
+        let error = match result {
+            Ok(()) => panic!("warning clear unexpectedly authorized"),
+            Err(error) => error,
+        };
+
+        assert_eq!(error.downcast_ref(), Some(&expected));
+        assert_eq!(repository.clear_calls.get(), 0);
+    }
+
+    #[test]
+    fn warning_clear_denials_never_invoke_the_repository() {
+        let mut actor_permission = moderation_target_fixture();
+        actor_permission.actor_permissions = Permissions::empty();
+        assert_warning_clear_denied(actor_permission, ModerationTargetDenial::ActorPermission);
+
+        let mut bot_permission = moderation_target_fixture();
+        bot_permission.bot_permissions = Permissions::empty();
+        assert_warning_clear_denied(bot_permission, ModerationTargetDenial::BotPermission);
+
+        let mut self_target = moderation_target_fixture();
+        self_target.target_id = self_target.actor_id;
+        assert_warning_clear_denied(self_target, ModerationTargetDenial::SelfTarget);
+
+        let mut bot_target = moderation_target_fixture();
+        bot_target.target_is_bot = true;
+        assert_warning_clear_denied(bot_target, ModerationTargetDenial::BotTarget);
+
+        let mut guild_owner = moderation_target_fixture();
+        guild_owner.target_id = guild_owner.guild_owner_id;
+        assert_warning_clear_denied(guild_owner, ModerationTargetDenial::GuildOwnerTarget);
+
+        let mut actor_hierarchy = moderation_target_fixture();
+        actor_hierarchy.actor_top_role = actor_hierarchy.target_top_role;
+        assert_warning_clear_denied(actor_hierarchy, ModerationTargetDenial::ActorHierarchy);
+
+        let mut bot_hierarchy = moderation_target_fixture();
+        bot_hierarchy.bot_top_role = bot_hierarchy.target_top_role;
+        assert_warning_clear_denied(bot_hierarchy, ModerationTargetDenial::BotHierarchy);
+    }
+
+    #[test]
+    fn warning_clear_authorization_invokes_the_repository_once() {
+        let facts = moderation_target_fixture();
+        let repository = WarningRepositorySpy::default();
+
+        authorize_warning_history_clear(&facts, || {
+            repository.clear_for_member(100, facts.target_id.get())
+        })
+        .expect("authorized warning clear");
+
+        assert_eq!(repository.clear_calls.get(), 1);
+    }
 
     #[test]
     fn moderation_settings_accepts_nested_shape() {

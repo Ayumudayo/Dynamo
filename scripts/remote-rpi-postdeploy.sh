@@ -32,10 +32,20 @@ mkdir -p "$APP_DIR" "$APP_DIR/scripts" "$APP_DIR/target/release" "$APP_DIR/logs"
 tar -C "$APP_DIR" -xf "$ARCHIVE_PATH"
 rm -f "$ARCHIVE_PATH"
 
-chmod +x "$APP_DIR"/scripts/*.sh "$APP_DIR"/target/release/dynamo-*
+chmod +x \
+  "$APP_DIR"/scripts/*.sh \
+  "$APP_DIR"/scripts/lib/*.sh \
+  "$APP_DIR"/target/release/dynamo-*
 
-if [[ ! -f "$APP_DIR/.env" ]]; then
-  cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+# shellcheck source=lib/secure-env.sh
+source "$APP_DIR/scripts/lib/secure-env.sh"
+
+env_was_absent=false
+if [[ ! -e "$APP_DIR/.env" && ! -L "$APP_DIR/.env" ]]; then
+  env_was_absent=true
+fi
+create_secure_env "$APP_DIR/.env.example" "$APP_DIR/.env"
+if [[ "$env_was_absent" == "true" ]]; then
   echo "Created $APP_DIR/.env from .env.example. Fill it with real values and rerun deployment." >&2
   exit 1
 fi

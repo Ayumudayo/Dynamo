@@ -30,7 +30,7 @@ cd "$ROOT_DIR"
 cargo zigbuild --release --target "$TARGET" -p dynamo-bootstrap -p dynamo-dashboard -p dynamo-bot
 
 rm -rf "$STAGE_DIR"
-mkdir -p "$STAGE_DIR/target/release" "$STAGE_DIR/scripts"
+mkdir -p "$STAGE_DIR/target/release" "$STAGE_DIR/scripts/lib"
 
 cp "$ROOT_DIR/ecosystem.config.js" "$STAGE_DIR/ecosystem.config.js"
 cp "$ROOT_DIR/.env.example" "$STAGE_DIR/.env.example"
@@ -38,9 +38,12 @@ cp "$ROOT_DIR/scripts/prod-bootstrap.sh" "$STAGE_DIR/scripts/prod-bootstrap.sh"
 cp "$ROOT_DIR/scripts/prod-dashboard.sh" "$STAGE_DIR/scripts/prod-dashboard.sh"
 cp "$ROOT_DIR/scripts/prod-bot.sh" "$STAGE_DIR/scripts/prod-bot.sh"
 cp "$ROOT_DIR/scripts/remote-rpi-postdeploy.sh" "$STAGE_DIR/scripts/remote-rpi-postdeploy.sh"
+cp "$ROOT_DIR/scripts/lib/secure-env.sh" "$STAGE_DIR/scripts/lib/secure-env.sh"
 cp "$RELEASE_DIR/dynamo-bootstrap" "$STAGE_DIR/target/release/dynamo-bootstrap"
 cp "$RELEASE_DIR/dynamo-dashboard" "$STAGE_DIR/target/release/dynamo-dashboard"
 cp "$RELEASE_DIR/dynamo-bot" "$STAGE_DIR/target/release/dynamo-bot"
-chmod +x "$STAGE_DIR"/scripts/*.sh
+chmod +x "$STAGE_DIR"/scripts/*.sh "$STAGE_DIR"/scripts/lib/*.sh
+
+bash "$ROOT_DIR/scripts/tests/test-rpi-security-bundle.sh" "$STAGE_DIR"
 
 echo "Staged Raspberry Pi deployment bundle at $STAGE_DIR"

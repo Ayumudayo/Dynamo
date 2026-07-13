@@ -8,6 +8,49 @@ on:
   pull_request:
 
 jobs:
+  deployment-security:
+    name: Deployment security (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Stage fixture bundle
+        shell: pwsh
+        run: |
+          $stage = Join-Path $PWD "output/rpi-aarch64"
+          New-Item -ItemType Directory -Force -Path (Join-Path $stage "scripts/lib") | Out-Null
+          Copy-Item scripts/lib/secure-env.sh (Join-Path $stage "scripts/lib/secure-env.sh")
+          foreach ($name in @("prod-bootstrap.sh", "prod-dashboard.sh", "prod-bot.sh", "remote-rpi-postdeploy.sh")) {
+            Copy-Item (Join-Path "scripts" $name) (Join-Path $stage "scripts/$name")
+          }
+          if ($env:RUNNER_OS -ne "Windows") {
+            Get-ChildItem (Join-Path $stage "scripts") -Filter "*.sh" -Recurse | ForEach-Object {
+              chmod +x $_.FullName
+            }
+          }
+
+      - name: Verify secure environment creation and Bash bundle contracts
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          bash scripts/tests/test-secure-env.sh
+          bash scripts/tests/test-rpi-security-bundle.sh output/rpi-aarch64
+          bash scripts/tests/test-rpi-security-bundle.sh --self-test
+
+      - name: Verify PowerShell bundle contracts
+        shell: pwsh
+        run: |
+          pwsh -NoProfile -File scripts/tests/Test-RpiSecurityBundle.ps1 -StageDir output/rpi-aarch64
+          pwsh -NoProfile -File scripts/tests/Test-RpiSecurityBundle.ps1 -SelfTest
+
   rust:
     runs-on: ubuntu-latest
 
