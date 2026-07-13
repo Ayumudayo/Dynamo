@@ -8,6 +8,8 @@
     "node": ">=18.0.0"
   },
   "scripts": {
+    "perf:test": "node --test tests/perf/dashboard-load.test.cjs",
+    "perf:dashboard": "node scripts/perf/dashboard-load.cjs",
     "dashboard:smoke:auth": "playwright codegen --save-storage=output/playwright/dashboard-auth.json http://127.0.0.1:3000/login",
     "dashboard:smoke": "playwright test -c playwright.dashboard.config.cjs tests/playwright/dashboard-guild-smoke.spec.cjs",
     "dashboard:smoke:headed": "playwright test --headed -c playwright.dashboard.config.cjs tests/playwright/dashboard-guild-smoke.spec.cjs",
