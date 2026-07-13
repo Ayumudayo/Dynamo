@@ -45,6 +45,59 @@ function Assert-ExactKeys {
     }
 }
 
+function Assert-ExactRunnerAcl {
+    param(
+        [Parameter(Mandatory)][string] $LiteralPath,
+        [Parameter(Mandatory)][string] $Message
+    )
+    $directory = Get-Item -LiteralPath $LiteralPath -Force
+    Assert-True -Condition ($directory -is [System.IO.DirectoryInfo]) `
+        -Message "$Message is a directory"
+    Assert-True -Condition (($directory.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) `
+        -Message "$Message is not a reparse point"
+    $security = [System.IO.FileSystemAclExtensions]::GetAccessControl($directory)
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $systemSid = [System.Security.Principal.SecurityIdentifier]::new(
+        [System.Security.Principal.WellKnownSidType]::LocalSystemSid,
+        $null)
+    Assert-Equal -Actual $security.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Value -Expected $currentSid.Value `
+        -Message "$Message owner is current user"
+    Assert-Equal -Actual $security.AreAccessRulesProtected -Expected $true `
+        -Message "$Message DACL is protected"
+    $rules = @($security.GetAccessRules(
+        $true,
+        $true,
+        [System.Security.Principal.SecurityIdentifier]))
+    Assert-Equal -Actual $rules.Count -Expected 2 -Message "$Message has exact ACE count"
+    $expectedSids = @($currentSid.Value, $systemSid.Value)
+    $seenSids = [System.Collections.Generic.HashSet[string]]::new(
+        [System.StringComparer]::Ordinal)
+    $expectedInheritance = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    foreach ($rule in $rules) {
+        Assert-True -Condition ($expectedSids -ccontains $rule.IdentityReference.Value) `
+            -Message "$Message ACE identity is allowlisted"
+        Assert-True -Condition $seenSids.Add($rule.IdentityReference.Value) `
+            -Message "$Message ACE identity is unique"
+        Assert-Equal -Actual $rule.IsInherited -Expected $false `
+            -Message "$Message ACE is explicit"
+        Assert-Equal -Actual $rule.AccessControlType `
+            -Expected ([System.Security.AccessControl.AccessControlType]::Allow) `
+            -Message "$Message ACE is Allow"
+        Assert-Equal -Actual $rule.FileSystemRights `
+            -Expected ([System.Security.AccessControl.FileSystemRights]::FullControl) `
+            -Message "$Message ACE has FullControl"
+        Assert-Equal -Actual $rule.InheritanceFlags -Expected $expectedInheritance `
+            -Message "$Message ACE inheritance is container and object"
+        Assert-Equal -Actual $rule.PropagationFlags `
+            -Expected ([System.Security.AccessControl.PropagationFlags]::None) `
+            -Message "$Message ACE propagation is None"
+    }
+    Assert-Equal -Actual $seenSids.Count -Expected 2 `
+        -Message "$Message contains current and SYSTEM exactly once"
+}
+
 function Write-Utf8File {
     param([Parameter(Mandatory)][string] $LiteralPath, [Parameter(Mandatory)][string] $Value)
     [System.IO.File]::WriteAllText($LiteralPath, $Value, $script:Utf8NoBom)
@@ -171,7 +224,14 @@ $parseErrors = $null
     $launcherSource, [ref]$null, [ref]$parseErrors)
 Assert-Equal -Actual $parseErrors.Count -Expected 0 -Message 'launcher parses without errors'
 $launcherText = [System.IO.File]::ReadAllText($launcherSource, $script:Utf8NoBom)
-foreach ($forbidden in @('Start-Process', 'Invoke-Expression', 'cmd.exe', ' npx ')) {
+foreach ($forbidden in @(
+    'Start-Process',
+    'Invoke-Expression',
+    'cmd.exe',
+    ' npx ',
+    '[System.Security.AccessControl.DirectorySecurity]::new',
+    '.SetOwner('
+)) {
     Assert-True -Condition (-not $launcherText.Contains($forbidden)) `
         -Message "launcher excludes forbidden command surface $forbidden"
 }
@@ -487,6 +547,65 @@ exit 0
     $cleanStatus = (& $gitPath -C $repository status --porcelain=v1 --untracked-files=all) -join ''
     Assert-Equal -Actual $cleanStatus -Expected '' -Message 'dirty-source test restores clean repository'
 
+    $outputParent = Get-Item -LiteralPath (Join-Path $repository 'output') -Force
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $systemSid = [System.Security.Principal.SecurityIdentifier]::new(
+        [System.Security.Principal.WellKnownSidType]::LocalSystemSid,
+        $null)
+    $outputParentAcl = [System.IO.FileSystemAclExtensions]::GetAccessControl($outputParent)
+    Assert-Equal -Actual $outputParentAcl.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Value -Expected $currentSid.Value `
+        -Message 'ACL regression fixture parent is current-user owned'
+    $outputParentAcl.SetAccessRuleProtection($true, $false)
+    foreach ($rule in @($outputParentAcl.GetAccessRules(
+        $true,
+        $false,
+        [System.Security.Principal.SecurityIdentifier]))) {
+        [void]$outputParentAcl.RemoveAccessRuleSpecific($rule)
+    }
+    $allow = [System.Security.AccessControl.AccessControlType]::Allow
+    $inherit = [System.Security.AccessControl.InheritanceFlags]::ContainerInherit -bor
+        [System.Security.AccessControl.InheritanceFlags]::ObjectInherit
+    $nonePropagation = [System.Security.AccessControl.PropagationFlags]::None
+    [void]$outputParentAcl.AddAccessRule(
+        [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $currentSid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            [System.Security.AccessControl.InheritanceFlags]::None,
+            $nonePropagation,
+            $allow))
+    [void]$outputParentAcl.AddAccessRule(
+        [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $currentSid,
+            [System.Security.AccessControl.FileSystemRights]::Modify,
+            $inherit,
+            $nonePropagation,
+            $allow))
+    [void]$outputParentAcl.AddAccessRule(
+        [System.Security.AccessControl.FileSystemAccessRule]::new(
+            $systemSid,
+            [System.Security.AccessControl.FileSystemRights]::FullControl,
+            $inherit,
+            $nonePropagation,
+            $allow))
+    [System.IO.FileSystemAclExtensions]::SetAccessControl($outputParent, $outputParentAcl)
+    $preexistingOutputRoot = [System.IO.Directory]::CreateDirectory(
+        (Join-Path $repository 'output\perf'))
+    [void][System.IO.Directory]::CreateDirectory(
+        (Join-Path $preexistingOutputRoot.FullName 'attempts'))
+    $preexistingAcl = [System.IO.FileSystemAclExtensions]::GetAccessControl($preexistingOutputRoot)
+    $normalizedModifyRights = [System.Security.AccessControl.FileSystemRights]::Modify -bor
+        [System.Security.AccessControl.FileSystemRights]::Synchronize
+    $inheritedModify = @($preexistingAcl.GetAccessRules(
+        $true,
+        $true,
+        [System.Security.Principal.SecurityIdentifier]) | Where-Object {
+            $_.IsInherited -and $_.IdentityReference.Value -ceq $currentSid.Value -and
+            $_.FileSystemRights -eq $normalizedModifyRights
+        })
+    Assert-True -Condition ($inheritedModify.Count -ge 1) `
+        -Message 'ACL regression fixture has inherited current-user Modify ACE'
+
     $success = Invoke-ContractRunner -Repository $repository
     if ($success.ExitCode -ne 0) {
         throw "stubbed Public Load failed: stdout=$($success.Stdout.Trim()) stderr=$($success.Stderr.Trim())"
@@ -503,6 +622,12 @@ exit 0
         -Message 'attempt id is a 256-bit lower-hex nonce'
     Assert-True -Condition ([System.IO.Path]::IsPathFullyQualified($published.attempt_dir)) `
         -Message 'attempt path is absolute'
+    Assert-ExactRunnerAcl -LiteralPath (Join-Path $repository 'output\perf') `
+        -Message 'runner output root ACL'
+    Assert-ExactRunnerAcl -LiteralPath (Join-Path $repository 'output\perf\attempts') `
+        -Message 'runner attempts root ACL'
+    Assert-ExactRunnerAcl -LiteralPath $published.attempt_dir `
+        -Message 'runner attempt ACL'
     foreach ($path in @($published.result_path, $published.report_path, $published.summary_path)) {
         Assert-True -Condition (Test-Path -LiteralPath $path -PathType Leaf) `
             -Message "published artifact exists: $path"

@@ -236,22 +236,53 @@ function Set-ProtectedAttemptAcl {
         $propagation = [System.Security.AccessControl.PropagationFlags]::None
         $rights = [System.Security.AccessControl.FileSystemRights]::FullControl
         $allow = [System.Security.AccessControl.AccessControlType]::Allow
-        $security = [System.Security.AccessControl.DirectorySecurity]::new()
-        $security.SetOwner($currentSid)
+        $directoryInfo = [System.IO.DirectoryInfo]::new($AttemptDirectory)
+        $security = [System.IO.FileSystemAclExtensions]::GetAccessControl($directoryInfo)
+        $existingOwner = $security.GetOwner(
+            [System.Security.Principal.SecurityIdentifier]).Value
+        if ($existingOwner -cne $currentSid.Value) {
+            Throw-RunnerFailure 'attempt-acl-owner-invalid'
+        }
         $security.SetAccessRuleProtection($true, $false)
+        foreach ($existingRule in @($security.GetAccessRules(
+            $true,
+            $false,
+            [System.Security.Principal.SecurityIdentifier]))) {
+            [void]$security.RemoveAccessRuleSpecific($existingRule)
+        }
         [void]$security.AddAccessRule(
             [System.Security.AccessControl.FileSystemAccessRule]::new(
                 $currentSid, $rights, $inheritance, $propagation, $allow))
         [void]$security.AddAccessRule(
             [System.Security.AccessControl.FileSystemAccessRule]::new(
                 $systemSid, $rights, $inheritance, $propagation, $allow))
-        $directoryInfo = [System.IO.DirectoryInfo]::new($AttemptDirectory)
         [System.IO.FileSystemAclExtensions]::SetAccessControl($directoryInfo, $security)
         $readback = [System.IO.FileSystemAclExtensions]::GetAccessControl($directoryInfo)
         $readbackOwner = $readback.GetOwner([System.Security.Principal.SecurityIdentifier]).Value
         if ($readbackOwner -cne $currentSid.Value -or -not $readback.AreAccessRulesProtected) {
             Throw-RunnerFailure 'attempt-acl-readback-failed'
         }
+        $readbackRules = @($readback.GetAccessRules(
+            $true,
+            $true,
+            [System.Security.Principal.SecurityIdentifier]))
+        if ($readbackRules.Count -ne 2) {
+            Throw-RunnerFailure 'attempt-acl-readback-failed'
+        }
+        $expectedSids = @($currentSid.Value, $systemSid.Value)
+        $seenSids = [System.Collections.Generic.HashSet[string]]::new(
+            [System.StringComparer]::Ordinal)
+        foreach ($rule in $readbackRules) {
+            $ruleSid = $rule.IdentityReference.Value
+            if ($expectedSids -cnotcontains $ruleSid -or
+                -not $seenSids.Add($ruleSid) -or $rule.IsInherited -or
+                $rule.AccessControlType -ne $allow -or $rule.FileSystemRights -ne $rights -or
+                $rule.InheritanceFlags -ne $inheritance -or
+                $rule.PropagationFlags -ne $propagation) {
+                Throw-RunnerFailure 'attempt-acl-readback-failed'
+            }
+        }
+        if ($seenSids.Count -ne 2) { Throw-RunnerFailure 'attempt-acl-readback-failed' }
     }
     catch {
         if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
