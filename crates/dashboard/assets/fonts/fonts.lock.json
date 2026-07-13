@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "reviewed_on": "2026-07-13",
+  "runtime_downloads": false,
+  "build_downloads": false,
+  "assets": [
+    {
+      "file": "FiraSans-Light.woff2",
+      "family": "Fira Sans",
+      "version": "4.301",
+      "format": "woff2",
+      "style": "normal",
+      "served_weight": 300,
+      "variable": false,
+      "bytes": 155788,
+      "sha256": "2315d21be4c62def3fa08de87f29c327187affcd7759a46596d5bacfeb2ff221",
+      "upstream_repository": "https://github.com/bBoxType/FiraSans",
+      "upstream_commit": "f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e",
+      "source_path": "Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Light.woff2",
+      "source_url": "https://raw.githubusercontent.com/bBoxType/FiraSans/f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e/Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Light.woff2",
+      "license_file": "OFL-FiraSans.txt"
+    },
+    {
+      "file": "FiraSans-Regular.woff2",
+      "family": "Fira Sans",
+      "version": "4.301",
+      "format": "woff2",
+      "style": "normal",
+      "served_weight": 400,
+      "variable": false,
+      "bytes": 155928,
+      "sha256": "51000d3cc8a601427bdb88625275e0eefc00570f4f2ab7a926fa336abee7098f",
+      "upstream_repository": "https://github.com/bBoxType/FiraSans",
+      "upstream_commit": "f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e",
+      "source_path": "Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Regular.woff2",
+      "source_url": "https://raw.githubusercontent.com/bBoxType/FiraSans/f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e/Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Regular.woff2",
+      "license_file": "OFL-FiraSans.txt"
+    },
+    {
+      "file": "FiraSans-Medium.woff2",
+      "family": "Fira Sans",
+      "version": "4.301",
+      "format": "woff2",
+      "style": "normal",
+      "served_weight": 500,
+      "variable": false,
+      "bytes": 159500,
+      "sha256": "14d421d4fb35d56b40e958cc9b64eb1528d1822bb75251623955c873a9a175d3",
+      "upstream_repository": "https://github.com/bBoxType/FiraSans",
+      "upstream_commit": "f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e",
+      "source_path": "Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Medium.woff2",
+      "source_url": "https://raw.githubusercontent.com/bBoxType/FiraSans/f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e/Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Medium.woff2",
+      "license_file": "OFL-FiraSans.txt"
+    },
+    {
+      "file": "FiraSans-SemiBold.woff2",
+      "family": "Fira Sans",
+      "version": "4.301",
+      "format": "woff2",
+      "style": "normal",
+      "served_weight": 600,
+      "variable": false,
+      "bytes": 166908,
+      "sha256": "01ca0c4a1f02dd4324721cf8766bcbb2edca4dee0fb8884a66e58e231ed62d55",
+      "upstream_repository": "https://github.com/bBoxType/FiraSans",
+      "upstream_commit": "f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e",
+      "source_path": "Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-SemiBold.woff2",
+      "source_url": "https://raw.githubusercontent.com/bBoxType/FiraSans/f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e/Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-SemiBold.woff2",
+      "license_file": "OFL-FiraSans.txt"
+    },
+    {
+      "file": "FiraSans-Bold.woff2",
+      "family": "Fira Sans",
+      "version": "4.301",
+      "format": "woff2",
+      "style": "normal",
+      "served_weight": 700,
+      "variable": false,
+      "bytes": 167008,
+      "sha256": "7dff4e2351ca54fae96180e79ab1d1fdeb74ebb6e6cba53a7d9d7b4941600ada",
+      "upstream_repository": "https://github.com/bBoxType/FiraSans",
+      "upstream_commit": "f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e",
+      "source_path": "Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Bold.woff2",
+      "source_url": "https://raw.githubusercontent.com/bBoxType/FiraSans/f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e/Fira_Sans_4_3/Fonts/Fira_Sans_WEB_4301/Normal/Roman/FiraSans-Bold.woff2",
+      "license_file": "OFL-FiraSans.txt"
+    },
+    {
+      "file": "FiraCode-Variable.woff2",
+      "family": "Fira Code",
+      "version": "6.002",
+      "format": "woff2",
+      "style": "normal",
+      "variable": true,
+      "weight_axis": {
+        "min": 300,
+        "default": 300,
+        "max": 700
+      },
+      "served_weight_range": {
+        "min": 500,
+        "max": 700
+      },
+      "bytes": 113088,
+      "sha256": "408e876a202f15ea6ee307a70a65cf40ceb222c589a0b17e0a3a371db96dd49f",
+      "upstream_repository": "https://github.com/tonsky/FiraCode",
+      "upstream_commit": "eee6db993696aba61ff4eef03698e2987d79910c",
+      "release_tag": "6.2",
+      "release_archive": "Fira_Code_v6.2.zip",
+      "release_archive_bytes": 2462987,
+      "release_archive_sha256": "0949915ba8eb24d89fd93d10a7ff623f42830d7c5ffc3ecbf960e4ecad3e3e79",
+      "source_path": "woff2/FiraCode-VF.woff2",
+      "source_url": "https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip",
+      "license_file": "OFL-FiraCode.txt"
+    }
+  ],
+  "licenses": [
+    {
+      "file": "OFL-FiraSans.txt",
+      "spdx": "OFL-1.1",
+      "bytes": 4420,
+      "sha256": "0f00200159149239638e56183cd73f345b202af97c4486787df148d656e52fd2",
+      "source_bytes": 4512,
+      "source_sha256": "5c29650250730778eccb5475b112d32a8e0c9dd1860d9509693329652bf8e9eb",
+      "normalization": "LF line endings and trailing ASCII whitespace removed",
+      "upstream_repository": "https://github.com/bBoxType/FiraSans",
+      "upstream_commit": "f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e",
+      "source_path": "OFL.txt",
+      "source_url": "https://raw.githubusercontent.com/bBoxType/FiraSans/f54eeb3124c63fe9b5bcd36d09d1cd46788cd15e/OFL.txt"
+    },
+    {
+      "file": "OFL-FiraCode.txt",
+      "spdx": "OFL-1.1",
+      "bytes": 4389,
+      "sha256": "1d41e10031ab125302780a05ec4c91d218e47db0c7e37cf315cce5e608cdc25c",
+      "upstream_repository": "https://github.com/tonsky/FiraCode",
+      "upstream_commit": "eee6db993696aba61ff4eef03698e2987d79910c",
+      "source_path": "LICENSE",
+      "source_url": "https://raw.githubusercontent.com/tonsky/FiraCode/eee6db993696aba61ff4eef03698e2987d79910c/LICENSE"
+    }
+  ],
+  "fallback_metrics": {
+    "measurement_tool": "fontTools 4.59.0",
+    "formula": "size-adjust matches x-height; line metrics are divided by size-adjust because CSS resolves overrides against effective adjusted size",
+    "fira_sans": {
+      "measured_from": "Fira Sans 4.301 OS/2 sxHeight and sTypo metrics against Windows Segoe UI 5.65",
+      "primary_ascent": "93.5000%",
+      "primary_descent": "26.5000%",
+      "primary_line_gap": "0.0000%",
+      "faces": [
+        { "weight": 300, "local_family": "Segoe UI Light", "local_source_weight": 300, "size_adjust": "104.6000%", "ascent_override": "89.3881%", "descent_override": "25.3346%", "line_gap_override": "0.0000%" },
+        { "weight": 400, "local_family": "Segoe UI", "local_source_weight": 400, "size_adjust": "105.4000%", "ascent_override": "88.7097%", "descent_override": "25.1423%", "line_gap_override": "0.0000%" },
+        { "weight": 500, "local_family": "Segoe UI Semibold", "local_source_weight": 600, "size_adjust": "105.8000%", "ascent_override": "88.3743%", "descent_override": "25.0473%", "line_gap_override": "0.0000%" },
+        { "weight": 600, "local_family": "Segoe UI Semibold", "local_source_weight": 600, "size_adjust": "106.0000%", "ascent_override": "88.2075%", "descent_override": "25.0000%", "line_gap_override": "0.0000%" },
+        { "weight": 700, "local_family": "Segoe UI Bold", "local_source_weight": 700, "size_adjust": "106.2000%", "ascent_override": "88.0414%", "descent_override": "24.9529%", "line_gap_override": "0.0000%" }
+      ]
+    },
+    "fira_code": {
+      "measured_from": "Fira Code 6.002 OS/2 sxHeight and sTypo metrics against Windows Consolas 7.00",
+      "primary_ascent": "92.3077%",
+      "primary_descent": "30.7692%",
+      "primary_line_gap": "0.0000%",
+      "faces": [
+        { "weight": 500, "local_family": "Consolas", "local_source_weight": 400, "size_adjust": "109.8376%", "ascent_override": "84.0402%", "descent_override": "28.0134%", "line_gap_override": "0.0000%" },
+        { "weight": 600, "local_family": "Consolas Bold", "local_source_weight": 700, "size_adjust": "108.5403%", "ascent_override": "85.0446%", "descent_override": "28.3482%", "line_gap_override": "0.0000%" },
+        { "weight": 700, "local_family": "Consolas Bold", "local_source_weight": 700, "size_adjust": "108.5403%", "ascent_override": "85.0446%", "descent_override": "28.3482%", "line_gap_override": "0.0000%" }
+      ]
+    }
+  }
+}

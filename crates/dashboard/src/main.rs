@@ -2,14 +2,15 @@ use std::{
     collections::{HashMap, HashSet},
     env,
     net::SocketAddr,
-    sync::Arc,
+    sync::{Arc, OnceLock},
     time::Instant,
 };
 
 use axum::{
     Json, Router,
+    body::Body,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, StatusCode, Uri},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch, post},
@@ -43,11 +44,91 @@ use serde_json::Value;
 use tokio::sync::RwLock;
 use tracing::{info, warn};
 use url::Url;
+
+include!(concat!(env!("OUT_DIR"), "/font_assets.rs"));
+
 const SESSION_COOKIE_NAME: &str = "dynamo_dashboard_session";
 const SESSION_TTL_HOURS: i64 = 24 * 14;
 const OAUTH_STATE_TTL_MINUTES: i64 = 15;
 const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 const DEFAULT_INVITE_PERMISSIONS: u64 = 2_146_958_847;
+const FONT_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+
+fn font_asset_router<S>() -> Router<S>
+where
+    S: Clone + Send + Sync + 'static,
+{
+    Router::new()
+        .route(FIRA_SANS_LIGHT_PATH, get(fira_sans_light_font))
+        .route(FIRA_SANS_REGULAR_PATH, get(fira_sans_regular_font))
+        .route(FIRA_SANS_MEDIUM_PATH, get(fira_sans_medium_font))
+        .route(FIRA_SANS_SEMIBOLD_PATH, get(fira_sans_semibold_font))
+        .route(FIRA_SANS_BOLD_PATH, get(fira_sans_bold_font))
+        .route(FIRA_CODE_VARIABLE_PATH, get(fira_code_variable_font))
+}
+
+fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
+    headers
+        .get(header::IF_NONE_MATCH)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|candidate| {
+                let candidate = candidate.trim();
+                candidate == "*" || candidate == etag || candidate.strip_prefix("W/") == Some(etag)
+            })
+        })
+}
+
+fn font_asset_response(
+    request_headers: &HeaderMap,
+    bytes: &'static [u8],
+    etag: &'static str,
+) -> Response {
+    let not_modified = if_none_match_matches(request_headers, etag);
+    let mut response = if not_modified {
+        let mut response = Response::new(Body::empty());
+        *response.status_mut() = StatusCode::NOT_MODIFIED;
+        response
+    } else {
+        Response::new(Body::from(bytes))
+    };
+    let headers = response.headers_mut();
+    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("font/woff2"));
+    headers.insert(
+        header::CACHE_CONTROL,
+        HeaderValue::from_static(FONT_CACHE_CONTROL),
+    );
+    headers.insert(header::ETAG, HeaderValue::from_static(etag));
+    headers.insert(
+        header::X_CONTENT_TYPE_OPTIONS,
+        HeaderValue::from_static("nosniff"),
+    );
+    response
+}
+
+async fn fira_sans_light_font(headers: HeaderMap) -> Response {
+    font_asset_response(&headers, FIRA_SANS_LIGHT_BYTES, FIRA_SANS_LIGHT_ETAG)
+}
+
+async fn fira_sans_regular_font(headers: HeaderMap) -> Response {
+    font_asset_response(&headers, FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG)
+}
+
+async fn fira_sans_medium_font(headers: HeaderMap) -> Response {
+    font_asset_response(&headers, FIRA_SANS_MEDIUM_BYTES, FIRA_SANS_MEDIUM_ETAG)
+}
+
+async fn fira_sans_semibold_font(headers: HeaderMap) -> Response {
+    font_asset_response(&headers, FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG)
+}
+
+async fn fira_sans_bold_font(headers: HeaderMap) -> Response {
+    font_asset_response(&headers, FIRA_SANS_BOLD_BYTES, FIRA_SANS_BOLD_ETAG)
+}
+
+async fn fira_code_variable_font(headers: HeaderMap) -> Response {
+    font_asset_response(&headers, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG)
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -123,6 +204,7 @@ async fn main() -> anyhow::Result<()> {
             "/api/guild-command-sync/{guild_id}",
             post(post_guild_command_sync),
         )
+        .merge(font_asset_router())
         .with_state(state.clone())
         .layer(middleware::from_fn(log_request));
 
@@ -1800,8 +1882,20 @@ fn render_session_summary(session: &DashboardSession) -> String {
 }
 
 fn dashboard_styles() -> &'static str {
-    r#"
-@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@500;600;700&family=Fira+Sans:wght@300;400;500;600;700&display=swap');
+    static STYLES: OnceLock<String> = OnceLock::new();
+    STYLES
+        .get_or_init(|| {
+            let mut styles =
+                String::with_capacity(FONT_FACE_CSS.len() + DASHBOARD_BASE_STYLES.len());
+            styles.push_str(FONT_FACE_CSS);
+            styles.push('\n');
+            styles.push_str(DASHBOARD_BASE_STYLES);
+            styles
+        })
+        .as_str()
+}
+
+const DASHBOARD_BASE_STYLES: &str = r#"
 :root {
   --bg: #0c0f17;
   --sidebar: #0b0e15;
@@ -1818,7 +1912,7 @@ fn dashboard_styles() -> &'static str {
   --shadow: 0 18px 48px rgba(0, 0, 0, 0.28);
 }
 * { box-sizing: border-box; }
-html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: 'Fira Sans', sans-serif; }
+html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text); font-family: 'Fira Sans', 'Fira Sans Fallback', sans-serif; font-synthesis: none; }
 body { position: relative; }
 .backdrop {
   position: fixed; inset: 0;
@@ -1844,12 +1938,12 @@ body { position: relative; }
 .sidebar-brand, .session-summary, .guild-card-head { display: flex; align-items: center; gap: 14px; }
 .app-avatar, .user-avatar, .guild-avatar, .app-avatar-fallback, .user-avatar-fallback, .guild-avatar-fallback {
   width: 56px; height: 56px; border-radius: 18px; object-fit: cover; flex: none;
-  display: grid; place-items: center; font-family: 'Fira Code', monospace; font-weight: 700;
+  display: grid; place-items: center; font-family: 'Fira Code', 'Fira Code Fallback', monospace; font-weight: 700;
   background: linear-gradient(135deg, rgba(221, 46, 83, 0.22), rgba(61, 84, 143, 0.18));
   border: 1px solid rgba(255,255,255,0.06);
 }
-.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-family: 'Fira Code', monospace; }
-h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
+.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-family: 'Fira Code', 'Fira Code Fallback', monospace; }
+h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', monospace; }
 .sidebar-nav { display: grid; gap: 8px; }
 .nav-link {
   color: var(--muted); text-decoration: none; padding: 13px 14px; border-radius: 14px;
@@ -1885,7 +1979,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', monospace; }
 .guild-card p, .panel p { color: var(--muted); line-height: 1.6; }
 .pill {
   display: inline-flex; align-items: center; padding: 6px 10px; border-radius: 999px;
-  font-size: 12px; font-family: 'Fira Code', monospace; border: 1px solid rgba(255,255,255,0.08);
+  font-size: 12px; font-family: 'Fira Code', 'Fira Code Fallback', monospace; border: 1px solid rgba(255,255,255,0.08);
 }
 .pill-success { color: #bbf7d0; background: rgba(72, 229, 178, 0.14); }
 .pill-warn { color: #fdba74; background: rgba(249, 115, 22, 0.12); }
@@ -2055,8 +2149,7 @@ a { color: #ff6b87; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
-"#
-}
+"#;
 
 fn dashboard_ui_script() -> &'static str {
     r#"
@@ -4212,17 +4305,162 @@ async function requestGuildCommandSync(guildId) {
 #[cfg(test)]
 mod tests {
     use super::{
-        DashboardGuild, audit_action_label, audit_entity_label, escape_html,
-        render_audit_logs_section, render_dashboard_page_shell, render_field,
-        render_settings_modal, request_id_for_logging, request_path_for_logging,
-        request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
+        DashboardGuild, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG, FIRA_CODE_VARIABLE_PATH,
+        FIRA_CODE_VARIABLE_SHA256, FIRA_SANS_BOLD_BYTES, FIRA_SANS_BOLD_ETAG, FIRA_SANS_BOLD_PATH,
+        FIRA_SANS_BOLD_SHA256, FIRA_SANS_LIGHT_BYTES, FIRA_SANS_LIGHT_ETAG, FIRA_SANS_LIGHT_PATH,
+        FIRA_SANS_LIGHT_SHA256, FIRA_SANS_MEDIUM_BYTES, FIRA_SANS_MEDIUM_ETAG,
+        FIRA_SANS_MEDIUM_PATH, FIRA_SANS_MEDIUM_SHA256, FIRA_SANS_REGULAR_BYTES,
+        FIRA_SANS_REGULAR_ETAG, FIRA_SANS_REGULAR_PATH, FIRA_SANS_REGULAR_SHA256,
+        FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG, FIRA_SANS_SEMIBOLD_PATH,
+        FIRA_SANS_SEMIBOLD_SHA256, FONT_CACHE_CONTROL, audit_action_label, audit_entity_label,
+        dashboard_styles, escape_html, font_asset_router, render_audit_logs_section,
+        render_dashboard_page_shell, render_field, render_settings_modal, request_id_for_logging,
+        request_path_for_logging, request_path_should_be_logged, sanitize_redirect_target,
+        user_can_manage_guild,
     };
-    use axum::http::{HeaderMap, HeaderValue, Uri};
+    use axum::{
+        body::{Body, to_bytes},
+        http::{HeaderMap, HeaderValue, Request, StatusCode, Uri, header},
+    };
     use dynamo_module_kit::{SettingsField, SettingsFieldKind};
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
         DashboardAuditLogPage, DashboardAuditScope,
     };
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn font_routes_serve_locked_bytes_and_cache_headers() {
+        let assets: [(&str, &[u8], &str, &str); 6] = [
+            (
+                FIRA_SANS_LIGHT_PATH,
+                FIRA_SANS_LIGHT_BYTES,
+                FIRA_SANS_LIGHT_SHA256,
+                FIRA_SANS_LIGHT_ETAG,
+            ),
+            (
+                FIRA_SANS_REGULAR_PATH,
+                FIRA_SANS_REGULAR_BYTES,
+                FIRA_SANS_REGULAR_SHA256,
+                FIRA_SANS_REGULAR_ETAG,
+            ),
+            (
+                FIRA_SANS_MEDIUM_PATH,
+                FIRA_SANS_MEDIUM_BYTES,
+                FIRA_SANS_MEDIUM_SHA256,
+                FIRA_SANS_MEDIUM_ETAG,
+            ),
+            (
+                FIRA_SANS_SEMIBOLD_PATH,
+                FIRA_SANS_SEMIBOLD_BYTES,
+                FIRA_SANS_SEMIBOLD_SHA256,
+                FIRA_SANS_SEMIBOLD_ETAG,
+            ),
+            (
+                FIRA_SANS_BOLD_PATH,
+                FIRA_SANS_BOLD_BYTES,
+                FIRA_SANS_BOLD_SHA256,
+                FIRA_SANS_BOLD_ETAG,
+            ),
+            (
+                FIRA_CODE_VARIABLE_PATH,
+                FIRA_CODE_VARIABLE_BYTES,
+                FIRA_CODE_VARIABLE_SHA256,
+                FIRA_CODE_VARIABLE_ETAG,
+            ),
+        ];
+
+        for (path, expected_bytes, expected_sha256, expected_etag) in assets {
+            let hash_in_path = path
+                .strip_suffix(".woff2")
+                .and_then(|value| value.rsplit_once('-'))
+                .map(|(_, hash)| hash)
+                .expect("content-addressed WOFF2 path");
+            assert_eq!(hash_in_path, expected_sha256);
+            assert_eq!(hash_in_path.len(), 64);
+            assert!(
+                hash_in_path
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+            );
+            assert_eq!(expected_etag, format!("\"{expected_sha256}\""));
+
+            let response = font_asset_router::<()>()
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("font request"),
+                )
+                .await
+                .expect("font route response");
+
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()[header::CONTENT_TYPE], "font/woff2");
+            assert_eq!(
+                response.headers()[header::CACHE_CONTROL],
+                FONT_CACHE_CONTROL
+            );
+            assert_eq!(response.headers()[header::ETAG], expected_etag);
+            assert_eq!(
+                response.headers()[header::X_CONTENT_TYPE_OPTIONS],
+                "nosniff"
+            );
+            let body = to_bytes(response.into_body(), expected_bytes.len())
+                .await
+                .expect("font response body");
+            assert_eq!(body.as_ref(), expected_bytes);
+        }
+    }
+
+    #[tokio::test]
+    async fn font_routes_honor_weak_if_none_match() {
+        let response = font_asset_router::<()>()
+            .oneshot(
+                Request::builder()
+                    .uri(FIRA_SANS_REGULAR_PATH)
+                    .header(header::IF_NONE_MATCH, format!("W/{FIRA_SANS_REGULAR_ETAG}"))
+                    .body(Body::empty())
+                    .expect("conditional font request"),
+            )
+            .await
+            .expect("conditional font route response");
+
+        assert_eq!(response.status(), StatusCode::NOT_MODIFIED);
+        assert_eq!(response.headers()[header::ETAG], FIRA_SANS_REGULAR_ETAG);
+        assert_eq!(
+            response.headers()[header::CACHE_CONTROL],
+            FONT_CACHE_CONTROL
+        );
+        assert!(
+            to_bytes(response.into_body(), 1)
+                .await
+                .expect("not-modified body")
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn dashboard_css_uses_only_same_origin_locked_font_faces() {
+        let styles = dashboard_styles();
+        assert!(!styles.contains(concat!("fonts.", "googleapis.com")));
+        assert!(!styles.contains(concat!("fonts.", "gstatic.com")));
+        assert!(!styles.contains("@import"));
+        assert!(styles.contains("font-display: swap"));
+        assert!(styles.contains("font-synthesis: none"));
+        assert!(styles.contains("'Fira Sans Fallback'"));
+        assert!(styles.contains("'Fira Code Fallback'"));
+        for path in [
+            FIRA_SANS_LIGHT_PATH,
+            FIRA_SANS_REGULAR_PATH,
+            FIRA_SANS_MEDIUM_PATH,
+            FIRA_SANS_SEMIBOLD_PATH,
+            FIRA_SANS_BOLD_PATH,
+            FIRA_CODE_VARIABLE_PATH,
+        ] {
+            assert!(styles.contains(path), "missing font URL {path}");
+        }
+    }
 
     #[test]
     fn escapes_html_characters() {
