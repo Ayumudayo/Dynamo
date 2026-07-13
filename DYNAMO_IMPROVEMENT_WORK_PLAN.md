@@ -33,14 +33,22 @@
 | --- | --- | --- |
 | 상위 보안·성능·UI 계획 | 작성 완료 | 개선 대상과 장기 의존성은 정리되어 있음 |
 | 실행 통제 부트스트랩 | 완료 | 커밋 714a17b, 제품 동작 변경 없음 |
-| 보안 제품 개선 | 미착수 | 실제 취약 경로는 그대로 존재 |
-| 성능 제품 개선 | 미착수 | 설정 반복 조회, 무제한 작업, 전체 문서 교체 등이 그대로 존재 |
-| 대시보드 UI 개선 | 미착수 | 상태 오표시, false success, 모바일·접근성 문제가 그대로 존재 |
-| 전체 제품 개선 진척도 | 0% | W1-01 보안 바닥과 W0-00 deterministic font를 제품 작업으로 즉시 병렬 시작 |
+| 보안 제품 개선 | W1-01 완료 | moderation hierarchy와 secret file 안전 바닥은 적용, 나머지 권한·effect 작업은 미완료 |
+| 성능 제품 개선 | W0-01 진행 중 | strict Clippy 기준은 복구했고 재현 가능한 측정·Mongo 격리 도구를 구현 중 |
+| 대시보드 UI 개선 | W0-00 완료 | 외부 폰트 요청은 제거, 상태 오표시·false success·모바일·접근성 개선은 미완료 |
+| 전체 제품 개선 진척도 | 3/36 완료, 약 8% | W0-00, W0-02, W1-01 완료; W0-01 착수 |
 
 714a17b의 PowerShell 파일은 계획 실행을 보호하는 선행 통제일 뿐, 이 계획의 제품 개선 실적으로 계산하지 않는다.
 
 기존 제어-plane은 현 상태로 동결한다. 외부 evidence root, publisher, integration ref 초기화는 제품 작업의 선행조건이 아니며, 별도 승인이 없는 한 추가 구현·보강하지 않는다.
+
+### 2.1 실행 현황 — 2026-07-13
+
+- 99dff55: W0-02 TossInvest strict Clippy blocker 복구.
+- 0f6be8d: W1-01 moderation hierarchy와 원자적 owner-only `.env` 계약 적용.
+- 609d3c9: W0-00 deterministic Fira 자가 호스팅, content-addressed route, ETag/304 적용.
+- 36fef09: locked workspace check/test와 strict Clippy를 CI 필수 게이트로 승격.
+- W0-01: retained baseline을 발행하기 전에 dependency-free load/budget kernel과 isolated Mongo runner/cleanup contract를 구현 중.
 
 ## 3. 개선 목표와 완료 정의
 
@@ -229,9 +237,14 @@
 
 대상:
 
-- crates/dashboard/assets/fonts/FiraSans-Variable.woff2
+- crates/dashboard/assets/fonts/FiraSans-Light.woff2
+- crates/dashboard/assets/fonts/FiraSans-Regular.woff2
+- crates/dashboard/assets/fonts/FiraSans-Medium.woff2
+- crates/dashboard/assets/fonts/FiraSans-SemiBold.woff2
+- crates/dashboard/assets/fonts/FiraSans-Bold.woff2
 - crates/dashboard/assets/fonts/FiraCode-Variable.woff2
-- crates/dashboard/assets/fonts/OFL.txt
+- crates/dashboard/assets/fonts/OFL-FiraSans.txt
+- crates/dashboard/assets/fonts/OFL-FiraCode.txt
 - crates/dashboard/assets/fonts/fonts.lock.json
 - crates/dashboard/build.rs
 - crates/dashboard/Cargo.toml
@@ -244,11 +257,19 @@
 - build.rs가 font의 SHA-256 content path를 생성한다.
 - same-origin font/woff2 route에 정확한 content type, immutable cache, ETag를 적용한다.
 
+구현 결정:
+
+- 공식 Fira Sans 4.301 배포에는 요구 weight를 제공하는 variable WOFF2가 없으므로, upstream commit에 고정된 정적 300/400/500/600/700 WOFF2 다섯 개를 사용한다.
+- Fira Code는 공식 6.2 release의 variable WOFF2를 사용한다.
+- license의 저장소 byte normalization은 lock에 upstream SHA-256과 함께 명시한다.
+
 완료 기준:
 
 - 외부 font 요청 0.
 - license, lock, family/weight, route, header, asset body hash 일치.
 - timing과 CLS는 이 작업에서 판정하지 않고 W0-01의 고정 harness에서 baseline으로 기록한다.
+
+실행 기록: 609d3c9에서 완료. asset contract, 전체 dashboard 20 tests, strict Clippy, 외부 font URL 0건을 확인했다.
 
 ### W0-01. 재현 가능한 성능·브라우저·UX 기준선
 
@@ -317,6 +338,8 @@ UX baseline protocol:
 - workspace strict Clippy 통과.
 - 이 작업 전 strict Clippy는 known RED로 기록하고, 완료 뒤부터 공통 필수 GREEN으로 사용한다.
 
+실행 기록: 99dff55에서 완료하고 36fef09에서 CI 필수 GREEN으로 고정했다.
+
 ## Phase 1. 빠른 위험 감소와 안전한 UI 기반
 
 공수 합계: 7~11 엔지니어일
@@ -344,6 +367,8 @@ UX baseline protocol:
 - 모든 denial에서 WarningRepository::clear_for_member 호출 0, 승인 경로는 정확히 1회.
 - .env owner/mode/readback 정확.
 - 기존 insecure 일반 cp 경로 제거.
+
+실행 기록: 0f6be8d에서 완료. moderation 8 tests와 strict Clippy, secure-env 경쟁·실패·원격 추출 fixture, Bash/PowerShell bundle contract를 통과했다.
 
 ### W1-02. 유한 HTTP client와 Discord directory
 
@@ -1441,10 +1466,10 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 
 | ID | 작업 | 우선순위 | 상태 | 선행조건 | 예상 |
 | --- | --- | --- | --- | --- | --- |
-| W0-00 | self-hosted deterministic Fira | P1 | 미착수 | 없음 | 1일 |
-| W0-01 | 성능·Mongo·브라우저·UX 기준선 | P0 | 미착수 | W0-00 | 4~6일 |
-| W0-02 | strict Clippy blocker | P1 | 미착수 | 없음 | 0.5일 |
-| W1-01 | moderation/env tactical floor | P0 | 미착수 | 없음, focused RED부터 | 1~2일 |
+| W0-00 | self-hosted deterministic Fira | P1 | 완료 (609d3c9) | 없음 | 1일 |
+| W0-01 | 성능·Mongo·브라우저·UX 기준선 | P0 | 진행 중 | W0-00 완료 | 4~6일 |
+| W0-02 | strict Clippy blocker | P1 | 완료 (99dff55) | 없음 | 0.5일 |
+| W1-01 | moderation/env tactical floor | P0 | 완료 (0f6be8d) | 없음, focused RED부터 | 1~2일 |
 | W1-02 | finite HTTP/Discord directory | P1 | 미착수 | W0-01 | 2~3일 |
 | W1-03 | write-free settings read | P1 | 미착수 | W0-01 | 1일 |
 | W1-04 | hashed CSS/JS + read-only smoke | P1 | 미착수 | W0-01 | 1~2일 |
