@@ -10,9 +10,9 @@
   "scripts": {
     "perf:test": "node --test tests/perf/dashboard-load.test.cjs",
     "perf:dashboard": "node scripts/perf/dashboard-load.cjs",
-    "dashboard:smoke:auth": "playwright codegen --save-storage=output/playwright/dashboard-auth.json http://127.0.0.1:3000/login",
-    "dashboard:smoke": "playwright test -c playwright.dashboard.config.cjs tests/playwright/dashboard-guild-smoke.spec.cjs",
-    "dashboard:smoke:headed": "playwright test --headed -c playwright.dashboard.config.cjs tests/playwright/dashboard-guild-smoke.spec.cjs",
+    "dashboard:smoke:auth": "node scripts/perf/refuse-unsafe-dashboard-smoke.cjs",
+    "dashboard:smoke": "node scripts/perf/refuse-unsafe-dashboard-smoke.cjs",
+    "dashboard:smoke:headed": "node scripts/perf/refuse-unsafe-dashboard-smoke.cjs",
     "dashboard:smoke:install": "playwright install chromium"
   },
   "devDependencies": {
