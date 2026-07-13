@@ -1,0 +1,43 @@
+{
+  "schema_version": 1,
+  "suite_id": "dashboard-readonly-v1",
+  "specs": [
+    "tests/playwright/dashboard-isolated-readonly.spec.cjs"
+  ],
+  "projects": [
+    {
+      "name": "desktop",
+      "viewport": {
+        "width": 1440,
+        "height": 1100
+      }
+    },
+    {
+      "name": "tablet",
+      "viewport": {
+        "width": 1024,
+        "height": 900
+      }
+    },
+    {
+      "name": "small-tablet",
+      "viewport": {
+        "width": 768,
+        "height": 1024
+      }
+    },
+    {
+      "name": "mobile-sanity",
+      "viewport": {
+        "width": 375,
+        "height": 812
+      }
+    }
+  ],
+  "test_ids": [
+    "public-responsive-reduced-motion",
+    "guild-readonly-dialog",
+    "same-origin-font-proof"
+  ],
+  "expected_count": 12
+}
