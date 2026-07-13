@@ -739,8 +739,22 @@ function Wait-RunnerJob {
         Throw-RunnerFailure $FailureCode
     }
     if ($AllowedExitCodes -notcontains [int64]$wait.ExitCode) { Throw-RunnerFailure $FailureCode }
-    $evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
-    if ($evidence.ActiveProcessCount -ne 0) { Throw-RunnerFailure 'child-descendants-survived'
+    $drainTimeoutMilliseconds = 5000
+    $drainClock = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
+        if ($evidence.ProcessId -ne $Handle.Job.ProcessId -or
+            $evidence.CreationFileTimeUtc -ne $Handle.Job.CreationFileTimeUtc -or
+            -not $evidence.IsProcessInJob -or $evidence.TotalProcessCount -lt 1) {
+            Throw-RunnerFailure 'job-evidence-invalid'
+        }
+        if ($evidence.ActiveProcessCount -eq 0 -and
+            @($evidence.ActiveProcessIds).Count -eq 0) {
+            break
+        }
+        $remaining = $drainTimeoutMilliseconds - $drainClock.ElapsedMilliseconds
+        if ($remaining -le 0) { Throw-RunnerFailure 'child-descendants-survived' }
+        Start-Sleep -Milliseconds ([int][Math]::Min(25, [Math]::Ceiling($remaining)))
     }
     return [pscustomobject]@{
         ExitCode = [int64]$wait.ExitCode
@@ -1181,10 +1195,13 @@ try {
             -Arguments @('ls-files', '--error-unmatch', '--', '.dynamo-perf-contract-v1') `
             -FailureCode 'contract-marker-untracked')
         if ([string]::IsNullOrEmpty($contractScenario)) { $contractScenario = 'success' }
-        if (@(
+        $knownContractScenario = @(
             'success', 'wrong-ready-nonce', 'counters-drift', 'budget-fail',
             'ready-timeout', 'shutdown-fail', 'cleanup-junction'
-        ) -cnotcontains $contractScenario) {
+        ) -ccontains $contractScenario
+        $descendantContractScenario = $contractScenario -cmatch `
+            '^(short|long)-job-descendant-[0-9a-f]{32}$'
+        if (-not $knownContractScenario -and -not $descendantContractScenario) {
             Throw-RunnerFailure 'contract-scenario-invalid'
         }
     }

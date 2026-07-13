@@ -103,6 +103,49 @@ function Write-Utf8File {
     [System.IO.File]::WriteAllText($LiteralPath, $Value, $script:Utf8NoBom)
 }
 
+function Get-DescendantRecordPath {
+    param([Parameter(Mandatory)][string] $Scenario)
+    Assert-True -Condition ($Scenario -cmatch '^(short|long)-job-descendant-[0-9a-f]{32}$') `
+        -Message 'descendant scenario has a safe unique name'
+    return Join-Path ([System.IO.Path]::GetTempPath()) `
+        ("dynamo-isolated-dashboard-$Scenario.json")
+}
+
+function Read-DescendantRecord {
+    param([Parameter(Mandatory)][string] $LiteralPath)
+    Assert-True -Condition (Test-Path -LiteralPath $LiteralPath -PathType Leaf) `
+        -Message 'descendant identity record exists'
+    $record = [System.IO.File]::ReadAllText($LiteralPath, $script:Utf8NoBom) |
+        ConvertFrom-Json -Depth 8
+    Assert-ExactKeys -Value $record -Expected @(
+        'pid', 'creation_file_time_utc', 'delay_milliseconds'
+    ) -Message 'descendant identity record'
+    Assert-True -Condition ($record.pid -is [int64] -and $record.pid -gt 0) `
+        -Message 'descendant identity record has a PID'
+    Assert-True -Condition ($record.creation_file_time_utc -is [int64] -and
+        $record.creation_file_time_utc -gt 0) `
+        -Message 'descendant identity record has a creation time'
+    return $record
+}
+
+function Assert-RecordedProcessAbsent {
+    param(
+        [Parameter(Mandatory)][object] $Record,
+        [Parameter(Mandatory)][string] $Message
+    )
+    $matchingIdentityPresent = $false
+    try {
+        $candidate = [System.Diagnostics.Process]::GetProcessById([int]$Record.pid)
+        try {
+            $candidateCreation = [uint64]$candidate.StartTime.ToUniversalTime().ToFileTimeUtc()
+            $matchingIdentityPresent = $candidateCreation -eq [uint64]$Record.creation_file_time_utc
+        }
+        finally { $candidate.Dispose() }
+    }
+    catch [System.ArgumentException] { }
+    Assert-True -Condition (-not $matchingIdentityPresent) -Message $Message
+}
+
 function Invoke-GitChecked {
     param(
         [Parameter(Mandatory)][string] $GitPath,
@@ -238,6 +281,7 @@ foreach ($forbidden in @(
 foreach ($required in @(
     'Import-Module', 'Start-DynamoIsolatedProcess', 'Get-DynamoIsolatedProcessEvidence',
     'Wait-DynamoIsolatedProcess', 'Stop-DynamoIsolatedProcess',
+    'drainTimeoutMilliseconds', '[System.Diagnostics.Stopwatch]::StartNew', 'ActiveProcessIds',
     'DYNAMO_PERF_BUILD_REVISION', 'x-dynamo-perf-control',
     'provider_guild_lookups', 'repository_reads', 'denied_requests'
 )) {
@@ -299,12 +343,37 @@ function Write-NewJson([string] $Path, [object] $Value) {
     finally { $stream.Dispose() }
 }
 
+$scenario = $env:DYNAMO_PERF_CONTRACT_SCENARIO
 if ($Operation -eq 'Build') {
     if ($env:DYNAMO_PERF_BUILD_REVISION -cnotmatch '^[0-9a-f]{40}$') { exit 2 }
+    if ($scenario -cmatch '^(?<lifetime>short|long)-job-descendant-(?<id>[0-9a-f]{32})$') {
+        $delayMilliseconds = if ($Matches.lifetime -ceq 'short') { 750 } else { 30000 }
+        $descendantStart = [System.Diagnostics.ProcessStartInfo]::new()
+        $descendantStart.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        $descendantStart.UseShellExecute = $false
+        $descendantStart.CreateNoWindow = $true
+        foreach ($argument in @(
+            '-NoProfile', '-NonInteractive', '-Command',
+            "[System.Threading.Thread]::Sleep($delayMilliseconds)"
+        )) {
+            [void]$descendantStart.ArgumentList.Add($argument)
+        }
+        $descendant = [System.Diagnostics.Process]::new()
+        $descendant.StartInfo = $descendantStart
+        try {
+            if (-not $descendant.Start()) { exit 98 }
+            $recordPath = Join-Path $env:TEMP ("dynamo-isolated-dashboard-$scenario.json")
+            Write-NewJson -Path $recordPath -Value ([ordered]@{
+                pid = $descendant.Id
+                creation_file_time_utc = $descendant.StartTime.ToUniversalTime().ToFileTimeUtc()
+                delay_milliseconds = $delayMilliseconds
+            })
+        }
+        finally { $descendant.Dispose() }
+    }
     exit 0
 }
 
-$scenario = $env:DYNAMO_PERF_CONTRACT_SCENARIO
 if ($Operation -eq 'Load') {
     $handoff = [System.IO.File]::ReadAllText($env:PERF_INSTANCE_HANDOFF, $utf8) | ConvertFrom-Json -Depth 32
     $requests = [int]$env:PERF_REQUESTS
@@ -703,6 +772,99 @@ exit 0
         -Directory -Force).Count
     Assert-Equal -Actual $successAttemptCount -Expected 1 -Message 'one successful attempt retained'
 
+    $shortDescendantScenario = 'short-job-descendant-' + [Guid]::NewGuid().ToString('N')
+    $shortDescendantRecordPath = Get-DescendantRecordPath -Scenario $shortDescendantScenario
+    try {
+        $shortDescendantExecution = Invoke-ContractRunner -Repository $repository `
+            -Scenario $shortDescendantScenario
+        if ($shortDescendantExecution.ExitCode -ne 0) {
+            throw "short descendant run failed: stdout=$($shortDescendantExecution.Stdout.Trim()) stderr=$($shortDescendantExecution.Stderr.Trim())"
+        }
+        Assert-Equal -Actual $shortDescendantExecution.ExitCode -Expected 0 `
+            -Message 'short same-Job descendant drains naturally'
+        Assert-Equal -Actual $shortDescendantExecution.Stderr -Expected '' `
+            -Message 'short descendant success has empty stderr'
+        $shortDescendantPublished = $shortDescendantExecution.Stdout.Trim() |
+            ConvertFrom-Json -Depth 8
+        Assert-True -Condition (Test-Path -LiteralPath $shortDescendantPublished.attempt_dir `
+            -PathType Container) -Message 'short descendant success retains its attempt'
+        $shortDescendantSummary = [System.IO.File]::ReadAllText(
+            $shortDescendantPublished.summary_path, $script:Utf8NoBom) | ConvertFrom-Json -Depth 32
+        $shortBuildStarted = @($shortDescendantSummary.job_evidence | Where-Object {
+            $_.name -ceq 'build' -and $_.phase -ceq 'started'
+        })
+        $shortBuildExited = @($shortDescendantSummary.job_evidence | Where-Object {
+            $_.name -ceq 'build' -and $_.phase -ceq 'exited'
+        })
+        Assert-Equal -Actual $shortBuildStarted.Count -Expected 1 `
+            -Message 'short descendant summary has one build-started row'
+        Assert-Equal -Actual $shortBuildExited.Count -Expected 1 `
+            -Message 'short descendant summary has one build-exited row'
+        Assert-Equal -Actual $shortBuildExited[0].direct_pid -Expected $shortBuildStarted[0].direct_pid `
+            -Message 'short descendant drain preserves direct PID identity'
+        Assert-Equal -Actual $shortBuildExited[0].creation_file_time_utc `
+            -Expected $shortBuildStarted[0].creation_file_time_utc `
+            -Message 'short descendant drain preserves direct process birth identity'
+        Assert-Equal -Actual $shortBuildStarted[0].is_process_in_job -Expected $true `
+            -Message 'short descendant build starts in the isolated Job'
+        Assert-Equal -Actual $shortBuildExited[0].is_process_in_job -Expected $true `
+            -Message 'short descendant final evidence retains Job membership proof'
+        Assert-True -Condition ([int64]$shortBuildExited[0].total_processes -ge 2) `
+            -Message 'short descendant was observed in the same Job accounting'
+        Assert-Equal -Actual $shortBuildExited[0].active_processes -Expected 0 `
+            -Message 'short descendant final Job evidence is active-zero'
+        Assert-Equal -Actual @($shortBuildExited[0].active_process_ids).Count -Expected 0 `
+            -Message 'short descendant final Job PID list is empty'
+        $shortDescendantRecord = Read-DescendantRecord -LiteralPath $shortDescendantRecordPath
+        Assert-Equal -Actual $shortDescendantRecord.delay_milliseconds -Expected 750 `
+            -Message 'short descendant fixture uses a bounded natural lifetime'
+        Assert-RecordedProcessAbsent -Record $shortDescendantRecord `
+            -Message 'short descendant identity is absent after successful drain'
+    }
+    finally {
+        if (Test-Path -LiteralPath $shortDescendantRecordPath) {
+            Remove-Item -LiteralPath $shortDescendantRecordPath -Force
+        }
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath $shortDescendantRecordPath)) `
+        -Message 'short descendant identity record leaves no residue'
+    $successAttemptCount = @(Get-ChildItem -LiteralPath (Join-Path $repository 'output\perf\attempts') `
+        -Directory -Force).Count
+    Assert-Equal -Actual $successAttemptCount -Expected 2 `
+        -Message 'normal and naturally drained successes are retained'
+
+    $longDescendantScenario = 'long-job-descendant-' + [Guid]::NewGuid().ToString('N')
+    $longDescendantRecordPath = Get-DescendantRecordPath -Scenario $longDescendantScenario
+    $longDescendantClock = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $longDescendantExecution = Invoke-ContractRunner -Repository $repository `
+            -Scenario $longDescendantScenario
+        $longDescendantClock.Stop()
+        Assert-SafeFailure -Execution $longDescendantExecution `
+            -ExpectedCode 'child-descendants-survived'
+        Assert-True -Condition ($longDescendantClock.ElapsedMilliseconds -ge 4500) `
+            -Message 'long descendant is given the natural drain interval'
+        Assert-True -Condition ($longDescendantClock.ElapsedMilliseconds -lt 20000) `
+            -Message 'long descendant failure is bounded'
+        $longDescendantRecord = Read-DescendantRecord -LiteralPath $longDescendantRecordPath
+        Assert-Equal -Actual $longDescendantRecord.delay_milliseconds -Expected 30000 `
+            -Message 'long descendant outlives the drain interval without cleanup'
+        Assert-RecordedProcessAbsent -Record $longDescendantRecord `
+            -Message 'long descendant identity is absent after failure cleanup'
+        $postLongAttemptCount = @(Get-ChildItem `
+            -LiteralPath (Join-Path $repository 'output\perf\attempts') -Directory -Force).Count
+        Assert-Equal -Actual $postLongAttemptCount -Expected $successAttemptCount `
+            -Message 'long descendant failure removes its owned attempt'
+    }
+    finally {
+        $longDescendantClock.Stop()
+        if (Test-Path -LiteralPath $longDescendantRecordPath) {
+            Remove-Item -LiteralPath $longDescendantRecordPath -Force
+        }
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath $longDescendantRecordPath)) `
+        -Message 'long descendant identity record leaves no residue'
+
     $negativeScenarios = [ordered]@{
         'wrong-ready-nonce' = 'ready-identity-mismatch'
         'counters-drift' = 'counter-drift-detected'
@@ -725,7 +887,10 @@ exit 0
         -Directory -Force)
     Assert-Equal -Actual $attemptDirectories.Count -Expected ($successAttemptCount + 1) `
         -Message 'unsafe child junction preserves the failed attempt instead of recursive deletion'
-    $preservedCandidates = @($attemptDirectories | Where-Object { $_.FullName -cne $published.attempt_dir })
+    $successfulAttemptPaths = @($published.attempt_dir, $shortDescendantPublished.attempt_dir)
+    $preservedCandidates = @($attemptDirectories | Where-Object {
+        $successfulAttemptPaths -cnotcontains $_.FullName
+    })
     Assert-Equal -Actual $preservedCandidates.Count -Expected 1 `
         -Message 'exactly one unsafe failed attempt is preserved'
     $preserved = $preservedCandidates[0]
