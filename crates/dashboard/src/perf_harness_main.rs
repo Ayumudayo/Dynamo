@@ -1,0 +1,4 @@
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    dynamo_dashboard::run_perf_harness().await
+}

@@ -792,6 +792,7 @@ name = "dynamo-dashboard"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "axum-extra",
  "chrono",
@@ -802,6 +803,7 @@ dependencies = [
  "dynamo-observability",
  "dynamo-ops",
  "dynamo-persistence-api",
+ "dynamo-repositories",
  "dynamo-runtime-api",
  "dynamo-settings",
  "futures-util",

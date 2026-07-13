@@ -1,0 +1,678 @@
+{
+  "schema_version": 1,
+  "fixture_version": "guild-detail-v1",
+  "application": {
+    "id": "9000000000000000001",
+    "name": "Dynamo Offline Fixture",
+    "icon": null,
+    "owner_user_id": "9000000000000000002"
+  },
+  "session": {
+    "id": "dynamo-perf-session-guild-detail-v1",
+    "expires_at": "2100-01-01T00:00:00.0000000Z",
+    "user": {
+      "id": "9000000000000000002",
+      "username": "dynamo_fixture_operator",
+      "global_name": "Dynamo Fixture Operator",
+      "avatar": null
+    },
+    "guilds": [
+      {
+        "id": "9000000000000000101",
+        "name": "Fixture Guild 001",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000102",
+        "name": "Fixture Guild 002",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000103",
+        "name": "Fixture Guild 003",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000104",
+        "name": "Fixture Guild 004",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000105",
+        "name": "Fixture Guild 005",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000106",
+        "name": "Fixture Guild 006",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000107",
+        "name": "Fixture Guild 007",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000108",
+        "name": "Fixture Guild 008",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000109",
+        "name": "Fixture Guild 009",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000110",
+        "name": "Fixture Guild 010",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000111",
+        "name": "Fixture Guild 011",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000112",
+        "name": "Fixture Guild 012",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000113",
+        "name": "Fixture Guild 013",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000114",
+        "name": "Fixture Guild 014",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000115",
+        "name": "Fixture Guild 015",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000116",
+        "name": "Fixture Guild 016",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000117",
+        "name": "Fixture Guild 017",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000118",
+        "name": "Fixture Guild 018",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000119",
+        "name": "Fixture Guild 019",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000120",
+        "name": "Fixture Guild 020",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000121",
+        "name": "Fixture Guild 021",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000122",
+        "name": "Fixture Guild 022",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000123",
+        "name": "Fixture Guild 023",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000124",
+        "name": "Fixture Guild 024",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000125",
+        "name": "Fixture Guild 025",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000126",
+        "name": "Fixture Guild 026",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000127",
+        "name": "Fixture Guild 027",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000128",
+        "name": "Fixture Guild 028",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000129",
+        "name": "Fixture Guild 029",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000130",
+        "name": "Fixture Guild 030",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000131",
+        "name": "Fixture Guild 031",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000132",
+        "name": "Fixture Guild 032",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000133",
+        "name": "Fixture Guild 033",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000134",
+        "name": "Fixture Guild 034",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000135",
+        "name": "Fixture Guild 035",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000136",
+        "name": "Fixture Guild 036",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000137",
+        "name": "Fixture Guild 037",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000138",
+        "name": "Fixture Guild 038",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000139",
+        "name": "Fixture Guild 039",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000140",
+        "name": "Fixture Guild 040",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000141",
+        "name": "Fixture Guild 041",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000142",
+        "name": "Fixture Guild 042",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000143",
+        "name": "Fixture Guild 043",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000144",
+        "name": "Fixture Guild 044",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000145",
+        "name": "Fixture Guild 045",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000146",
+        "name": "Fixture Guild 046",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000147",
+        "name": "Fixture Guild 047",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000148",
+        "name": "Fixture Guild 048",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000149",
+        "name": "Fixture Guild 049",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000150",
+        "name": "Fixture Guild 050",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000151",
+        "name": "Fixture Guild 051",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000152",
+        "name": "Fixture Guild 052",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000153",
+        "name": "Fixture Guild 053",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000154",
+        "name": "Fixture Guild 054",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000155",
+        "name": "Fixture Guild 055",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000156",
+        "name": "Fixture Guild 056",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000157",
+        "name": "Fixture Guild 057",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000158",
+        "name": "Fixture Guild 058",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000159",
+        "name": "Fixture Guild 059",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000160",
+        "name": "Fixture Guild 060",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000161",
+        "name": "Fixture Guild 061",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000162",
+        "name": "Fixture Guild 062",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000163",
+        "name": "Fixture Guild 063",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000164",
+        "name": "Fixture Guild 064",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000165",
+        "name": "Fixture Guild 065",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000166",
+        "name": "Fixture Guild 066",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000167",
+        "name": "Fixture Guild 067",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000168",
+        "name": "Fixture Guild 068",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000169",
+        "name": "Fixture Guild 069",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000170",
+        "name": "Fixture Guild 070",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000171",
+        "name": "Fixture Guild 071",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000172",
+        "name": "Fixture Guild 072",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000173",
+        "name": "Fixture Guild 073",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000174",
+        "name": "Fixture Guild 074",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000175",
+        "name": "Fixture Guild 075",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000176",
+        "name": "Fixture Guild 076",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000177",
+        "name": "Fixture Guild 077",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000178",
+        "name": "Fixture Guild 078",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000179",
+        "name": "Fixture Guild 079",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000180",
+        "name": "Fixture Guild 080",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000181",
+        "name": "Fixture Guild 081",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000182",
+        "name": "Fixture Guild 082",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000183",
+        "name": "Fixture Guild 083",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000184",
+        "name": "Fixture Guild 084",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000185",
+        "name": "Fixture Guild 085",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000186",
+        "name": "Fixture Guild 086",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000187",
+        "name": "Fixture Guild 087",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000188",
+        "name": "Fixture Guild 088",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000189",
+        "name": "Fixture Guild 089",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000190",
+        "name": "Fixture Guild 090",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000191",
+        "name": "Fixture Guild 091",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000192",
+        "name": "Fixture Guild 092",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000193",
+        "name": "Fixture Guild 093",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000194",
+        "name": "Fixture Guild 094",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000195",
+        "name": "Fixture Guild 095",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000196",
+        "name": "Fixture Guild 096",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000197",
+        "name": "Fixture Guild 097",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000198",
+        "name": "Fixture Guild 098",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000199",
+        "name": "Fixture Guild 099",
+        "icon": null,
+        "permissions": "32"
+      },
+      {
+        "id": "9000000000000000200",
+        "name": "Fixture Guild 100",
+        "icon": null,
+        "permissions": "32"
+      }
+    ]
+  },
+  "target": {
+    "guild_id": "9000000000000000101",
+    "bot_present": true
+  },
+  "settings": {
+    "deployment": {
+      "modules": {
+        "stock": {
+          "installed": true,
+          "enabled": true
+        }
+      },
+      "commands": {
+        "etf": {
+          "installed": true,
+          "enabled": false,
+          "configuration": {
+            "ticker_1": "DEPLOYMENT-CANARY"
+          }
+        }
+      }
+    },
+    "guild": {
+      "guild_id": "9000000000000000101",
+      "modules": {
+        "stock": {
+          "enabled": false,
+          "configuration": {
+            "default_symbol": "PERF-STOCK-CANARY",
+            "etf_tickers": [
+              "SPY"
+            ],
+            "refresh_interval_seconds": 3,
+            "refresh_duration_seconds": 60
+          }
+        }
+      },
+      "commands": {
+        "etf": {
+          "enabled": true,
+          "configuration": {
+            "ticker_1": "GUILD-ETF-CANARY"
+          }
+        }
+      }
+    }
+  },
+  "fake_provider_responses": {
+    "bot_present": true,
+    "guild_lookup_delay_ms": 0,
+    "outbound_http_attempts": 0
+  },
+  "route_payloads": {
+    "public_padding_bytes": 0,
+    "guild_detail_padding_bytes": 4096
+  }
+}

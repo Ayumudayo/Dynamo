@@ -174,7 +174,26 @@ fn assert_lock_entry(lock: &str, file: &str, expected_sha256: &str) {
     );
 }
 
+fn is_lower_hex(value: &str, length: usize) -> bool {
+    value.len() == length
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
 fn main() {
+    println!("cargo:rerun-if-env-changed=DYNAMO_PERF_BUILD_REVISION");
+    if let Some(revision) = env::var_os("DYNAMO_PERF_BUILD_REVISION") {
+        let revision = revision
+            .into_string()
+            .expect("DYNAMO_PERF_BUILD_REVISION must be valid Unicode");
+        assert!(
+            is_lower_hex(&revision, 40),
+            "DYNAMO_PERF_BUILD_REVISION must be exactly 40 lowercase hexadecimal characters"
+        );
+        println!("cargo:rustc-env=DYNAMO_PERF_COMPILED_REVISION={revision}");
+    }
+
     let manifest_dir = env::var_os("CARGO_MANIFEST_DIR")
         .map(std::path::PathBuf::from)
         .expect("CARGO_MANIFEST_DIR is required");

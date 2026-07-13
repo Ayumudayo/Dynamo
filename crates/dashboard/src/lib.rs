@@ -47,6 +47,12 @@ use url::Url;
 
 include!(concat!(env!("OUT_DIR"), "/font_assets.rs"));
 
+#[cfg(feature = "perf-harness")]
+mod perf_harness;
+
+#[cfg(feature = "perf-harness")]
+pub use perf_harness::run_perf_harness;
+
 const SESSION_COOKIE_NAME: &str = "dynamo_dashboard_session";
 const SESSION_TTL_HOURS: i64 = 24 * 14;
 const OAUTH_STATE_TTL_MINUTES: i64 = 15;
@@ -160,6 +166,8 @@ pub async fn run_production() -> anyhow::Result<()> {
         persistence,
         sessions: Arc::new(RwLock::new(HashMap::new())),
         oauth_states: Arc::new(RwLock::new(HashMap::new())),
+        #[cfg(feature = "perf-harness")]
+        perf_runtime: None,
     });
 
     let app = build_dashboard_router(state.clone());
@@ -179,6 +187,12 @@ pub async fn run_production() -> anyhow::Result<()> {
 }
 
 fn build_dashboard_router(state: Arc<DashboardState>) -> Router {
+    build_dashboard_routes()
+        .with_state(state)
+        .layer(middleware::from_fn(log_request))
+}
+
+fn build_dashboard_routes() -> Router<Arc<DashboardState>> {
     Router::new()
         .route("/", get(index))
         .route("/login", get(login))
@@ -221,8 +235,6 @@ fn build_dashboard_router(state: Arc<DashboardState>) -> Router {
             post(post_guild_command_sync),
         )
         .merge(font_asset_router())
-        .with_state(state)
-        .layer(middleware::from_fn(log_request))
 }
 
 #[derive(Debug, Clone)]
@@ -518,6 +530,8 @@ struct DashboardState {
     persistence: Persistence,
     sessions: Arc<RwLock<HashMap<String, DashboardSession>>>,
     oauth_states: Arc<RwLock<HashMap<String, PendingOauthState>>>,
+    #[cfg(feature = "perf-harness")]
+    perf_runtime: Option<Arc<perf_harness::PerfRuntime>>,
 }
 
 #[derive(Debug, Clone)]
@@ -1292,12 +1306,10 @@ async fn fetch_application_info(
     http: &reqwest::Client,
     config: &DashboardConfig,
 ) -> anyhow::Result<DiscordApplicationInfo> {
-    let response = http
+    let request = http
         .get(format!("{DISCORD_API_BASE}/oauth2/applications/@me"))
-        .header("Authorization", format!("Bot {}", config.bot_token))
-        .send()
-        .await?
-        .error_for_status()?;
+        .header("Authorization", format!("Bot {}", config.bot_token));
+    let response = execute_dashboard_http(request).await?.error_for_status()?;
 
     let payload: DiscordApplicationResponse = response.json().await?;
     let owner_user_id = payload
@@ -1383,7 +1395,7 @@ async fn exchange_oauth_code(
     code: &str,
 ) -> Result<DashboardSession, anyhow::Error> {
     let redirect_uri = format!("{}/auth/discord/callback", state.config.public_base_url);
-    let token_response = state
+    let token_request = state
         .http
         .post(format!("{DISCORD_API_BASE}/oauth2/token"))
         .header(
@@ -1396,28 +1408,28 @@ async fn exchange_oauth_code(
             ("grant_type", "authorization_code"),
             ("code", code),
             ("redirect_uri", redirect_uri.as_str()),
-        ])
-        .send()
+        ]);
+    let token_response = send_dashboard_http(state, token_request)
         .await?
         .error_for_status()?;
 
     let token_payload: DiscordTokenResponse = token_response.json().await?;
     let bearer = format!("Bearer {}", token_payload.access_token);
 
-    let user_response = state
+    let user_request = state
         .http
         .get(format!("{DISCORD_API_BASE}/users/@me"))
-        .header(reqwest::header::AUTHORIZATION, &bearer)
-        .send()
+        .header(reqwest::header::AUTHORIZATION, &bearer);
+    let user_response = send_dashboard_http(state, user_request)
         .await?
         .error_for_status()?;
     let user: DiscordOAuthUser = user_response.json().await?;
 
-    let guilds_response = state
+    let guilds_request = state
         .http
         .get(format!("{DISCORD_API_BASE}/users/@me/guilds"))
-        .header(reqwest::header::AUTHORIZATION, &bearer)
-        .send()
+        .header(reqwest::header::AUTHORIZATION, &bearer);
+    let guilds_response = send_dashboard_http(state, guilds_request)
         .await?
         .error_for_status()?;
     let guilds: Vec<DashboardGuild> = guilds_response.json().await?;
@@ -1482,11 +1494,11 @@ async fn refresh_session_guilds(
     };
 
     let bearer = format!("Bearer {}", access_token);
-    let guilds_response = state
+    let guilds_request = state
         .http
         .get(format!("{DISCORD_API_BASE}/users/@me/guilds"))
-        .header(reqwest::header::AUTHORIZATION, &bearer)
-        .send()
+        .header(reqwest::header::AUTHORIZATION, &bearer);
+    let guilds_response = send_dashboard_http(state, guilds_request)
         .await?
         .error_for_status()?;
     let guilds: Vec<DashboardGuild> = guilds_response.json().await?;
@@ -1509,16 +1521,41 @@ fn user_can_manage_guild(guild: &DashboardGuild) -> bool {
 }
 
 async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> bool {
-    match state
+    #[cfg(feature = "perf-harness")]
+    if let Some(runtime) = state.perf_runtime.as_ref() {
+        return runtime.fixture_bot_present().await;
+    }
+
+    let request = state
         .http
         .get(format!("{DISCORD_API_BASE}/guilds/{guild_id}"))
-        .header("Authorization", format!("Bot {}", state.config.bot_token))
-        .send()
-        .await
-    {
+        .header("Authorization", format!("Bot {}", state.config.bot_token));
+    match send_dashboard_http(state, request).await {
         Ok(response) => response.status().is_success(),
         Err(_) => false,
     }
+}
+
+async fn send_dashboard_http(
+    state: &DashboardState,
+    request: reqwest::RequestBuilder,
+) -> anyhow::Result<reqwest::Response> {
+    #[cfg(not(feature = "perf-harness"))]
+    let _ = state;
+
+    #[cfg(feature = "perf-harness")]
+    if let Some(runtime) = state.perf_runtime.as_ref() {
+        runtime.deny_outbound();
+        anyhow::bail!("external HTTP is disabled by the dashboard performance harness");
+    }
+
+    execute_dashboard_http(request).await
+}
+
+async fn execute_dashboard_http(
+    request: reqwest::RequestBuilder,
+) -> anyhow::Result<reqwest::Response> {
+    Ok(request.send().await?)
 }
 
 fn build_bot_invite_url(state: &DashboardState, guild_id: u64) -> String {
@@ -4362,20 +4399,31 @@ mod tests {
             persistence: Persistence::default(),
             sessions: Default::default(),
             oauth_states: Default::default(),
+            #[cfg(feature = "perf-harness")]
+            perf_runtime: None,
         });
 
-        let response = build_dashboard_router(state)
-            .oneshot(
-                Request::builder()
-                    .method("GET")
-                    .uri("/__perf/instance")
-                    .body(Body::empty())
-                    .expect("valid request"),
-            )
-            .await
-            .expect("router response");
+        let app = build_dashboard_router(state);
+        for (method, path) in [
+            ("GET", "/__perf/instance"),
+            ("GET", "/__perf/counters"),
+            ("POST", "/__perf/browser-outbound-attempt"),
+            ("POST", "/__perf/shutdown"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::builder()
+                        .method(method)
+                        .uri(path)
+                        .body(Body::empty())
+                        .expect("valid request"),
+                )
+                .await
+                .expect("router response");
 
-        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(response.status(), StatusCode::NOT_FOUND, "path {path}");
+        }
     }
 
     #[tokio::test]
