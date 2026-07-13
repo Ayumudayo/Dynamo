@@ -51,6 +51,41 @@ jobs:
           pwsh -NoProfile -File scripts/tests/Test-RpiSecurityBundle.ps1 -StageDir output/rpi-aarch64
           pwsh -NoProfile -File scripts/tests/Test-RpiSecurityBundle.ps1 -SelfTest
 
+  mongo-isolation:
+    name: MongoDB 7 isolation gate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    services:
+      mongo:
+        image: mongo:7
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.adminCommand({ ping: 1 }).ok ? 0 : 2)'"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install stable Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify isolated Mongo runner contract
+        shell: pwsh
+        run: pwsh -NoProfile -File tests/scripts/mongo-isolation-contract.ps1
+
+      - name: Run isolated Mongo integration tests
+        shell: pwsh
+        env:
+          DYNAMO_MONGO_TEST: '1'
+          MONGODB_TEST_URI: mongodb://127.0.0.1:27017/?directConnection=true
+          MONGODB_URI: mongodb://127.0.0.1:27018/?directConnection=true
+        run: pwsh -NoProfile -File scripts/test-isolated-mongo.ps1
+
   rust:
     runs-on: ubuntu-latest
 
