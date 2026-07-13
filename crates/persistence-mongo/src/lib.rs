@@ -1231,7 +1231,6 @@ impl DashboardAuditLogRepository for MongoPersistence {
 mod tests {
     use super::{
         DEFAULT_DATABASE_NAME, DeploymentSettingsDocument, GuildSettingsDocument, MongoPersistence,
-        MongoPersistenceConfig,
     };
     use crate::MongoInitializationReport;
     use dynamo_ops::DashboardAuditLogRepository;
@@ -1244,45 +1243,141 @@ mod tests {
         DeploymentCommandSettings, DeploymentModuleSettings, GuildCommandSettings,
         GuildModuleSettings,
     };
-    use mongodb::bson::{Bson, doc, to_bson};
+    use futures_util::FutureExt;
+    use mongodb::{
+        Client, Database,
+        bson::{Bson, doc, oid::ObjectId, to_bson},
+    };
     use serde_json::json;
     use std::{
-        collections::hash_map::DefaultHasher,
-        hash::{Hash, Hasher},
+        any::Any,
+        env,
+        future::Future,
+        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
     };
 
-    fn require_mongo_test_config(test_name: &str) -> anyhow::Result<MongoPersistenceConfig> {
-        let _ = dotenvy::dotenv();
-        MongoPersistenceConfig::try_from_env()?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "{test_name} requires MongoDB test configuration; set MONGODB_URI or MONGO_CONNECTION"
-            )
-        })
+    type PanicPayload = Box<dyn Any + Send + 'static>;
+
+    enum IsolatedTestOutcome {
+        Completed(anyhow::Result<()>),
+        Panicked(PanicPayload),
     }
 
-    fn isolated_mongo_test_config(
-        base: &MongoPersistenceConfig,
-        test_name: &str,
-    ) -> MongoPersistenceConfig {
-        let mut label: String = test_name
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
+    struct IsolatedMongoTest {
+        client: Client,
+        database_name: String,
+    }
+
+    impl IsolatedMongoTest {
+        async fn create() -> anyhow::Result<Self> {
+            let connection_string = env::var("MONGODB_URI_FOR_ISOLATED_TEST").map_err(|_| {
+                anyhow::anyhow!("isolated Mongo tests require the dedicated PowerShell runner")
+            })?;
+            let client = Client::with_uri_str(connection_string)
+                .await
+                .map_err(|_| anyhow::anyhow!("isolated Mongo client initialization failed"))?;
+
+            Ok(Self {
+                client,
+                database_name: isolated_database_name(),
             })
-            .collect();
-        label.truncate(8);
+        }
 
-        let mut hasher = DefaultHasher::new();
-        test_name.hash(&mut hasher);
-        let name_hash = hasher.finish() as u32;
-        let suffix = chrono::Utc::now().timestamp_millis().unsigned_abs() % 100_000_000;
-        let database_name = format!("dynmongo_{label}_{name_hash:08x}_{suffix:08}");
+        fn store(&self) -> MongoPersistence {
+            mongo_persistence_for_database(self.client.database(&self.database_name))
+        }
 
-        MongoPersistenceConfig::new(base.connection_string.clone(), database_name)
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.client
+                .database(&self.database_name)
+                .drop()
+                .await
+                .map_err(|_| anyhow::anyhow!("isolated Mongo database drop failed"))?;
+
+            let remaining_databases = self
+                .client
+                .list_database_names()
+                .await
+                .map_err(|_| anyhow::anyhow!("isolated Mongo cleanup verification failed"))?;
+            anyhow::ensure!(
+                !remaining_databases
+                    .iter()
+                    .any(|name| name == &self.database_name),
+                "isolated Mongo database still exists after cleanup"
+            );
+            Ok(())
+        }
+    }
+
+    fn isolated_database_name() -> String {
+        format!(
+            "dynmongo_{}_{}",
+            std::process::id(),
+            ObjectId::new().to_hex()
+        )
+    }
+
+    fn mongo_persistence_for_database(database: Database) -> MongoPersistence {
+        MongoPersistence {
+            guild_settings: database.collection::<GuildSettingsDocument>("guild_settings"),
+            deployment_settings: database
+                .collection::<DeploymentSettingsDocument>("deployment_settings"),
+            provider_state: database.collection("provider_state"),
+            suggestions: database.collection("suggestions"),
+            giveaways: database.collection("giveaways"),
+            invite_members: database.collection("members"),
+            member_stats: database.collection("member-stats"),
+            warning_logs: database.collection("mod-logs"),
+            dashboard_audit_logs: database.collection("dashboard-audit-logs"),
+            database,
+        }
+    }
+
+    fn resolve_isolated_test_outcome(
+        test_outcome: IsolatedTestOutcome,
+        cleanup_result: anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        if let Err(error) = cleanup_result {
+            return Err(anyhow::anyhow!("isolated Mongo cleanup failed: {error}"));
+        }
+
+        match test_outcome {
+            IsolatedTestOutcome::Completed(result) => result,
+            IsolatedTestOutcome::Panicked(payload) => resume_unwind(payload),
+        }
+    }
+
+    async fn run_isolated_test_lifecycle<F, Fut, C, CleanupFut>(
+        test: F,
+        cleanup: C,
+    ) -> anyhow::Result<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+        C: FnOnce() -> CleanupFut,
+        CleanupFut: Future<Output = anyhow::Result<()>>,
+    {
+        let test_outcome = match catch_unwind(AssertUnwindSafe(test)) {
+            Ok(future) => match AssertUnwindSafe(future).catch_unwind().await {
+                Ok(result) => IsolatedTestOutcome::Completed(result),
+                Err(payload) => IsolatedTestOutcome::Panicked(payload),
+            },
+            Err(payload) => IsolatedTestOutcome::Panicked(payload),
+        };
+        let cleanup_result = cleanup().await;
+
+        resolve_isolated_test_outcome(test_outcome, cleanup_result)
+    }
+
+    async fn run_isolated_mongo_test<F, Fut>(test: F) -> anyhow::Result<()>
+    where
+        F: FnOnce(MongoPersistence) -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        let isolated = IsolatedMongoTest::create().await?;
+        let store = isolated.store();
+
+        run_isolated_test_lifecycle(|| test(store), || isolated.cleanup()).await
     }
 
     #[test]
@@ -1453,13 +1548,150 @@ mod tests {
     }
 
     #[test]
-    fn isolated_mongo_test_config_generates_atlas_safe_database_name() {
-        let base = MongoPersistenceConfig::new("mongodb://example.invalid", "ignored");
-        let config =
-            isolated_mongo_test_config(&base, "dashboard_audit_logs_round_trip_against_mongo");
+    fn isolated_mongo_test_generates_exact_database_name_shape() {
+        let database_name = isolated_database_name();
+        let parts = database_name.split('_').collect::<Vec<_>>();
 
-        assert!(config.database_name.len() <= 38, "{}", config.database_name);
-        assert!(config.database_name.starts_with("dynmongo_dashboar_"));
+        assert_eq!(parts.len(), 3, "{database_name}");
+        assert_eq!(parts[0], "dynmongo");
+        assert_eq!(parts[1], std::process::id().to_string());
+        assert_eq!(parts[2].len(), 24, "{database_name}");
+        assert!(
+            parts[2]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "{database_name}"
+        );
+    }
+
+    #[test]
+    fn cleanup_failure_outranks_test_error() {
+        let outcome = IsolatedTestOutcome::Completed(Err(anyhow::anyhow!("test failed")));
+        let result =
+            resolve_isolated_test_outcome(outcome, Err(anyhow::anyhow!("cleanup sentinel")));
+
+        let error = result.expect_err("cleanup failure must win").to_string();
+        assert!(error.contains("isolated Mongo cleanup failed"));
+        assert!(error.contains("cleanup sentinel"));
+        assert!(!error.contains("test failed"));
+    }
+
+    #[test]
+    fn cleanup_failure_outranks_test_panic() {
+        let outcome = IsolatedTestOutcome::Panicked(Box::new("panic sentinel"));
+        let result =
+            resolve_isolated_test_outcome(outcome, Err(anyhow::anyhow!("cleanup sentinel")));
+
+        let error = result.expect_err("cleanup failure must win").to_string();
+        assert!(error.contains("isolated Mongo cleanup failed"));
+        assert!(error.contains("cleanup sentinel"));
+    }
+
+    #[test]
+    fn successful_cleanup_preserves_test_error() {
+        let outcome = IsolatedTestOutcome::Completed(Err(anyhow::anyhow!("test sentinel")));
+        let error = resolve_isolated_test_outcome(outcome, Ok(()))
+            .expect_err("test error must be returned")
+            .to_string();
+
+        assert_eq!(error, "test sentinel");
+    }
+
+    #[test]
+    fn successful_cleanup_resumes_test_panic() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            resolve_isolated_test_outcome(
+                IsolatedTestOutcome::Panicked(Box::new("panic sentinel")),
+                Ok(()),
+            )
+        }));
+
+        let payload = result.expect_err("test panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"panic sentinel"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_test_success() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = run_isolated_test_lifecycle(
+            || async { Ok(()) },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_test_error() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = run_isolated_test_lifecycle(
+            || async { Err(anyhow::anyhow!("test sentinel")) },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            result.expect_err("test error must survive").to_string(),
+            "test sentinel"
+        );
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_test_panic() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = AssertUnwindSafe(run_isolated_test_lifecycle(
+            || async {
+                panic!("panic sentinel");
+            },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .catch_unwind()
+        .await;
+
+        assert!(result.is_err(), "test panic must resume after cleanup");
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_synchronous_test_factory_panic() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = AssertUnwindSafe(run_isolated_test_lifecycle(
+            || -> std::future::Ready<anyhow::Result<()>> {
+                panic!("synchronous panic sentinel");
+            },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .catch_unwind()
+        .await;
+
+        assert!(
+            result.is_err(),
+            "synchronous test factory panic must resume after cleanup"
+        );
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1498,16 +1730,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[ignore = "requires MongoDB environment and persists test data"]
-    async fn settings_round_trip_against_mongo() -> anyhow::Result<()> {
-        let config = require_mongo_test_config("settings_round_trip_against_mongo")?;
-        let guild_store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "settings_round_trip_guild",
-        ))
-        .await?;
-
+    async fn settings_round_trip_body(guild_store: MongoPersistence) -> anyhow::Result<()> {
         let marker = chrono::Utc::now().timestamp_millis().unsigned_abs();
         let created_guild_id = marker;
         let guild_module_guild_id = marker + 1;
@@ -1598,11 +1821,7 @@ mod tests {
         );
         assert!(guild_after_command_update.modules.is_empty());
 
-        let deployment_module_store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "settings_round_trip_deployment_module",
-        ))
-        .await?;
+        let deployment_module_store = guild_store.clone();
         let deployment_module_id = format!("integration_deployment_module_{marker}");
 
         let deployment_module_settings = DeploymentModuleSettings {
@@ -1643,11 +1862,7 @@ mod tests {
             Some(&deployment_module_settings)
         );
 
-        let deployment_command_store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "settings_round_trip_deployment_command",
-        ))
-        .await?;
+        let deployment_command_store = guild_store.clone();
         let deployment_command_id = format!("integration::deployment::command::{marker}");
         let deployment_command_settings = DeploymentCommandSettings {
             installed: false,
@@ -1666,7 +1881,10 @@ mod tests {
                 .get(&deployment_command_id),
             Some(&deployment_command_settings)
         );
-        assert!(deployment_after_command.modules.is_empty());
+        assert_eq!(
+            deployment_after_command.modules.get(&deployment_module_id),
+            Some(&deployment_module_settings_updated)
+        );
 
         let deployment_command_settings_updated = DeploymentCommandSettings {
             installed: true,
@@ -1692,21 +1910,23 @@ mod tests {
                 .get(&deployment_command_id),
             Some(&deployment_command_settings)
         );
-        assert!(deployment_after_command_update.modules.is_empty());
+        assert_eq!(
+            deployment_after_command_update
+                .modules
+                .get(&deployment_module_id),
+            Some(&deployment_module_settings_updated)
+        );
 
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "requires MongoDB environment and persists test data"]
-    async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
-        let config = require_mongo_test_config("dashboard_audit_logs_round_trip_against_mongo")?;
-        let store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "dashboard_audit_logs_round_trip",
-        ))
-        .await?;
+    #[ignore = "requires scripts/test-isolated-mongo.ps1 and a disposable MongoDB"]
+    async fn settings_round_trip_against_mongo() -> anyhow::Result<()> {
+        run_isolated_mongo_test(settings_round_trip_body).await
+    }
 
+    async fn dashboard_audit_logs_round_trip_body(store: MongoPersistence) -> anyhow::Result<()> {
         store.ensure_initialized().await?;
         let marker = format!("integration::{}", chrono::Utc::now().timestamp_millis());
         let entry = DashboardAuditLogEntry {
@@ -1738,5 +1958,11 @@ mod tests {
 
         assert!(page.entries.iter().any(|row| row.entity_id == marker));
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires scripts/test-isolated-mongo.ps1 and a disposable MongoDB"]
+    async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
+        run_isolated_mongo_test(dashboard_audit_logs_round_trip_body).await
     }
 }

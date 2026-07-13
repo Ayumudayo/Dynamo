@@ -1109,7 +1109,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "dotenvy",
  "dynamo-domain-giveaway",
  "dynamo-domain-invite",
  "dynamo-domain-moderation",
