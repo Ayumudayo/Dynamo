@@ -1756,6 +1756,7 @@ try {
     $nonce = Get-RandomHex -ByteCount 32
     $readyPath = Join-Path $attemptDirectory '.ready.json.tmp'
     $handoffPath = Join-Path $attemptDirectory '.handoff.json.tmp'
+    $rawResultPath = Join-Path $attemptDirectory '.load-result.json.tmp'
     $resultPath = Join-Path $attemptDirectory ("$Label-result.json")
     $reportPath = Join-Path $attemptDirectory ("$Label-budget.json")
     $summaryPath = Join-Path $attemptDirectory ("$Label-summary.json")
@@ -1838,7 +1839,7 @@ try {
     $loadEnvironment['PERF_PATH'] = $Path
     $loadEnvironment['PERF_REQUESTS'] = [string]$Requests
     $loadEnvironment['PERF_CONCURRENCY'] = [string]$Concurrency
-    $loadEnvironment['PERF_OUT'] = $resultPath
+    $loadEnvironment['PERF_OUT'] = $rawResultPath
     if ($contractMode) {
         $loadEnvironment['DYNAMO_PERF_CONTRACT_SCENARIO'] = $contractScenario
         $loadExecutable = $pwshPath
@@ -1865,15 +1866,25 @@ try {
         -FailureCode 'load-stdout-invalid'
     Assert-ExactJsonKeys -Value $loadEnvelope -Keys @('schema_version', 'result_path', 'exit_code') `
         -FailureCode 'load-stdout-schema-mismatch'
-    if ($loadEnvelope.schema_version -ne 1 -or $loadEnvelope.result_path -cne $resultPath -or
+    if ($loadEnvelope.schema_version -ne 1 -or $loadEnvelope.result_path -cne $rawResultPath -or
         $loadEnvelope.exit_code -ne 0) { Throw-RunnerFailure 'load-stdout-identity-mismatch' }
     Remove-RunnerJobHandle -Handle $loadHandle
     $allHandles.Remove($loadHandle) | Out-Null
     Remove-ChildLogs -Handle $loadHandle
-    $result = Read-ExactJsonFile -LiteralPath $resultPath -FailureCode 'load-result-invalid'
+    $result = Read-ExactJsonFile -LiteralPath $rawResultPath -FailureCode 'load-result-invalid'
     Assert-LoadResult -Result $result -SourceState $sourceState -Environment $environmentIdentity `
         -Nonce $nonce -ProcessId $harnessHandle.Job.ProcessId -Path $Path `
         -Requests $Requests -Concurrency $Concurrency
+    [void]$result.instance.PSObject.Properties.Remove('nonce')
+    Assert-ExactJsonKeys -Value $result.instance -Keys @(
+        'revision', 'pid', 'fixture_mode', 'outbound_calls_before',
+        'outbound_calls_after', 'browser_outbound_attempts'
+    ) -FailureCode 'retained-result-instance-schema-mismatch'
+    Write-ExclusiveJson -LiteralPath $resultPath -Value $result
+    Remove-Item -LiteralPath $rawResultPath -Force
+    if (Test-Path -LiteralPath $rawResultPath) {
+        Throw-RunnerFailure 'raw-result-cleanup-failed'
+    }
     $rssAfterLoad = Get-HarnessRssBytes -HarnessHandle $harnessHandle
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'harness' -Phase 'after_load' `
         -Handle $harnessHandle))
@@ -1992,7 +2003,7 @@ try {
     Remove-ChildLogs -Handle $harnessHandle
     $harnessHandle = $null
 
-    foreach ($temporary in @($readyPath, $handoffPath)) {
+    foreach ($temporary in @($readyPath, $handoffPath, $rawResultPath)) {
         if (Test-Path -LiteralPath $temporary) {
             Remove-Item -LiteralPath $temporary -Force
         }

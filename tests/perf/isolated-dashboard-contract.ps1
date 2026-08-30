@@ -797,6 +797,15 @@ exit 0
         Assert-True -Condition (Test-Path -LiteralPath $path -PathType Leaf) `
             -Message "published artifact exists: $path"
     }
+    $retainedResultBody = [System.IO.File]::ReadAllText(
+        $published.result_path, $script:Utf8NoBom)
+    Assert-True -Condition ($retainedResultBody -cnotmatch '(?i)nonce|cookie|authorization') `
+        -Message 'retained load result excludes private handoff material'
+    $retainedResult = $retainedResultBody | ConvertFrom-Json -Depth 32
+    Assert-ExactKeys -Value $retainedResult.instance -Expected @(
+        'revision', 'pid', 'fixture_mode', 'outbound_calls_before',
+        'outbound_calls_after', 'browser_outbound_attempts'
+    ) -Message 'retained load result instance schema'
     $summary = [System.IO.File]::ReadAllText($published.summary_path, $script:Utf8NoBom) | ConvertFrom-Json -Depth 32
     Assert-Equal -Actual $summary.schema_version -Expected 1 -Message 'summary schema version'
     Assert-Equal -Actual $summary.runner_version -Expected 'with-isolated-dashboard-v1' `
