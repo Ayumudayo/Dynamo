@@ -725,12 +725,135 @@ function Get-HarnessRssBytes {
     }
 }
 
+function Get-SanitizedProcessSnapshot {
+    param(
+        [Parameter(Mandatory)][object] $Handle,
+        [Parameter(Mandatory)][object] $Evidence,
+        [Parameter(Mandatory)][int64] $ObservedElapsedMilliseconds,
+        [Parameter(Mandatory)][string] $Phase
+    )
+    $processIds = @($Evidence.ActiveProcessIds | Select-Object -First 64 | ForEach-Object { [uint64]$_ })
+    $parentRecords = @{}
+    $parentQueryStatus = 'not-needed'
+    if ($processIds.Count -gt 0) {
+        try {
+            $filter = ($processIds | ForEach-Object { "ProcessId = $_" }) -join ' OR '
+            $query = "SELECT ProcessId, Name, ExecutablePath, ParentProcessId, CreationDate FROM Win32_Process WHERE $filter"
+            foreach ($record in @(Get-CimInstance -Query $query -OperationTimeoutSec 2 -ErrorAction Stop)) {
+                $parentRecords[[uint64]$record.ProcessId] = $record
+            }
+            $parentQueryStatus = 'ok'
+        }
+        catch { $parentQueryStatus = 'unavailable' }
+    }
+    $rows = [System.Collections.Generic.List[object]]::new()
+    foreach ($processId in $processIds) {
+        $row = [ordered]@{
+            pid = $processId
+            creation_file_time_utc = [uint64]0
+            name = $null
+            executable_path = $null
+            parent_pid = [uint64]0
+            observed_elapsed_ms = $ObservedElapsedMilliseconds
+            phase = $Phase
+            observed_in_initial_job_snapshot = $true
+            job_member = $false
+            query_status = 'unavailable'
+            parent_query_status = $parentQueryStatus
+        }
+        try {
+            $process = [System.Diagnostics.Process]::GetProcessById([int]$processId)
+            try {
+                $creationFileTimeUtc = [uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
+                $name = [string]$process.ProcessName
+                $path = [string]$process.MainModule.FileName
+            }
+            finally { $process.Dispose() }
+            if ($name.Length -lt 1 -or $name.Length -gt 256 -or $name -match '[\x00-\x1f\x7f]' -or
+                $path.Length -lt 1 -or $path.Length -gt 1024 -or $path -match '[\x00-\x1f\x7f]') {
+                $row.query_status = 'invalid-data'
+            }
+            else {
+                $currentEvidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
+                $stillActive = @($currentEvidence.ActiveProcessIds) -contains $processId
+                $birthStillMatches = $false
+                if ($stillActive) {
+                    try {
+                        $currentProcess = [System.Diagnostics.Process]::GetProcessById([int]$processId)
+                        try {
+                            $birthStillMatches = [uint64]$currentProcess.StartTime.ToUniversalTime().ToFileTimeUtc() `
+                                -eq $creationFileTimeUtc
+                        }
+                        finally { $currentProcess.Dispose() }
+                    }
+                    catch { $birthStillMatches = $false }
+                }
+                if (-not $stillActive -or -not $birthStillMatches) {
+                    $row.query_status = 'raced-or-exited'
+                }
+                else {
+                    $row.creation_file_time_utc = $creationFileTimeUtc
+                    $row.name = $name
+                    $row.executable_path = [System.IO.Path]::GetFullPath($path)
+                    $row.job_member = $true
+                    $row.query_status = 'ok-parent-unavailable'
+                    if ($parentRecords.ContainsKey($processId)) {
+                        $parentRecord = $parentRecords[$processId]
+                        $cimCreationFileTimeUtc = [uint64]0
+                        try {
+                            $cimCreationFileTimeUtc = [uint64]([DateTime]$parentRecord.CreationDate).ToUniversalTime().ToFileTimeUtc()
+                        }
+                        catch { }
+                        if ($cimCreationFileTimeUtc -eq $creationFileTimeUtc) {
+                            $row.parent_pid = [uint64]$parentRecord.ParentProcessId
+                            $row.parent_query_status = 'ok'
+                            $row.query_status = 'ok'
+                        }
+                        else { $row.parent_query_status = 'raced-or-unavailable' }
+                    }
+                }
+            }
+        }
+        catch {
+            $row.query_status = 'raced-or-exited'
+        }
+        $rows.Add([pscustomobject]$row)
+    }
+    return [ordered]@{
+        phase = $Phase
+        observed_elapsed_ms = $ObservedElapsedMilliseconds
+        active_processes = [int64]$Evidence.ActiveProcessCount
+        captured_processes = $rows.Count
+        truncated = [int64]$Evidence.ActiveProcessCount -gt $rows.Count
+        processes = @($rows.ToArray())
+    }
+}
+
+function Write-DescendantDiagnostic {
+    param(
+        [Parameter(Mandatory)][string] $LiteralPath,
+        [Parameter(Mandatory)][object] $Handle,
+        [Parameter(Mandatory)][string] $Name,
+        [Parameter(Mandatory)][object[]] $Samples
+    )
+    Write-ExclusiveJson -LiteralPath $LiteralPath -Value ([ordered]@{
+        schema_version = 1
+        failure_code = 'child-descendants-survived'
+        process_role = $Name
+        direct_pid = [uint64]$Handle.Job.ProcessId
+        direct_creation_file_time_utc = [uint64]$Handle.Job.CreationFileTimeUtc
+        samples = @($Samples)
+    })
+}
+
 function Wait-RunnerJob {
     param(
         [Parameter(Mandatory)][object] $Handle,
         [Parameter(Mandatory)][int] $TimeoutMilliseconds,
         [Parameter(Mandatory)][string] $FailureCode,
-        [int[]] $AllowedExitCodes = @(0)
+        [int[]] $AllowedExitCodes = @(0),
+        [string] $DiagnosticPath,
+        [string] $Name = 'child'
     )
     $wait = Wait-DynamoIsolatedProcess -Process $Handle.Job -TimeoutMilliseconds $TimeoutMilliseconds
     if (-not $wait.Exited) {
@@ -741,6 +864,7 @@ function Wait-RunnerJob {
     if ($AllowedExitCodes -notcontains [int64]$wait.ExitCode) { Throw-RunnerFailure $FailureCode }
     $drainTimeoutMilliseconds = 5000
     $drainClock = [System.Diagnostics.Stopwatch]::StartNew()
+    $diagnosticSamples = [System.Collections.Generic.List[object]]::new()
     while ($true) {
         $evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
         if ($evidence.ProcessId -ne $Handle.Job.ProcessId -or
@@ -752,8 +876,26 @@ function Wait-RunnerJob {
             @($evidence.ActiveProcessIds).Count -eq 0) {
             break
         }
+        if ($diagnosticSamples.Count -eq 0 -and -not [string]::IsNullOrEmpty($DiagnosticPath)) {
+            try {
+                $diagnosticSamples.Add((Get-SanitizedProcessSnapshot -Handle $Handle -Evidence $evidence `
+                    -ObservedElapsedMilliseconds $drainClock.ElapsedMilliseconds -Phase 'direct-exit'))
+            }
+            catch { }
+        }
         $remaining = $drainTimeoutMilliseconds - $drainClock.ElapsedMilliseconds
-        if ($remaining -le 0) { Throw-RunnerFailure 'child-descendants-survived' }
+        if ($remaining -le 0) {
+            if (-not [string]::IsNullOrEmpty($DiagnosticPath)) {
+                try {
+                    $diagnosticSamples.Add((Get-SanitizedProcessSnapshot -Handle $Handle -Evidence $evidence `
+                        -ObservedElapsedMilliseconds $drainClock.ElapsedMilliseconds -Phase 'drain-deadline'))
+                    Write-DescendantDiagnostic -LiteralPath $DiagnosticPath -Handle $Handle `
+                        -Name $Name -Samples @($diagnosticSamples.ToArray())
+                }
+                catch { }
+            }
+            Throw-RunnerFailure 'child-descendants-survived'
+        }
         Start-Sleep -Milliseconds ([int][Math]::Min(25, [Math]::Ceiling($remaining)))
     }
     return [pscustomobject]@{
@@ -1124,6 +1266,9 @@ $failureCode = $null
 $contractMode = $false
 $jobEvidenceRecords = [System.Collections.Generic.List[object]]::new()
 $teardownPort = $null
+$diagnosticEnabled = $false
+$diagnosticsRoot = $null
+$buildDiagnosticPath = $null
 
 try {
     if ($PSVersionTable.PSVersion -lt [version]'7.4') { Throw-RunnerFailure 'powershell-version-unsupported' }
@@ -1208,6 +1353,12 @@ try {
     elseif ($null -ne $contractScenario) {
         Throw-RunnerFailure 'contract-scenario-without-mode'
     }
+    $diagnosticSetting = [System.Environment]::GetEnvironmentVariable(
+        'DYNAMO_PERF_DIAGNOSTICS', 'Process')
+    if ($null -ne $diagnosticSetting -and $diagnosticSetting -cne '1') {
+        Throw-RunnerFailure 'diagnostic-setting-invalid'
+    }
+    $diagnosticEnabled = $diagnosticSetting -ceq '1'
 
     $sourceState = Get-SourceSnapshot -GitPath $gitPath -RepositoryRoot $repositoryRoot
 
@@ -1280,6 +1431,14 @@ try {
     Assert-DirectoryOwnedByCurrentUser -LiteralPath $outputRootAbsolute `
         -FailureCode 'output-root-owner-invalid'
     Set-ProtectedAttemptAcl -AttemptDirectory $outputRootAbsolute
+    if ($diagnosticEnabled) {
+        $diagnosticsRoot = Join-Path $outputRootAbsolute 'diagnostics'
+        [void](New-OwnedDirectoryChain -Root $repositoryRoot -Candidate $diagnosticsRoot `
+            -FailureCode 'diagnostics-root-invalid')
+        Assert-DirectoryOwnedByCurrentUser -LiteralPath $diagnosticsRoot `
+            -FailureCode 'diagnostics-root-owner-invalid'
+        Set-ProtectedAttemptAcl -AttemptDirectory $diagnosticsRoot
+    }
     $attemptsRoot = Join-Path $outputRootAbsolute 'attempts'
     [void](New-OwnedDirectoryChain -Root $repositoryRoot -Candidate $attemptsRoot `
         -FailureCode 'attempts-root-invalid')
@@ -1293,6 +1452,12 @@ try {
         $attemptCreated = New-ExclusiveDirectoryNative -LiteralPath $attemptDirectory
     }
     if (-not $attemptCreated) { Throw-RunnerFailure 'attempt-allocation-failed' }
+    if ($diagnosticEnabled) {
+        $buildDiagnosticPath = Join-Path $diagnosticsRoot "$attemptId-build-descendants.json"
+        if (Test-Path -LiteralPath $buildDiagnosticPath) {
+            Throw-RunnerFailure 'diagnostic-leaf-exists'
+        }
+    }
     [void](Assert-RegularPath -LiteralPath $attemptDirectory -Kind Container `
         -FailureCode 'attempt-directory-invalid')
     Set-ProtectedAttemptAcl -AttemptDirectory $attemptDirectory
@@ -1332,7 +1497,7 @@ try {
         -Handle $buildHandle))
     $buildTimeout = if ($contractMode) { 10000 } else { 600000 }
     $buildExecution = Wait-RunnerJob -Handle $buildHandle -TimeoutMilliseconds $buildTimeout `
-        -FailureCode 'build-failed'
+        -FailureCode 'build-failed' -DiagnosticPath $buildDiagnosticPath -Name 'build'
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'build' -Phase 'exited' `
         -Handle $buildHandle -Evidence $buildExecution.Evidence))
     Remove-RunnerJobHandle -Handle $buildHandle

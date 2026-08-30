@@ -98,6 +98,39 @@ function Assert-ExactRunnerAcl {
         -Message "$Message contains current and SYSTEM exactly once"
 }
 
+function Assert-SafeDiagnosticLeaf {
+    param(
+        [Parameter(Mandatory)][System.IO.FileInfo] $File,
+        [Parameter(Mandatory)][string] $Message
+    )
+    Assert-True -Condition (($File.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) `
+        -Message "$Message is not a reparse point"
+    Assert-True -Condition ($File.Length -gt 0 -and $File.Length -le 65536) `
+        -Message "$Message has bounded nonempty content"
+    $security = [System.IO.FileSystemAclExtensions]::GetAccessControl($File)
+    $currentSid = [System.Security.Principal.WindowsIdentity]::GetCurrent().User
+    $systemSid = [System.Security.Principal.SecurityIdentifier]::new(
+        [System.Security.Principal.WellKnownSidType]::LocalSystemSid,
+        $null)
+    Assert-Equal -Actual $security.GetOwner(
+        [System.Security.Principal.SecurityIdentifier]).Value -Expected $currentSid.Value `
+        -Message "$Message owner is current user"
+    $allowedSids = @($currentSid.Value, $systemSid.Value)
+    $rules = @($security.GetAccessRules(
+        $true,
+        $true,
+        [System.Security.Principal.SecurityIdentifier]))
+    Assert-True -Condition ($rules.Count -ge 1 -and $rules.Count -le 4) `
+        -Message "$Message has bounded access rules"
+    foreach ($rule in $rules) {
+        Assert-True -Condition ($allowedSids -ccontains $rule.IdentityReference.Value) `
+            -Message "$Message ACE identity is allowlisted"
+        Assert-Equal -Actual $rule.AccessControlType `
+            -Expected ([System.Security.AccessControl.AccessControlType]::Allow) `
+            -Message "$Message ACE is Allow"
+    }
+}
+
 function Write-Utf8File {
     param([Parameter(Mandatory)][string] $LiteralPath, [Parameter(Mandatory)][string] $Value)
     [System.IO.File]::WriteAllText($LiteralPath, $Value, $script:Utf8NoBom)
@@ -832,13 +865,17 @@ exit 0
         -Directory -Force).Count
     Assert-Equal -Actual $successAttemptCount -Expected 2 `
         -Message 'normal and naturally drained successes are retained'
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $repository `
+        'output\perf\diagnostics'))) -Message 'diagnostics are absent without explicit opt-in'
 
     $longDescendantScenario = 'long-job-descendant-' + [Guid]::NewGuid().ToString('N')
     $longDescendantRecordPath = Get-DescendantRecordPath -Scenario $longDescendantScenario
     $longDescendantClock = [System.Diagnostics.Stopwatch]::StartNew()
+    $diagnosticsRoot = Join-Path $repository 'output\perf\diagnostics'
     try {
         $longDescendantExecution = Invoke-ContractRunner -Repository $repository `
-            -Scenario $longDescendantScenario
+            -Scenario $longDescendantScenario `
+            -AdditionalEnvironment @{ DYNAMO_PERF_DIAGNOSTICS = '1' }
         $longDescendantClock.Stop()
         Assert-SafeFailure -Execution $longDescendantExecution `
             -ExpectedCode 'child-descendants-survived'
@@ -855,15 +892,94 @@ exit 0
             -LiteralPath (Join-Path $repository 'output\perf\attempts') -Directory -Force).Count
         Assert-Equal -Actual $postLongAttemptCount -Expected $successAttemptCount `
             -Message 'long descendant failure removes its owned attempt'
+        Assert-True -Condition (Test-Path -LiteralPath $diagnosticsRoot -PathType Container) `
+            -Message 'opt-in descendant diagnostics root exists'
+        Assert-ExactRunnerAcl -LiteralPath $diagnosticsRoot `
+            -Message 'descendant diagnostics root ACL'
+        $diagnosticLeaves = @(Get-ChildItem -LiteralPath $diagnosticsRoot -File -Force)
+        Assert-Equal -Actual $diagnosticLeaves.Count -Expected 1 `
+            -Message 'one descendant diagnostic is retained'
+        Assert-True -Condition ($diagnosticLeaves[0].Name -cmatch `
+            '^[0-9a-f]{64}-build-descendants\.json$') `
+            -Message 'descendant diagnostic leaf is attempt-bound'
+        Assert-SafeDiagnosticLeaf -File $diagnosticLeaves[0] `
+            -Message 'descendant diagnostic leaf'
+        $diagnosticBody = [System.IO.File]::ReadAllText(
+            $diagnosticLeaves[0].FullName, $script:Utf8NoBom)
+        Assert-True -Condition (-not $diagnosticBody.Contains($script:SecretSentinel)) `
+            -Message 'descendant diagnostic excludes caller secret sentinel'
+        Assert-True -Condition ($diagnosticBody -cnotmatch '(?i)command.?line|environment') `
+            -Message 'descendant diagnostic excludes command line and environment'
+        $diagnostic = $diagnosticBody | ConvertFrom-Json -Depth 16
+        Assert-ExactKeys -Value $diagnostic -Expected @(
+            'schema_version', 'failure_code', 'process_role', 'direct_pid',
+            'direct_creation_file_time_utc', 'samples'
+        ) -Message 'descendant diagnostic schema'
+        Assert-Equal -Actual $diagnostic.schema_version -Expected 1 `
+            -Message 'descendant diagnostic version'
+        Assert-Equal -Actual $diagnostic.failure_code -Expected 'child-descendants-survived' `
+            -Message 'descendant diagnostic failure code'
+        Assert-Equal -Actual $diagnostic.process_role -Expected 'build' `
+            -Message 'descendant diagnostic process role'
+        Assert-Equal -Actual @($diagnostic.samples).Count -Expected 2 `
+            -Message 'descendant diagnostic has direct-exit and deadline samples'
+        foreach ($sample in @($diagnostic.samples)) {
+            Assert-ExactKeys -Value $sample -Expected @(
+                'phase', 'observed_elapsed_ms', 'active_processes',
+                'captured_processes', 'truncated', 'processes'
+            ) -Message 'descendant diagnostic sample schema'
+            Assert-Equal -Actual $sample.truncated -Expected $false `
+                -Message 'long fixture diagnostic is complete'
+            Assert-Equal -Actual $sample.captured_processes `
+                -Expected @($sample.processes).Count `
+                -Message 'captured process count matches rows'
+        }
+        Assert-Equal -Actual $diagnostic.samples[0].phase -Expected 'direct-exit' `
+            -Message 'descendant diagnostic first phase'
+        Assert-Equal -Actual $diagnostic.samples[1].phase -Expected 'drain-deadline' `
+            -Message 'descendant diagnostic final phase'
+        $diagnosedProcesses = @($diagnostic.samples | ForEach-Object { @($_.processes) })
+        Assert-True -Condition ($diagnosedProcesses.Count -ge 2) `
+            -Message 'descendant diagnostic records the survivor in both samples'
+        foreach ($diagnosed in $diagnosedProcesses) {
+            Assert-ExactKeys -Value $diagnosed -Expected @(
+                'pid', 'creation_file_time_utc', 'name', 'executable_path', 'parent_pid',
+                'observed_elapsed_ms', 'phase', 'observed_in_initial_job_snapshot',
+                'job_member', 'query_status', 'parent_query_status'
+            ) -Message 'descendant process diagnostic schema'
+            Assert-Equal -Actual $diagnosed.observed_in_initial_job_snapshot -Expected $true `
+                -Message 'diagnosed process came from the initial Job snapshot'
+            Assert-Equal -Actual $diagnosed.job_member -Expected $true `
+                -Message 'diagnosed process is a Job member'
+        }
+        $queryableProcesses = @($diagnosedProcesses | Where-Object { $_.query_status -clike 'ok*' })
+        Assert-True -Condition ($queryableProcesses.Count -ge 1) `
+            -Message 'at least one descendant identity is queryable'
+        Assert-True -Condition (@($queryableProcesses | Where-Object {
+            $_.name -ceq 'pwsh' -and $_.executable_path -cmatch '(?i)\\pwsh\.exe$' -and
+            [uint64]$_.creation_file_time_utc -gt 0
+        }).Count -ge 1) -Message 'long fixture identifies its pwsh descendant safely'
     }
     finally {
         $longDescendantClock.Stop()
         if (Test-Path -LiteralPath $longDescendantRecordPath) {
             Remove-Item -LiteralPath $longDescendantRecordPath -Force
         }
+        if (Test-Path -LiteralPath $diagnosticsRoot -PathType Container) {
+            Remove-Item -LiteralPath $diagnosticsRoot -Recurse -Force
+        }
     }
     Assert-True -Condition (-not (Test-Path -LiteralPath $longDescendantRecordPath)) `
         -Message 'long descendant identity record leaves no residue'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
+        -Message 'contract descendant diagnostic leaves no residue'
+
+    $invalidDiagnosticSetting = Invoke-ContractRunner -Repository $repository `
+        -AdditionalEnvironment @{ DYNAMO_PERF_DIAGNOSTICS = '0' }
+    Assert-SafeFailure -Execution $invalidDiagnosticSetting `
+        -ExpectedCode 'diagnostic-setting-invalid'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
+        -Message 'invalid diagnostic setting has no output side effect'
 
     $negativeScenarios = [ordered]@{
         'wrong-ready-nonce' = 'ready-identity-mismatch'
