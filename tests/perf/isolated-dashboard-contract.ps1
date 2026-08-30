@@ -296,9 +296,22 @@ $moduleSource = Join-Path $sourceRoot 'scripts\perf\isolated-process-job.psm1'
 $fixtureSource = Join-Path $sourceRoot 'tests\perf\fixtures\guild-detail-v1.json'
 
 $parseErrors = $null
-[void][System.Management.Automation.Language.Parser]::ParseFile(
+$launcherAst = [System.Management.Automation.Language.Parser]::ParseFile(
     $launcherSource, [ref]$null, [ref]$parseErrors)
 Assert-Equal -Actual $parseErrors.Count -Expected 0 -Message 'launcher parses without errors'
+$pathFunctionNames = @(
+    'Throw-RunnerFailure',
+    'Assert-RegularPath',
+    'Resolve-ReparseFreeApplicationPath'
+)
+$pathFunctionDefinitions = @($launcherAst.FindAll({
+    param($node)
+    $node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
+        $pathFunctionNames -ccontains $node.Name
+}, $true) | ForEach-Object { $_.Extent.Text })
+Assert-Equal -Actual $pathFunctionDefinitions.Count -Expected $pathFunctionNames.Count `
+    -Message 'launcher path resolver function extraction'
+. ([scriptblock]::Create(($pathFunctionDefinitions -join "`n`n")))
 $launcherText = [System.IO.File]::ReadAllText($launcherSource, $script:Utf8NoBom)
 foreach ($forbidden in @(
     'Start-Process',
@@ -333,6 +346,29 @@ try {
     [void][System.IO.Directory]::CreateDirectory((Join-Path $repository 'scripts\perf'))
     [void][System.IO.Directory]::CreateDirectory((Join-Path $repository 'tests\perf\fixtures'))
     [void][System.IO.Directory]::CreateDirectory((Join-Path $repository 'tests\perf\budgets'))
+    $physicalToolRoot = Join-Path $contractRoot 'physical-tool'
+    $linkedToolRoot = Join-Path $contractRoot 'linked-tool'
+    [void][System.IO.Directory]::CreateDirectory($physicalToolRoot)
+    $physicalToolPath = Join-Path $physicalToolRoot 'tool.exe'
+    Write-Utf8File -LiteralPath $physicalToolPath -Value "contract-tool`n"
+    [void](New-Item -ItemType Junction -Path $linkedToolRoot -Target $physicalToolRoot)
+    try {
+        $resolvedToolPath = Resolve-ReparseFreeApplicationPath `
+            -LiteralPath (Join-Path $linkedToolRoot 'tool.exe') `
+            -FailureCode 'contract-tool-resolution-failed'
+        Assert-Equal -Actual $resolvedToolPath -Expected $physicalToolPath `
+            -Message 'reparse-free resolver returns the physical application path'
+        Assert-True -Condition (((Get-Item -LiteralPath $resolvedToolPath -Force).Attributes `
+            -band [System.IO.FileAttributes]::ReparsePoint) -eq 0) `
+            -Message 'resolved application leaf is not a reparse point'
+    }
+    finally {
+        if (Test-Path -LiteralPath $linkedToolRoot) {
+            Remove-Item -LiteralPath $linkedToolRoot -Force
+        }
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath $linkedToolRoot)) `
+        -Message 'application resolver junction fixture is removed'
     Copy-Item -LiteralPath $launcherSource -Destination (Join-Path $repository 'scripts\perf\with-isolated-dashboard.ps1')
     Copy-Item -LiteralPath $moduleSource -Destination (Join-Path $repository 'scripts\perf\isolated-process-job.psm1')
     Copy-Item -LiteralPath $fixtureSource -Destination (Join-Path $repository 'tests\perf\fixtures\guild-detail-v1.json')

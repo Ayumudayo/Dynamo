@@ -434,6 +434,61 @@ function Get-MinimalChildEnvironment {
     return $environment
 }
 
+function Resolve-ReparseFreeApplicationPath {
+    param(
+        [Parameter(Mandatory)][string] $LiteralPath,
+        [Parameter(Mandatory)][string] $FailureCode
+    )
+    try {
+        $candidate = [System.IO.Path]::GetFullPath($LiteralPath)
+        for ($hop = 0; $hop -lt 8; $hop++) {
+            $root = [System.IO.Path]::GetPathRoot($candidate)
+            if ([string]::IsNullOrEmpty($root)) { Throw-RunnerFailure $FailureCode }
+            $components = @($candidate.Substring($root.Length).Split(
+                [System.IO.Path]::DirectorySeparatorChar,
+                [System.StringSplitOptions]::RemoveEmptyEntries))
+            if ($components.Count -lt 1) { Throw-RunnerFailure $FailureCode }
+            $cursor = $root
+            $resolvedReparse = $false
+            for ($index = 0; $index -lt $components.Count; $index++) {
+                $cursor = Join-Path $cursor $components[$index]
+                $item = Get-Item -LiteralPath $cursor -Force
+                $isFinal = $index -eq ($components.Count - 1)
+                $isReparse = ($item.Attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0
+                if ($isReparse) {
+                    $target = $item.ResolveLinkTarget($true)
+                    if ($null -eq $target -or (-not $isFinal -and
+                        $target -isnot [System.IO.DirectoryInfo])) {
+                        Throw-RunnerFailure $FailureCode
+                    }
+                    $candidate = [System.IO.Path]::GetFullPath($target.FullName)
+                    for ($remaining = $index + 1; $remaining -lt $components.Count; $remaining++) {
+                        $candidate = Join-Path $candidate $components[$remaining]
+                    }
+                    $resolvedReparse = $true
+                    break
+                }
+                if (-not $isFinal -and $item -isnot [System.IO.DirectoryInfo]) {
+                    Throw-RunnerFailure $FailureCode
+                }
+                if ($isFinal -and $item -isnot [System.IO.FileInfo]) {
+                    Throw-RunnerFailure $FailureCode
+                }
+            }
+            if (-not $resolvedReparse) {
+                [void](Assert-RegularPath -LiteralPath $candidate -Kind Leaf `
+                    -FailureCode $FailureCode)
+                return $candidate
+            }
+        }
+        Throw-RunnerFailure $FailureCode
+    }
+    catch {
+        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
+        Throw-RunnerFailure $FailureCode
+    }
+}
+
 function Resolve-Executable {
     param(
         [Parameter(Mandatory)][string] $Name,
@@ -442,8 +497,7 @@ function Resolve-Executable {
     try {
         $command = Get-Command -Name $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1
         $path = [System.IO.Path]::GetFullPath([string]$command.Source)
-        [void](Assert-RegularPath -LiteralPath $path -Kind Leaf -FailureCode $FailureCode)
-        return $path
+        return Resolve-ReparseFreeApplicationPath -LiteralPath $path -FailureCode $FailureCode
     }
     catch {
         if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
