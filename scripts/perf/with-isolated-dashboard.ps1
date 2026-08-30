@@ -653,7 +653,8 @@ function Start-RunnerJob {
         [Parameter(Mandatory)][string] $WorkingDirectory,
         [Parameter(Mandatory)][System.Collections.IDictionary] $Environment,
         [Parameter(Mandatory)][string] $AttemptDirectory,
-        [Parameter(Mandatory)][string] $Name
+        [Parameter(Mandatory)][string] $Name,
+        [string] $LaunchDiagnosticPath
     )
     $stdoutPath = Join-Path $AttemptDirectory (".$Name.stdout.tmp")
     $stderrPath = Join-Path $AttemptDirectory (".$Name.stderr.tmp")
@@ -675,6 +676,28 @@ function Start-RunnerJob {
     }
     catch {
         if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
+        if (-not [string]::IsNullOrEmpty($LaunchDiagnosticPath)) {
+            try {
+                Write-ExclusiveJson -LiteralPath $LaunchDiagnosticPath -Value ([ordered]@{
+                    schema_version = 1
+                    failure_code = 'child-launch-failed'
+                    process_role = $Name
+                    exception_type = $_.Exception.GetType().FullName
+                    exception_hresult = [int64]$_.Exception.HResult
+                    inner_exception_type = if ($null -eq $_.Exception.InnerException) {
+                        $null
+                    } else {
+                        $_.Exception.InnerException.GetType().FullName
+                    }
+                    inner_exception_hresult = if ($null -eq $_.Exception.InnerException) {
+                        [int64]0
+                    } else {
+                        [int64]$_.Exception.InnerException.HResult
+                    }
+                })
+            }
+            catch { }
+        }
         Throw-RunnerFailure 'child-launch-failed'
     }
 }
@@ -1403,6 +1426,8 @@ $teardownPort = $null
 $diagnosticEnabled = $false
 $diagnosticsRoot = $null
 $buildDiagnosticPath = $null
+$launchDiagnosticPaths = @{}
+$descendantDiagnosticPaths = @{}
 
 try {
     if ($PSVersionTable.PSVersion -lt [version]'7.4') { Throw-RunnerFailure 'powershell-version-unsupported' }
@@ -1588,8 +1613,19 @@ try {
     if (-not $attemptCreated) { Throw-RunnerFailure 'attempt-allocation-failed' }
     if ($diagnosticEnabled) {
         $buildDiagnosticPath = Join-Path $diagnosticsRoot "$attemptId-build-descendants.json"
-        if (Test-Path -LiteralPath $buildDiagnosticPath) {
-            Throw-RunnerFailure 'diagnostic-leaf-exists'
+        foreach ($role in @('build', 'harness', 'load', 'budget')) {
+            $launchDiagnosticPaths[$role] = Join-Path $diagnosticsRoot `
+                "$attemptId-$role-launch.json"
+        }
+        foreach ($role in @('load', 'budget')) {
+            $descendantDiagnosticPaths[$role] = Join-Path $diagnosticsRoot `
+                "$attemptId-$role-descendants.json"
+        }
+        foreach ($candidate in @($buildDiagnosticPath) + @($launchDiagnosticPaths.Values) +
+            @($descendantDiagnosticPaths.Values)) {
+            if (Test-Path -LiteralPath $candidate) {
+                Throw-RunnerFailure 'diagnostic-leaf-exists'
+            }
         }
     }
     [void](Assert-RegularPath -LiteralPath $attemptDirectory -Kind Container `
@@ -1625,7 +1661,8 @@ try {
     }
     $buildHandle = Start-RunnerJob -ExecutablePath $buildExecutable -ArgumentList $buildArguments `
         -WorkingDirectory $repositoryRoot -Environment $buildEnvironment `
-        -AttemptDirectory $attemptDirectory -Name 'build'
+        -AttemptDirectory $attemptDirectory -Name 'build' `
+        -LaunchDiagnosticPath $launchDiagnosticPaths['build']
     $allHandles.Add($buildHandle)
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'build' -Phase 'started' `
         -Handle $buildHandle))
@@ -1674,7 +1711,8 @@ try {
 
     $harnessHandle = Start-RunnerJob -ExecutablePath $harnessExecutable -ArgumentList $harnessArguments `
         -WorkingDirectory $repositoryRoot -Environment $harnessEnvironment `
-        -AttemptDirectory $attemptDirectory -Name 'harness'
+        -AttemptDirectory $attemptDirectory -Name 'harness' `
+        -LaunchDiagnosticPath $launchDiagnosticPaths['harness']
     $allHandles.Add($harnessHandle)
     if ((Get-FileSha256Hex -LiteralPath $harnessExecutable) -cne $harnessExecutableSha256) {
         Throw-RunnerFailure 'harness-executable-drift'
@@ -1753,12 +1791,14 @@ try {
     }
     $loadHandle = Start-RunnerJob -ExecutablePath $loadExecutable -ArgumentList $loadArguments `
         -WorkingDirectory $repositoryRoot -Environment $loadEnvironment `
-        -AttemptDirectory $attemptDirectory -Name 'load'
+        -AttemptDirectory $attemptDirectory -Name 'load' `
+        -LaunchDiagnosticPath $launchDiagnosticPaths['load']
     $allHandles.Add($loadHandle)
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'load' -Phase 'started' `
         -Handle $loadHandle))
     $loadExecution = Wait-RunnerJob -Handle $loadHandle -TimeoutMilliseconds 120000 `
-        -FailureCode 'load-failed'
+        -FailureCode 'load-failed' -DiagnosticPath $descendantDiagnosticPaths['load'] `
+        -Name 'load'
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'load' -Phase 'exited' `
         -Handle $loadHandle -Evidence $loadExecution.Evidence))
     if ($loadExecution.Stderr.Length -ne 0) { Throw-RunnerFailure 'load-stderr-not-empty' }
@@ -1797,12 +1837,14 @@ try {
     }
     $budgetHandle = Start-RunnerJob -ExecutablePath $budgetExecutable `
         -ArgumentList $budgetArguments -WorkingDirectory $repositoryRoot `
-        -Environment $budgetEnvironment -AttemptDirectory $attemptDirectory -Name 'budget'
+        -Environment $budgetEnvironment -AttemptDirectory $attemptDirectory -Name 'budget' `
+        -LaunchDiagnosticPath $launchDiagnosticPaths['budget']
     $allHandles.Add($budgetHandle)
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'budget' -Phase 'started' `
         -Handle $budgetHandle))
     $budgetExecution = Wait-RunnerJob -Handle $budgetHandle -TimeoutMilliseconds 120000 `
-        -FailureCode 'budget-failed'
+        -FailureCode 'budget-failed' -DiagnosticPath $descendantDiagnosticPaths['budget'] `
+        -Name 'budget'
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'budget' -Phase 'exited' `
         -Handle $budgetHandle -Evidence $budgetExecution.Evidence))
     if ($budgetExecution.Stderr.Length -ne 0) { Throw-RunnerFailure 'budget-stderr-not-empty' }

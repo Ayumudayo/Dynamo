@@ -1043,6 +1043,66 @@ exit 0
     Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
         -Message 'invalid diagnostic setting has no output side effect'
 
+    $launchFailureModulePath = Join-Path $repository 'scripts\perf\isolated-process-job.psm1'
+    $launchFailureModuleOriginal = [System.IO.File]::ReadAllText(
+        $launchFailureModulePath, $script:Utf8NoBom)
+    $startFailureInjection = @'
+
+function Start-DynamoIsolatedProcess {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory)][string] $ExecutablePath,
+        [Parameter(Mandatory)][object[]] $ArgumentList,
+        [Parameter(Mandatory)][string] $WorkingDirectory,
+        [Parameter(Mandatory)][object] $Environment,
+        [Parameter(Mandatory)][string] $StandardOutputPath,
+        [Parameter(Mandatory)][string] $StandardErrorPath
+    )
+    throw [System.InvalidOperationException]::new('contract launch failure')
+}
+Export-ModuleMember -Function Start-DynamoIsolatedProcess
+'@
+    Write-Utf8File -LiteralPath $launchFailureModulePath `
+        -Value ($launchFailureModuleOriginal + $startFailureInjection + "`n")
+    [void](Invoke-GitChecked -GitPath $gitPath -Repository $repository `
+        -Arguments @('add', '--', 'scripts/perf/isolated-process-job.psm1'))
+    [void](Invoke-GitChecked -GitPath $gitPath -Repository $repository `
+        -Arguments @('commit', '-q', '-m', 'inject child launch failure'))
+    $launchFailure = Invoke-ContractRunner -Repository $repository `
+        -AdditionalEnvironment @{ DYNAMO_PERF_DIAGNOSTICS = '1' }
+    Assert-SafeFailure -Execution $launchFailure -ExpectedCode 'child-launch-failed'
+    $launchDiagnosticLeaves = @(Get-ChildItem -LiteralPath $diagnosticsRoot -File -Force)
+    Assert-Equal -Actual $launchDiagnosticLeaves.Count -Expected 1 `
+        -Message 'one child launch diagnostic is retained'
+    Assert-True -Condition ($launchDiagnosticLeaves[0].Name -cmatch `
+        '^[0-9a-f]{64}-build-launch\.json$') `
+        -Message 'child launch diagnostic is role-bound'
+    Assert-SafeDiagnosticLeaf -File $launchDiagnosticLeaves[0] `
+        -Message 'child launch diagnostic leaf'
+    $launchDiagnosticBody = [System.IO.File]::ReadAllText(
+        $launchDiagnosticLeaves[0].FullName, $script:Utf8NoBom)
+    Assert-True -Condition (-not $launchDiagnosticBody.Contains($script:SecretSentinel)) `
+        -Message 'child launch diagnostic excludes caller secret sentinel'
+    Assert-True -Condition ($launchDiagnosticBody -cnotmatch '(?i)command.?line|environment') `
+        -Message 'child launch diagnostic excludes command line and environment'
+    $launchDiagnostic = $launchDiagnosticBody | ConvertFrom-Json -Depth 8
+    Assert-ExactKeys -Value $launchDiagnostic -Expected @(
+        'schema_version', 'failure_code', 'process_role', 'exception_type',
+        'exception_hresult', 'inner_exception_type', 'inner_exception_hresult'
+    ) -Message 'child launch diagnostic schema'
+    Assert-Equal -Actual $launchDiagnostic.failure_code -Expected 'child-launch-failed' `
+        -Message 'child launch diagnostic failure code'
+    Assert-Equal -Actual $launchDiagnostic.process_role -Expected 'build' `
+        -Message 'child launch diagnostic process role'
+    Remove-Item -LiteralPath $diagnosticsRoot -Recurse -Force
+    Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
+        -Message 'child launch diagnostic fixture is removed'
+    Write-Utf8File -LiteralPath $launchFailureModulePath -Value $launchFailureModuleOriginal
+    [void](Invoke-GitChecked -GitPath $gitPath -Repository $repository `
+        -Arguments @('add', '--', 'scripts/perf/isolated-process-job.psm1'))
+    [void](Invoke-GitChecked -GitPath $gitPath -Repository $repository `
+        -Arguments @('commit', '-q', '-m', 'restore child launch implementation'))
+
     $negativeScenarios = [ordered]@{
         'wrong-ready-nonce' = 'ready-identity-mismatch'
         'counters-drift' = 'counter-drift-detected'
