@@ -315,6 +315,7 @@ foreach ($required in @(
     'Import-Module', 'Start-DynamoIsolatedProcess', 'Get-DynamoIsolatedProcessEvidence',
     'Wait-DynamoIsolatedProcess', 'Stop-DynamoIsolatedProcess',
     'drainTimeoutMilliseconds', '[System.Diagnostics.Stopwatch]::StartNew', 'ActiveProcessIds',
+    '[System.IO.Path]::GetDirectoryName($path)', '-Candidate $helperParent',
     'DYNAMO_PERF_BUILD_REVISION', 'x-dynamo-perf-control',
     'provider_guild_lookups', 'repository_reads', 'denied_requests'
 )) {

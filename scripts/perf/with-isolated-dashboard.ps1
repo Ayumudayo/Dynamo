@@ -914,7 +914,8 @@ function Test-AllowlistedBuildHelperSnapshot {
             try {
                 $programFiles = [System.Environment]::GetFolderPath(
                     [System.Environment+SpecialFolder]::ProgramFiles)
-                [void](Assert-ExistingPathChainNoReparse -Root $programFiles -Candidate $path `
+                $helperParent = [System.IO.Path]::GetDirectoryName($path)
+                [void](Assert-ExistingPathChainNoReparse -Root $programFiles -Candidate $helperParent `
                     -FailureCode 'build-helper-path-invalid')
                 $item = Assert-RegularPath -LiteralPath $path -Kind Leaf `
                     -FailureCode 'build-helper-path-invalid'
