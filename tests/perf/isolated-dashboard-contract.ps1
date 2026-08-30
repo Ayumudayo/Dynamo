@@ -139,7 +139,7 @@ function Write-Utf8File {
 function Get-DescendantRecordPath {
     param([Parameter(Mandatory)][string] $Scenario)
     Assert-True -Condition ($Scenario -cmatch `
-        '^((short|long|allowlisted)-job|harness-long)-descendant-[0-9a-f]{32}$') `
+        '^((short|long|allowlisted)-job|harness-(short|long))-descendant-[0-9a-f]{32}$') `
         -Message 'descendant scenario has a safe unique name'
     return Join-Path ([System.IO.Path]::GetTempPath()) `
         ("dynamo-isolated-dashboard-$Scenario.json")
@@ -499,8 +499,8 @@ if ($Operation -eq 'Budget') {
 }
 
 if ($Operation -ne 'Harness') { exit 2 }
-if ($scenario -cmatch '^harness-long-descendant-[0-9a-f]{32}$') {
-    $delayMilliseconds = 30000
+if ($scenario -cmatch '^harness-(?<lifetime>short|long)-descendant-[0-9a-f]{32}$') {
+    $delayMilliseconds = if ($Matches.lifetime -ceq 'short') { 750 } else { 30000 }
     $descendantStart = [System.Diagnostics.ProcessStartInfo]::new()
     $descendantStart.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
     $descendantStart.UseShellExecute = $false
@@ -1099,14 +1099,57 @@ exit 0
     Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
         -Message 'contract descendant diagnostic leaves no residue'
 
+    $harnessShortScenario = 'harness-short-descendant-' + [Guid]::NewGuid().ToString('N')
+    $harnessShortRecordPath = Get-DescendantRecordPath -Scenario $harnessShortScenario
+    try {
+        $harnessShortExecution = Invoke-ContractRunner -Repository $repository `
+            -Scenario $harnessShortScenario
+        if ($harnessShortExecution.ExitCode -ne 0) {
+            throw "short harness descendant run failed: stdout=$($harnessShortExecution.Stdout.Trim()) stderr=$($harnessShortExecution.Stderr.Trim())"
+        }
+        Assert-Equal -Actual $harnessShortExecution.Stderr -Expected '' `
+            -Message 'short harness descendant success has empty stderr'
+        $harnessShortPublished = $harnessShortExecution.Stdout.Trim() | ConvertFrom-Json -Depth 8
+        $harnessShortSummary = [System.IO.File]::ReadAllText(
+            $harnessShortPublished.summary_path, $script:Utf8NoBom) | ConvertFrom-Json -Depth 32
+        $harnessShortExit = @($harnessShortSummary.job_evidence | Where-Object {
+            $_.name -ceq 'harness' -and $_.phase -ceq 'exited'
+        })
+        Assert-Equal -Actual $harnessShortExit.Count -Expected 1 `
+            -Message 'short harness descendant has one exit evidence row'
+        Assert-Equal -Actual $harnessShortExit[0].active_processes -Expected 0 `
+            -Message 'short harness descendant drains to active zero'
+        $harnessShortRecord = Read-DescendantRecord -LiteralPath $harnessShortRecordPath
+        Assert-Equal -Actual $harnessShortRecord.delay_milliseconds -Expected 750 `
+            -Message 'short harness descendant has a bounded natural lifetime'
+        Assert-RecordedProcessAbsent -Record $harnessShortRecord `
+            -Message 'short harness descendant is absent after successful drain'
+    }
+    finally {
+        if (Test-Path -LiteralPath $harnessShortRecordPath) {
+            Remove-Item -LiteralPath $harnessShortRecordPath -Force
+        }
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath $harnessShortRecordPath)) `
+        -Message 'short harness descendant identity record leaves no residue'
+    $successAttemptCount = @(Get-ChildItem -LiteralPath (Join-Path $repository `
+        'output\perf\attempts') -Directory -Force).Count
+    Assert-Equal -Actual $successAttemptCount -Expected 4 `
+        -Message 'short harness drain adds one retained success'
+
     $harnessDescendantScenario = 'harness-long-descendant-' + [Guid]::NewGuid().ToString('N')
     $harnessDescendantRecordPath = Get-DescendantRecordPath -Scenario $harnessDescendantScenario
+    $harnessDescendantClock = [System.Diagnostics.Stopwatch]::StartNew()
     try {
         $harnessDescendantExecution = Invoke-ContractRunner -Repository $repository `
             -Scenario $harnessDescendantScenario `
             -AdditionalEnvironment @{ DYNAMO_PERF_DIAGNOSTICS = '1' }
+        $harnessDescendantClock.Stop()
         Assert-SafeFailure -Execution $harnessDescendantExecution `
             -ExpectedCode 'teardown-descendants-survived'
+        Assert-True -Condition ($harnessDescendantClock.ElapsedMilliseconds -ge 4500 -and
+            $harnessDescendantClock.ElapsedMilliseconds -lt 20000) `
+            -Message 'harness descendant receives a bounded natural drain interval'
         $harnessDescendantRecord = Read-DescendantRecord `
             -LiteralPath $harnessDescendantRecordPath
         Assert-RecordedProcessAbsent -Record $harnessDescendantRecord `
@@ -1133,12 +1176,15 @@ exit 0
             -Message 'harness descendant diagnostic has one shutdown sample'
         Assert-Equal -Actual $harnessDiagnostic.samples[0].phase -Expected 'graceful-shutdown' `
             -Message 'harness descendant diagnostic phase'
+        Assert-True -Condition ([int64]$harnessDiagnostic.samples[0].observed_elapsed_ms -ge 4500) `
+            -Message 'harness descendant diagnostic records the drain deadline'
         $postHarnessAttemptCount = @(Get-ChildItem -LiteralPath (Join-Path $repository `
             'output\perf\attempts') -Directory -Force).Count
         Assert-Equal -Actual $postHarnessAttemptCount -Expected $successAttemptCount `
             -Message 'harness descendant failure removes its owned attempt'
     }
     finally {
+        $harnessDescendantClock.Stop()
         if (Test-Path -LiteralPath $harnessDescendantRecordPath) {
             Remove-Item -LiteralPath $harnessDescendantRecordPath -Force
         }
@@ -1243,7 +1289,8 @@ Export-ModuleMember -Function Start-DynamoIsolatedProcess
     $successfulAttemptPaths = @(
         $published.attempt_dir,
         $shortDescendantPublished.attempt_dir,
-        $allowlistedPublished.attempt_dir
+        $allowlistedPublished.attempt_dir,
+        $harnessShortPublished.attempt_dir
     )
     $preservedCandidates = @($attemptDirectories | Where-Object {
         $successfulAttemptPaths -cnotcontains $_.FullName

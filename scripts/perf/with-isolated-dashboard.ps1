@@ -1562,7 +1562,7 @@ try {
         $descendantContractScenario = $contractScenario -cmatch `
             '^(short|long|allowlisted)-job-descendant-[0-9a-f]{32}$'
         $harnessDescendantContractScenario = $contractScenario -cmatch `
-            '^harness-long-descendant-[0-9a-f]{32}$'
+            '^harness-(short|long)-descendant-[0-9a-f]{32}$'
         if (-not $knownContractScenario -and -not $descendantContractScenario -and
             -not $harnessDescendantContractScenario) {
             Throw-RunnerFailure 'contract-scenario-invalid'
@@ -1943,12 +1943,26 @@ try {
     if (-not $shutdownWait.Exited -or [int64]$shutdownWait.ExitCode -ne 0) {
         Throw-RunnerFailure 'graceful-shutdown-failed'
     }
-    $closedEvidence = Get-DynamoIsolatedProcessEvidence -Process $harnessHandle.Job
-    if ($closedEvidence.ActiveProcessCount -ne 0 -or $closedEvidence.ActiveProcessIds.Count -ne 0) {
+    $shutdownDrainClock = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($true) {
+        $closedEvidence = Get-DynamoIsolatedProcessEvidence -Process $harnessHandle.Job
+        if ($closedEvidence.ActiveProcessCount -eq 0 -and
+            @($closedEvidence.ActiveProcessIds).Count -eq 0) {
+            break
+        }
+        $shutdownDrainRemaining = 5000 - $shutdownDrainClock.ElapsedMilliseconds
+        if ($shutdownDrainRemaining -le 0) { break }
+        Start-Sleep -Milliseconds ([int][Math]::Min(
+            25,
+            [Math]::Ceiling($shutdownDrainRemaining)))
+    }
+    if ($closedEvidence.ActiveProcessCount -ne 0 -or
+        @($closedEvidence.ActiveProcessIds).Count -ne 0) {
         if ($diagnosticEnabled) {
             try {
                 $harnessShutdownSample = Get-SanitizedProcessSnapshot -Handle $harnessHandle `
-                    -Evidence $closedEvidence -ObservedElapsedMilliseconds 0 `
+                    -Evidence $closedEvidence `
+                    -ObservedElapsedMilliseconds $shutdownDrainClock.ElapsedMilliseconds `
                     -Phase 'graceful-shutdown'
                 Write-DescendantDiagnostic `
                     -LiteralPath $descendantDiagnosticPaths['harness'] `
