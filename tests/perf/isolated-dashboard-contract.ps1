@@ -138,7 +138,7 @@ function Write-Utf8File {
 
 function Get-DescendantRecordPath {
     param([Parameter(Mandatory)][string] $Scenario)
-    Assert-True -Condition ($Scenario -cmatch '^(short|long)-job-descendant-[0-9a-f]{32}$') `
+    Assert-True -Condition ($Scenario -cmatch '^(short|long|allowlisted)-job-descendant-[0-9a-f]{32}$') `
         -Message 'descendant scenario has a safe unique name'
     return Join-Path ([System.IO.Path]::GetTempPath()) `
         ("dynamo-isolated-dashboard-$Scenario.json")
@@ -379,7 +379,7 @@ function Write-NewJson([string] $Path, [object] $Value) {
 $scenario = $env:DYNAMO_PERF_CONTRACT_SCENARIO
 if ($Operation -eq 'Build') {
     if ($env:DYNAMO_PERF_BUILD_REVISION -cnotmatch '^[0-9a-f]{40}$') { exit 2 }
-    if ($scenario -cmatch '^(?<lifetime>short|long)-job-descendant-(?<id>[0-9a-f]{32})$') {
+    if ($scenario -cmatch '^(?<lifetime>short|long|allowlisted)-job-descendant-(?<id>[0-9a-f]{32})$') {
         $delayMilliseconds = if ($Matches.lifetime -ceq 'short') { 750 } else { 30000 }
         $descendantStart = [System.Diagnostics.ProcessStartInfo]::new()
         $descendantStart.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
@@ -741,6 +741,10 @@ exit 0
     Assert-Equal -Actual $summary.exit_classification -Expected 'green' -Message 'summary is green'
     Assert-Equal -Actual $summary.workload.kind -Expected 'Load' -Message 'summary workload kind'
     Assert-Equal -Actual $summary.instance.fixture_mode -Expected 'Public' -Message 'summary fixture mode'
+    Assert-Equal -Actual $summary.build_descendant_cleanup.terminated_allowlisted -Expected $false `
+        -Message 'normal build needs no allowlisted helper cleanup'
+    Assert-Equal -Actual @($summary.build_descendant_cleanup.helpers).Count -Expected 0 `
+        -Message 'normal build has no terminated helper identities'
     foreach ($rssPhase in @('after_ready', 'after_load', 'before_shutdown')) {
         Assert-True -Condition ([int64]$summary.process_rss_bytes.$rssPhase -gt 0) `
             -Message "RSS phase $rssPhase is a positive byte count"
@@ -867,6 +871,64 @@ exit 0
         -Message 'normal and naturally drained successes are retained'
     Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $repository `
         'output\perf\diagnostics'))) -Message 'diagnostics are absent without explicit opt-in'
+
+    $allowlistedScenario = 'allowlisted-job-descendant-' + [Guid]::NewGuid().ToString('N')
+    $allowlistedRecordPath = Get-DescendantRecordPath -Scenario $allowlistedScenario
+    $allowlistedClock = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        $allowlistedExecution = Invoke-ContractRunner -Repository $repository `
+            -Scenario $allowlistedScenario
+        $allowlistedClock.Stop()
+        if ($allowlistedExecution.ExitCode -ne 0) {
+            throw "allowlisted descendant run failed: stdout=$($allowlistedExecution.Stdout.Trim()) stderr=$($allowlistedExecution.Stderr.Trim())"
+        }
+        Assert-Equal -Actual $allowlistedExecution.Stderr -Expected '' `
+            -Message 'allowlisted descendant success has empty stderr'
+        Assert-True -Condition ($allowlistedClock.ElapsedMilliseconds -ge 4500 -and
+            $allowlistedClock.ElapsedMilliseconds -lt 20000) `
+            -Message 'allowlisted descendant cleanup is delayed and bounded'
+        $allowlistedPublished = $allowlistedExecution.Stdout.Trim() | ConvertFrom-Json -Depth 8
+        $allowlistedSummary = [System.IO.File]::ReadAllText(
+            $allowlistedPublished.summary_path, $script:Utf8NoBom) | ConvertFrom-Json -Depth 32
+        Assert-Equal -Actual $allowlistedSummary.build_descendant_cleanup.terminated_allowlisted `
+            -Expected $true -Message 'allowlisted build helper is terminated explicitly'
+        $allowlistedHelperNames = @($allowlistedSummary.build_descendant_cleanup.helpers)
+        Assert-True -Condition ($allowlistedHelperNames.Count -ge 1 -and
+            $allowlistedHelperNames.Count -le 2) `
+            -Message 'allowlisted build helper list has bounded identities'
+        Assert-True -Condition ($allowlistedHelperNames -ccontains 'pwsh') `
+            -Message 'contract process helper identity is retained honestly'
+        Assert-True -Condition (@($allowlistedHelperNames | Where-Object {
+            $_ -cnotin @('pwsh', 'conhost')
+        }).Count -eq 0) -Message 'contract helper identities are allowlisted'
+        $allowlistedBuildExit = @($allowlistedSummary.job_evidence | Where-Object {
+            $_.name -ceq 'build' -and $_.phase -ceq 'exited'
+        })
+        Assert-Equal -Actual $allowlistedBuildExit.Count -Expected 1 `
+            -Message 'allowlisted build has one exit evidence row'
+        Assert-Equal -Actual $allowlistedBuildExit[0].active_processes -Expected 0 `
+            -Message 'allowlisted build cleanup reaches active zero'
+        $allowlistedRecord = Read-DescendantRecord -LiteralPath $allowlistedRecordPath
+        Assert-Equal -Actual $allowlistedRecord.delay_milliseconds -Expected 30000 `
+            -Message 'allowlisted contract descendant requires explicit cleanup'
+        Assert-RecordedProcessAbsent -Record $allowlistedRecord `
+            -Message 'allowlisted contract descendant is absent after cleanup'
+    }
+    finally {
+        $allowlistedClock.Stop()
+        if (Test-Path -LiteralPath $allowlistedRecordPath) {
+            Remove-Item -LiteralPath $allowlistedRecordPath -Force
+        }
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath $allowlistedRecordPath)) `
+        -Message 'allowlisted descendant identity record leaves no residue'
+    $successAttemptCount = @(Get-ChildItem -LiteralPath (Join-Path $repository `
+        'output\perf\attempts') -Directory -Force).Count
+    Assert-Equal -Actual $successAttemptCount -Expected 3 `
+        -Message 'normal, natural drain, and allowlisted cleanup successes are retained'
+    Assert-True -Condition (-not (Test-Path -LiteralPath (Join-Path $repository `
+        'output\perf\diagnostics'))) `
+        -Message 'allowlisted cleanup does not publish a failure diagnostic'
 
     $longDescendantScenario = 'long-job-descendant-' + [Guid]::NewGuid().ToString('N')
     $longDescendantRecordPath = Get-DescendantRecordPath -Scenario $longDescendantScenario
@@ -1003,7 +1065,11 @@ exit 0
         -Directory -Force)
     Assert-Equal -Actual $attemptDirectories.Count -Expected ($successAttemptCount + 1) `
         -Message 'unsafe child junction preserves the failed attempt instead of recursive deletion'
-    $successfulAttemptPaths = @($published.attempt_dir, $shortDescendantPublished.attempt_dir)
+    $successfulAttemptPaths = @(
+        $published.attempt_dir,
+        $shortDescendantPublished.attempt_dir,
+        $allowlistedPublished.attempt_dir
+    )
     $preservedCandidates = @($attemptDirectories | Where-Object {
         $successfulAttemptPaths -cnotcontains $_.FullName
     })

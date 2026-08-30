@@ -846,6 +846,107 @@ function Write-DescendantDiagnostic {
     })
 }
 
+function Test-AllowlistedBuildHelperSnapshot {
+    param(
+        [Parameter(Mandatory)][object] $Sample,
+        [Parameter(Mandatory)][object] $Evidence,
+        [bool] $AllowContractBuildHelper = $false
+    )
+    $rows = @($Sample.processes)
+    $activeIds = @($Evidence.ActiveProcessIds | ForEach-Object { [uint64]$_ } | Sort-Object)
+    $rowIds = @($rows | ForEach-Object { [uint64]$_.pid } | Sort-Object)
+    if ($rows.Count -lt 1 -or $Sample.truncated -or
+        $rows.Count -ne [int64]$Evidence.ActiveProcessCount -or
+        $rowIds.Count -ne $activeIds.Count) {
+        return $false
+    }
+    for ($index = 0; $index -lt $activeIds.Count; $index++) {
+        if ($rowIds[$index] -ne $activeIds[$index]) { return $false }
+    }
+    foreach ($row in $rows) {
+        if (-not $row.observed_in_initial_job_snapshot -or -not $row.job_member -or
+            [uint64]$row.creation_file_time_utc -eq 0 -or
+            [string]$row.query_status -cnotlike 'ok*') {
+            return $false
+        }
+        $path = [System.IO.Path]::GetFullPath([string]$row.executable_path)
+        $isContractPwsh = [string]$row.name -ceq 'pwsh' -and
+            [string]::Equals(
+                $path,
+                [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName,
+                [System.StringComparison]::OrdinalIgnoreCase)
+        $contractConhostPath = Join-Path ([System.Environment]::GetFolderPath(
+            [System.Environment+SpecialFolder]::System)) 'conhost.exe'
+        $isContractConhost = [string]$row.name -ceq 'conhost' -and
+            [string]::Equals(
+                $path,
+                $contractConhostPath,
+                [System.StringComparison]::OrdinalIgnoreCase)
+        $isContractHelper = $AllowContractBuildHelper -and
+            ($isContractPwsh -or $isContractConhost)
+        $isVctip = [string]$row.name -ceq 'vctip' -and
+            $path -cmatch '(?i)\\Microsoft Visual Studio\\[^\\]+\\[^\\]+\\VC\\Tools\\MSVC\\[0-9.]+\\bin\\HostX64\\x64\\VCTIP\.EXE$'
+        if (-not $isContractHelper -and -not $isVctip) { return $false }
+        if ($isVctip) {
+            try {
+                $programFiles = [System.Environment]::GetFolderPath(
+                    [System.Environment+SpecialFolder]::ProgramFiles)
+                [void](Assert-ExistingPathChainNoReparse -Root $programFiles -Candidate $path `
+                    -FailureCode 'build-helper-path-invalid')
+                $item = Assert-RegularPath -LiteralPath $path -Kind Leaf `
+                    -FailureCode 'build-helper-path-invalid'
+                if (-not [string]::Equals(
+                    $item.FullName,
+                    $path,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                    return $false
+                }
+            }
+            catch { return $false }
+        }
+    }
+    return $true
+}
+
+function Get-CurrentBuildHelperEvidence {
+    param(
+        [Parameter(Mandatory)][object] $Handle,
+        [Parameter(Mandatory)][object] $Sample
+    )
+    try {
+        $freshEvidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
+        $rows = @($Sample.processes)
+        $freshIds = @($freshEvidence.ActiveProcessIds | ForEach-Object { [uint64]$_ } | Sort-Object)
+        $rowIds = @($rows | ForEach-Object { [uint64]$_.pid } | Sort-Object)
+        if ($freshIds.Count -ne $rowIds.Count -or
+            $freshIds.Count -ne [int64]$freshEvidence.ActiveProcessCount) {
+            return $null
+        }
+        for ($index = 0; $index -lt $freshIds.Count; $index++) {
+            if ($freshIds[$index] -ne $rowIds[$index]) { return $null }
+        }
+        foreach ($row in $rows) {
+            $process = [System.Diagnostics.Process]::GetProcessById([int]$row.pid)
+            try {
+                $birth = [uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
+                $name = [string]$process.ProcessName
+                $path = [System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)
+            }
+            finally { $process.Dispose() }
+            if ($birth -ne [uint64]$row.creation_file_time_utc -or
+                $name -cne [string]$row.name -or
+                -not [string]::Equals(
+                    $path,
+                    [string]$row.executable_path,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                return $null
+            }
+        }
+        return $freshEvidence
+    }
+    catch { return $null }
+}
+
 function Wait-RunnerJob {
     param(
         [Parameter(Mandatory)][object] $Handle,
@@ -853,7 +954,8 @@ function Wait-RunnerJob {
         [Parameter(Mandatory)][string] $FailureCode,
         [int[]] $AllowedExitCodes = @(0),
         [string] $DiagnosticPath,
-        [string] $Name = 'child'
+        [string] $Name = 'child',
+        [bool] $AllowContractBuildHelper = $false
     )
     $wait = Wait-DynamoIsolatedProcess -Process $Handle.Job -TimeoutMilliseconds $TimeoutMilliseconds
     if (-not $wait.Exited) {
@@ -865,6 +967,8 @@ function Wait-RunnerJob {
     $drainTimeoutMilliseconds = 5000
     $drainClock = [System.Diagnostics.Stopwatch]::StartNew()
     $diagnosticSamples = [System.Collections.Generic.List[object]]::new()
+    $allowedHelperTerminated = $false
+    $allowedHelperNames = @()
     while ($true) {
         $evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
         if ($evidence.ProcessId -ne $Handle.Job.ProcessId -or
@@ -885,10 +989,38 @@ function Wait-RunnerJob {
         }
         $remaining = $drainTimeoutMilliseconds - $drainClock.ElapsedMilliseconds
         if ($remaining -le 0) {
+            $deadlineSample = $null
+            try {
+                $deadlineSample = Get-SanitizedProcessSnapshot -Handle $Handle -Evidence $evidence `
+                    -ObservedElapsedMilliseconds $drainClock.ElapsedMilliseconds -Phase 'drain-deadline'
+                if (Test-AllowlistedBuildHelperSnapshot -Sample $deadlineSample -Evidence $evidence `
+                    -AllowContractBuildHelper $AllowContractBuildHelper) {
+                    $freshHelperEvidence = Get-CurrentBuildHelperEvidence -Handle $Handle `
+                        -Sample $deadlineSample
+                    if ($null -ne $freshHelperEvidence) {
+                        $allowedHelperNames = @($deadlineSample.processes | ForEach-Object { [string]$_.name } | Sort-Object -Unique)
+                        Stop-DynamoIsolatedProcess -Process $Handle.Job
+                        $cleanupClock = [System.Diagnostics.Stopwatch]::StartNew()
+                        while ($true) {
+                            $cleanupEvidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
+                            if ($cleanupEvidence.ActiveProcessCount -eq 0 -and
+                                @($cleanupEvidence.ActiveProcessIds).Count -eq 0) {
+                                $evidence = $cleanupEvidence
+                                $allowedHelperTerminated = $true
+                                break
+                            }
+                            $cleanupRemaining = 5000 - $cleanupClock.ElapsedMilliseconds
+                            if ($cleanupRemaining -le 0) { break }
+                            Start-Sleep -Milliseconds ([int][Math]::Min(25, [Math]::Ceiling($cleanupRemaining)))
+                        }
+                        if ($allowedHelperTerminated) { break }
+                    }
+                }
+            }
+            catch { }
             if (-not [string]::IsNullOrEmpty($DiagnosticPath)) {
                 try {
-                    $diagnosticSamples.Add((Get-SanitizedProcessSnapshot -Handle $Handle -Evidence $evidence `
-                        -ObservedElapsedMilliseconds $drainClock.ElapsedMilliseconds -Phase 'drain-deadline'))
+                    if ($null -ne $deadlineSample) { $diagnosticSamples.Add($deadlineSample) }
                     Write-DescendantDiagnostic -LiteralPath $DiagnosticPath -Handle $Handle `
                         -Name $Name -Samples @($diagnosticSamples.ToArray())
                 }
@@ -903,6 +1035,8 @@ function Wait-RunnerJob {
         Stdout = Read-BoundedUtf8File -LiteralPath $Handle.StdoutPath -AllowEmpty
         Stderr = Read-BoundedUtf8File -LiteralPath $Handle.StderrPath -AllowEmpty
         Evidence = $evidence
+        AllowedHelperTerminated = $allowedHelperTerminated
+        AllowedHelperNames = @($allowedHelperNames)
     }
 }
 
@@ -1345,7 +1479,7 @@ try {
             'ready-timeout', 'shutdown-fail', 'cleanup-junction'
         ) -ccontains $contractScenario
         $descendantContractScenario = $contractScenario -cmatch `
-            '^(short|long)-job-descendant-[0-9a-f]{32}$'
+            '^(short|long|allowlisted)-job-descendant-[0-9a-f]{32}$'
         if (-not $knownContractScenario -and -not $descendantContractScenario) {
             Throw-RunnerFailure 'contract-scenario-invalid'
         }
@@ -1497,7 +1631,9 @@ try {
         -Handle $buildHandle))
     $buildTimeout = if ($contractMode) { 10000 } else { 600000 }
     $buildExecution = Wait-RunnerJob -Handle $buildHandle -TimeoutMilliseconds $buildTimeout `
-        -FailureCode 'build-failed' -DiagnosticPath $buildDiagnosticPath -Name 'build'
+        -FailureCode 'build-failed' -DiagnosticPath $buildDiagnosticPath -Name 'build' `
+        -AllowContractBuildHelper ($contractMode -and
+            $contractScenario -cmatch '^allowlisted-job-descendant-[0-9a-f]{32}$')
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'build' -Phase 'exited' `
         -Handle $buildHandle -Evidence $buildExecution.Evidence))
     Remove-RunnerJobHandle -Handle $buildHandle
@@ -1766,6 +1902,10 @@ try {
             sha256 = $harnessExecutableSha256
             bytes = $harnessExecutableItem.Length
             compiled_revision = $sourceState.head
+        }
+        build_descendant_cleanup = [ordered]@{
+            terminated_allowlisted = [bool]$buildExecution.AllowedHelperTerminated
+            helpers = @($buildExecution.AllowedHelperNames)
         }
         instance = [ordered]@{
             revision = $sourceState.head
