@@ -911,11 +911,12 @@ function Write-DescendantDiagnostic {
         [Parameter(Mandatory)][string] $LiteralPath,
         [Parameter(Mandatory)][object] $Handle,
         [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][object[]] $Samples
+        [Parameter(Mandatory)][object[]] $Samples,
+        [string] $FailureCode = 'child-descendants-survived'
     )
     Write-ExclusiveJson -LiteralPath $LiteralPath -Value ([ordered]@{
         schema_version = 1
-        failure_code = 'child-descendants-survived'
+        failure_code = $FailureCode
         process_role = $Name
         direct_pid = [uint64]$Handle.Job.ProcessId
         direct_creation_file_time_utc = [uint64]$Handle.Job.CreationFileTimeUtc
@@ -1560,7 +1561,10 @@ try {
         ) -ccontains $contractScenario
         $descendantContractScenario = $contractScenario -cmatch `
             '^(short|long|allowlisted)-job-descendant-[0-9a-f]{32}$'
-        if (-not $knownContractScenario -and -not $descendantContractScenario) {
+        $harnessDescendantContractScenario = $contractScenario -cmatch `
+            '^harness-long-descendant-[0-9a-f]{32}$'
+        if (-not $knownContractScenario -and -not $descendantContractScenario -and
+            -not $harnessDescendantContractScenario) {
             Throw-RunnerFailure 'contract-scenario-invalid'
         }
     }
@@ -1672,7 +1676,7 @@ try {
             $launchDiagnosticPaths[$role] = Join-Path $diagnosticsRoot `
                 "$attemptId-$role-launch.json"
         }
-        foreach ($role in @('load', 'budget')) {
+        foreach ($role in @('harness', 'load', 'budget')) {
             $descendantDiagnosticPaths[$role] = Join-Path $diagnosticsRoot `
                 "$attemptId-$role-descendants.json"
         }
@@ -1941,6 +1945,19 @@ try {
     }
     $closedEvidence = Get-DynamoIsolatedProcessEvidence -Process $harnessHandle.Job
     if ($closedEvidence.ActiveProcessCount -ne 0 -or $closedEvidence.ActiveProcessIds.Count -ne 0) {
+        if ($diagnosticEnabled) {
+            try {
+                $harnessShutdownSample = Get-SanitizedProcessSnapshot -Handle $harnessHandle `
+                    -Evidence $closedEvidence -ObservedElapsedMilliseconds 0 `
+                    -Phase 'graceful-shutdown'
+                Write-DescendantDiagnostic `
+                    -LiteralPath $descendantDiagnosticPaths['harness'] `
+                    -Handle $harnessHandle -Name 'harness' `
+                    -Samples @($harnessShutdownSample) `
+                    -FailureCode 'teardown-descendants-survived'
+            }
+            catch { }
+        }
         Throw-RunnerFailure 'teardown-descendants-survived'
     }
     $jobEvidenceRecords.Add((Get-JobEvidenceRow -Name 'harness' -Phase 'exited' `

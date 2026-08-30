@@ -138,7 +138,8 @@ function Write-Utf8File {
 
 function Get-DescendantRecordPath {
     param([Parameter(Mandatory)][string] $Scenario)
-    Assert-True -Condition ($Scenario -cmatch '^(short|long|allowlisted)-job-descendant-[0-9a-f]{32}$') `
+    Assert-True -Condition ($Scenario -cmatch `
+        '^((short|long|allowlisted)-job|harness-long)-descendant-[0-9a-f]{32}$') `
         -Message 'descendant scenario has a safe unique name'
     return Join-Path ([System.IO.Path]::GetTempPath()) `
         ("dynamo-isolated-dashboard-$Scenario.json")
@@ -498,6 +499,31 @@ if ($Operation -eq 'Budget') {
 }
 
 if ($Operation -ne 'Harness') { exit 2 }
+if ($scenario -cmatch '^harness-long-descendant-[0-9a-f]{32}$') {
+    $delayMilliseconds = 30000
+    $descendantStart = [System.Diagnostics.ProcessStartInfo]::new()
+    $descendantStart.FileName = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+    $descendantStart.UseShellExecute = $false
+    $descendantStart.CreateNoWindow = $true
+    foreach ($argument in @(
+        '-NoProfile', '-NonInteractive', '-Command',
+        "[System.Threading.Thread]::Sleep($delayMilliseconds)"
+    )) {
+        [void]$descendantStart.ArgumentList.Add($argument)
+    }
+    $descendant = [System.Diagnostics.Process]::new()
+    $descendant.StartInfo = $descendantStart
+    try {
+        if (-not $descendant.Start()) { exit 98 }
+        $recordPath = Join-Path $env:TEMP ("dynamo-isolated-dashboard-$scenario.json")
+        Write-NewJson -Path $recordPath -Value ([ordered]@{
+            pid = $descendant.Id
+            creation_file_time_utc = $descendant.StartTime.ToUniversalTime().ToFileTimeUtc()
+            delay_milliseconds = $delayMilliseconds
+        })
+    }
+    finally { $descendant.Dispose() }
+}
 if ($scenario -ceq 'ready-timeout') {
     Start-Sleep -Seconds 10
     exit 0
@@ -1072,6 +1098,58 @@ exit 0
         -Message 'long descendant identity record leaves no residue'
     Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
         -Message 'contract descendant diagnostic leaves no residue'
+
+    $harnessDescendantScenario = 'harness-long-descendant-' + [Guid]::NewGuid().ToString('N')
+    $harnessDescendantRecordPath = Get-DescendantRecordPath -Scenario $harnessDescendantScenario
+    try {
+        $harnessDescendantExecution = Invoke-ContractRunner -Repository $repository `
+            -Scenario $harnessDescendantScenario `
+            -AdditionalEnvironment @{ DYNAMO_PERF_DIAGNOSTICS = '1' }
+        Assert-SafeFailure -Execution $harnessDescendantExecution `
+            -ExpectedCode 'teardown-descendants-survived'
+        $harnessDescendantRecord = Read-DescendantRecord `
+            -LiteralPath $harnessDescendantRecordPath
+        Assert-RecordedProcessAbsent -Record $harnessDescendantRecord `
+            -Message 'harness descendant identity is absent after failure cleanup'
+        $harnessDiagnosticLeaves = @(Get-ChildItem -LiteralPath $diagnosticsRoot -File -Force)
+        Assert-Equal -Actual $harnessDiagnosticLeaves.Count -Expected 1 `
+            -Message 'one harness descendant diagnostic is retained'
+        Assert-True -Condition ($harnessDiagnosticLeaves[0].Name -cmatch `
+            '^[0-9a-f]{64}-harness-descendants\.json$') `
+            -Message 'harness descendant diagnostic is role-bound'
+        Assert-SafeDiagnosticLeaf -File $harnessDiagnosticLeaves[0] `
+            -Message 'harness descendant diagnostic leaf'
+        $harnessDiagnosticBody = [System.IO.File]::ReadAllText(
+            $harnessDiagnosticLeaves[0].FullName, $script:Utf8NoBom)
+        Assert-True -Condition (-not $harnessDiagnosticBody.Contains($script:SecretSentinel)) `
+            -Message 'harness descendant diagnostic excludes caller secret sentinel'
+        $harnessDiagnostic = $harnessDiagnosticBody | ConvertFrom-Json -Depth 16
+        Assert-Equal -Actual $harnessDiagnostic.failure_code `
+            -Expected 'teardown-descendants-survived' `
+            -Message 'harness descendant diagnostic failure code'
+        Assert-Equal -Actual $harnessDiagnostic.process_role -Expected 'harness' `
+            -Message 'harness descendant diagnostic process role'
+        Assert-Equal -Actual @($harnessDiagnostic.samples).Count -Expected 1 `
+            -Message 'harness descendant diagnostic has one shutdown sample'
+        Assert-Equal -Actual $harnessDiagnostic.samples[0].phase -Expected 'graceful-shutdown' `
+            -Message 'harness descendant diagnostic phase'
+        $postHarnessAttemptCount = @(Get-ChildItem -LiteralPath (Join-Path $repository `
+            'output\perf\attempts') -Directory -Force).Count
+        Assert-Equal -Actual $postHarnessAttemptCount -Expected $successAttemptCount `
+            -Message 'harness descendant failure removes its owned attempt'
+    }
+    finally {
+        if (Test-Path -LiteralPath $harnessDescendantRecordPath) {
+            Remove-Item -LiteralPath $harnessDescendantRecordPath -Force
+        }
+        if (Test-Path -LiteralPath $diagnosticsRoot -PathType Container) {
+            Remove-Item -LiteralPath $diagnosticsRoot -Recurse -Force
+        }
+    }
+    Assert-True -Condition (-not (Test-Path -LiteralPath $harnessDescendantRecordPath)) `
+        -Message 'harness descendant identity record leaves no residue'
+    Assert-True -Condition (-not (Test-Path -LiteralPath $diagnosticsRoot)) `
+        -Message 'harness descendant diagnostic fixture leaves no residue'
 
     $invalidDiagnosticSetting = Invoke-ContractRunner -Repository $repository `
         -AdditionalEnvironment @{ DYNAMO_PERF_DIAGNOSTICS = '0' }
