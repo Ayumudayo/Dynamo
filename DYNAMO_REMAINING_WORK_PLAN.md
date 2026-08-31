@@ -2,9 +2,11 @@
 
 작성일: 2026-07-31
 
+최종 실행 갱신: 2026-08-31
+
 대상 브랜치: `refactor`
 
-기준 커밋: `073d276` (`fix(perf): await isolated descendant drain`)
+기준 커밋: `067b044` (`fix(perf): validate retained result schema`)
 
 상위 계획: [DYNAMO_IMPROVEMENT_WORK_PLAN.md](DYNAMO_IMPROVEMENT_WORK_PLAN.md)
 
@@ -23,11 +25,11 @@
 | 구분 | 작업 | 상태 | 현재 증거 |
 | --- | --- | --- | --- |
 | 완료 | W0-00, W0-02, W1-01 | 3/36 완료 | `609d3c9`, `99dff55`·`36fef09`, `0f6be8d` |
-| 부분 완료 | W0-01 | 진행 중 | 부하 kernel, Mongo 격리, Windows Job, dashboard runner, browser static contract 구현 |
+| 부분 완료 | W0-01 | R0·R1 완료, R1B 대기 | live Public baseline A/B와 격리 cleanup GREEN; 사람 대상 UX baseline과 실제 browser는 미완료 |
 | 미착수 | 나머지 32개 | 미착수 | 상위 계획의 작업 추적표 기준 |
-| 현재 중요 경로 | W0-01A runner/Public → R1B UX baseline → W1-03 → W0-01B 실제 브라우저 → W1-04/05 | 차단 해소 필요 | live runner의 `child-descendants-survived` |
+| 현재 중요 경로 | R1B 기술 preflight → UX baseline → W1-03 → W0-01B 실제 브라우저 → W1-04/05 | 기술·외부 준비 필요 | human-study runner/state/reset/recorder와 참가자 10명 미준비 |
 
-완료율은 여전히 3/36이다. W0-01에 여러 지원 커밋이 들어갔지만 동일 revision·fixture의 retained baseline 2회와 실제 브라우저 실행이 없으므로 완료 작업으로 올리지 않는다.
+완료율은 여전히 3/36이다. 동일 revision·fixture의 retained Public baseline 2회는 확보했지만 R1B의 50 trial과 실제 브라우저 실행이 없으므로 W0-01 전체를 완료 작업으로 올리지 않는다.
 
 ### 2.2 이미 확보한 기반
 
@@ -39,15 +41,14 @@
 | Mongo 격리 | MongoDB 7 격리 runner와 cleanup contract | CI와 계약 테스트 |
 | 부하 측정 | deterministic load/budget kernel | 단위 계약 완료 |
 | 프로세스 격리 | Windows Job primitive | 계약 테스트 완료 |
-| dashboard 격리 | ACL 보호와 descendant drain 논리 | 계약 테스트 완료 |
-| 브라우저 안전 계약 | same-origin, no-proxy, no-service-worker, no-write, 고정 Playwright/Chromium | Node static contract 59/59 |
+| dashboard 격리 | ACL, sanitized 진단, VCTIP cleanup, physical Node path, graceful drain | dashboard contract 758 assertions |
+| 브라우저·UX 증거 안전 계약 | same-origin, no-proxy, no-service-worker, no-write, 고정 Playwright/Chromium, UX fail-closed schema | Node contract 73/73 (기존 60 + UX 13) |
+| Public live baseline | 동일 `067b044`, fixture, environment에서 A/B GREEN | 각 4 leaf, budget GREEN, secret pattern 0, Job PID 0 |
 
-관련 커밋은 `9a44a50`부터 `073d276`까지다. 2026-07-31 스냅샷에서 작업 트리는 깨끗하고 `cargo`, `rustc`, `link`, `mspdbsrv`, dashboard harness 잔류 프로세스는 없었다. 이 사실은 이전 실패가 성공으로 바뀌었다는 뜻이 아니라 현재 정리가 끝났다는 뜻만 가진다.
+관련 기반 커밋은 `9a44a50`부터 `073d276`까지이며, live closure는 `60bdf63`부터 `067b044`까지다. 2026-08-31 A/B 종료 뒤 `cargo`, `rustc`, `link`, `mspdbsrv`, `vctip`, dashboard harness 잔류 프로세스는 0이었다.
 
 ### 2.3 아직 증명하지 못한 것
 
-- 실제 `Public+Load` 실행은 `attempt-acl-failed`를 수정한 뒤에도 `child-descendants-survived`에서 끝났다.
-- `output/perf`에 유지할 수 있는 live baseline 결과가 없다.
 - runner는 인자를 정의하고 있지만 현재 실제 허용 조합은 `Public+Load`뿐이다.
 - `ReadOnly+Playwright`, `GuildDetail+Load`, `Public+Npm`은 결과 inventory에 예정 조합으로만 존재한다.
 - Playwright 계약 테스트는 통과했지만 실제 Chromium 12-cell UI matrix는 실행하지 않았다.
@@ -91,6 +92,8 @@ W0-01 전체 상태는 W0-01B까지 끝날 때까지 “진행 중”으로 유�
 ## 4. R0 — live runner 차단 해소
 
 대응 작업: W0-01 잔여
+
+상태: 완료 (`067b044`, 2026-08-31)
 
 예상: 1~2 엔지니어일
 
@@ -143,9 +146,21 @@ npm run perf:test
 - ACL owner를 바꾸거나 현재 사용자와 SYSTEM 외 ACE가 생기는 경우
 - 비밀값이 결과 파일이나 console에 노출되는 경우
 
+### 4.5 실행 기록 — 2026-08-31
+
+- protected opt-in 진단으로 direct cargo 종료 후 동일 PID의 `VCTIP.EXE`가 5초 이상 남는 것을 확인했다. 최초 증거 SHA-256은 `bdd91d06608c5d10d0275690e5cdeed5364148379816822584aac7abfda17279`이며 임시 진단 파일은 결론 기록 후 삭제했다.
+- `VCTIP.EXE`는 PID·생성시각·Job 재소속·`Program Files\Microsoft Visual Studio\...\VC\Tools\MSVC\...\VCTIP.EXE` regular non-reparse path가 모두 재검증될 때만 Job-scoped 종료한다. mixed/unknown PID는 계속 fail-closed다.
+- NVM의 `C:\nvm4w\nodejs` directory symlink는 최종 물리 Node executable로 해석한 뒤 전체 경로를 다시 non-reparse 검증한다.
+- dashboard graceful shutdown은 5초 bounded drain을 사용한다. 750ms harness descendant는 GREEN, 30초 descendant는 RED다.
+- nonce-bearing raw load result는 임시 파일에서만 identity 검증에 사용하고, nonce 없는 retained result만 발행한다.
+- 계약 결과: isolated process Job PASS, isolated dashboard 758 assertions PASS, Node perf/browser 60/60 PASS.
+- 관련 커밋: `60bdf63`, `45351f5`, `8dbe69b`, `bed59b4`, `835adec`, `239d3e9`, `14939b9`, `7fb67a0`, `067b044`.
+
 ## 5. R1 — 실제 Public 성능 기준선 발행
 
 대응 작업: W0-01 잔여
+
+상태: 완료 (`067b044`, 2026-08-31)
 
 예상: R0 완료 후 0.5~1 엔지니어일
 
@@ -158,7 +173,7 @@ pwsh -NoProfile -File scripts/perf/with-isolated-dashboard.ps1 -FixtureMode Publ
 pwsh -NoProfile -File scripts/perf/with-isolated-dashboard.ps1 -FixtureMode Public -Workload Load -OutputRoot output/perf -Label public-baseline-b -Path / -Requests 50 -Concurrency 1
 ```
 
-현재 이 명령은 GREEN으로 간주하지 않는다. R0 수정 전에는 재실행 횟수를 늘리지 않는다.
+두 명령은 `067b044`에서 GREEN으로 완료했다. 이후 재실행은 회귀 확인이나 승인된 새 baseline 발행 때만 한다.
 
 ### 5.2 결과 계약
 
@@ -172,13 +187,54 @@ pwsh -NoProfile -File scripts/perf/with-isolated-dashboard.ps1 -FixtureMode Publ
 
 완료 후 상위 계획의 W0-01을 바로 완료로 바꾸지 않는다. R1B의 유효한 50-trial evidence와 W0-01B의 실제 read-only browser baseline까지 확보한 뒤 완료 여부를 판정한다.
 
+### 5.3 실행 기록 — 2026-08-31
+
+공통 binding:
+
+- revision: `067b044bcf09540b9c327672ef7b9165fab15181`
+- fixture SHA-256: `5f08c171827be0ad90f5a6b7c980b4ab21d938cd2e73137f03f5ac7360b64885`
+- environment fingerprint: `6e1b82ceb8a8a49b7b29aef87b5f9d555aa34b00600617c0dbbc71079ab21757`
+- build profile: `release`
+
+| 항목 | baseline A | baseline B |
+| --- | ---: | ---: |
+| attempt | `3ff97e385a03d08067630bb4b0296c91c315ea9046b6927a18a51cf22acafec4` | `01f1a1f9991ad4e95c39fe6cd470af4b1eb79ee71f3398b20e27615a75d7a958` |
+| p50 | 0.5983 ms | 0.6051 ms |
+| p95 | 0.9472 ms | 0.9325 ms |
+| failed | 0 | 0 |
+| decoded/wire | 25,902 bytes/request | 25,902 bytes/request |
+| RSS after ready/load/before shutdown | 7,516,160 / 8,323,072 / 8,339,456 | 7,221,248 / 7,929,856 / 7,929,856 |
+| budget | GREEN | GREEN |
+| repository/outbound counter | before/after 모두 0 | before/after 모두 0 |
+| build/load/budget/harness exit PID | 모두 0 | 모두 0 |
+| VCTIP cleanup | 수행, helper `vctip` | 불필요 |
+
+각 attempt는 marker/result/budget/summary의 정확히 4개 leaf만 가진다. result, budget, summary SHA-256은 다음과 같다.
+
+| 실행 | result | budget | summary |
+| --- | --- | --- | --- |
+| A | `62c3af48986b8312cd698122690d9cc5476864a07dba764e5d07f12daa19a858` | `fbb2015b813ccbda43cfcd79fe88d880e01beb0a2bd516f51c9c826d9e91fcdc` | `000a572b9e7b722ba8348e3f1485a93817d4c24d6ba288662e6328cbad43f536` |
+| B | `c453725fd6386068b67577df0091adf386c9d22965574c910f0ff599c6142a95` | `4ab8093dc0c16caced13335ac690e7f9825324fef9fc313f30b211947b23d4a1` | `a535171ef6f02b81cd639b8e5562803ad08edcceafaed806589078665077e92e` |
+
+repo-local evidence path는 `output/perf/attempts/<attempt>`이며 Git에는 포함하지 않는다. 두 inventory 모두 URI credential, nonce, cookie, authorization, raw secret pattern 0을 확인했다.
+
 ## 5A. R1B — 사람 대상 UX baseline 발행
 
 대응 작업: W0-01 잔여
 
+상태: HOLD — evidence schema/validator 완료; human-study runner/state/reset/recorder와 외부 참가자 10명 필요
+
+실행 runbook: [docs/ux/DYNAMO_UX_BASELINE_RUNBOOK.md](docs/ux/DYNAMO_UX_BASELINE_RUNBOOK.md)
+
 예상: 2~3 엔지니어일, 참가자 모집 대기시간 별도
 
 W1-03을 포함한 dashboard UI·상태 표현 변경 전에 현재 UI의 baseline을 먼저 고정한다. 이 단계가 끝나기 전에는 W1-03, W1-04, W1-05, W5의 UI 변경을 시작하지 않는다.
+
+2026-08-31 현재 trial을 생성하지 않았다. 실제 참가자가 없는 결과, 현재 fixture가 재현하지 못하는 과업, 외부 시스템에 연결된 session은 evidence로 인정하지 않는다.
+
+코드 준비도 점검 결과 T1은 UI 동작만 READY, T2는 상태 해석 baseline으로 조건부 READY, T3~T5와 공통 launch/reset/evidence 경로는 HOLD다. 세부 근거와 기술 선행물은 runbook 2.1절을 따른다. 미래 dirty/status/Undo 기능이 현재 UI에 이미 있는 것처럼 fake fixture를 만들지 않는다.
+
+증거 schema와 fail-closed validator는 baseline/final phase binding, 10명·50 trial, Williams sequence, evaluator/browser/fixture digest, right-censor, help, outbound 0, task별 write·state restore oracle을 검증한다. 아직 recorder가 아니며 실제 참가자 결과를 생성하지 않는다.
 
 ### 5A.1 실행 계약
 
@@ -457,7 +513,7 @@ W1-02는 네트워크 지연을 무한 대기로 바꾸지 않으며 timeout, re
 
 ## 16. 현재 금지되는 완료 주장
 
-- Public live baseline 2회가 없으므로 W0-01 완료라고 말하지 않는다.
+- Public live baseline A/B는 완료했지만 R1B와 R3가 없으므로 W0-01 전체 완료라고 말하지 않는다.
 - static browser contract만으로 Playwright E2E가 통과했다고 말하지 않는다.
 - 실제 12-cell matrix와 baseline/final 사람 검증 전에는 UI가 “정말 편리하다”고 말하지 않는다.
 - 사용량 제한으로 중단한 deep scan을 전체 보안 검증 완료로 표현하지 않는다.

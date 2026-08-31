@@ -36,7 +36,7 @@
 | 상위 보안·성능·UI 계획 | 작성 완료 | 개선 대상과 장기 의존성은 정리되어 있음 |
 | 실행 통제 부트스트랩 | 완료 | 커밋 714a17b, 제품 동작 변경 없음 |
 | 보안 제품 개선 | W1-01 완료 | moderation hierarchy와 secret file 안전 바닥은 적용, 나머지 권한·effect 작업은 미완료 |
-| 성능 제품 개선 | W0-01 진행 중 | strict Clippy 기준은 복구했고 재현 가능한 측정·Mongo 격리 도구를 구현 중 |
+| 성능 제품 개선 | W0-01 진행 중 | R0 live runner와 R1 Public A/B 완료; R1B UX baseline과 R3 actual browser 대기 |
 | 대시보드 UI 개선 | W0-00 완료 | 외부 폰트 요청은 제거, 상태 오표시·false success·모바일·접근성 개선은 미완료 |
 | 전체 제품 개선 진척도 | 3/36 완료, 약 8% | W0-00, W0-02, W1-01 완료; W0-01 착수 |
 
@@ -51,6 +51,13 @@
 - 609d3c9: W0-00 deterministic Fira 자가 호스팅, content-addressed route, ETag/304 적용.
 - 36fef09: locked workspace check/test와 strict Clippy를 CI 필수 게이트로 승격.
 - W0-01: retained baseline을 발행하기 전에 dependency-free load/budget kernel과 isolated Mongo runner/cleanup contract를 구현 중.
+
+### 2.2 실행 현황 갱신 — 2026-08-31
+
+- `60bdf63`~`067b044`: sanitized descendant/launch 진단, exact VCTIP Job cleanup, physical Node path resolution, graceful shutdown drain, nonce-free retained result schema를 적용했다.
+- isolated process Job PASS, isolated dashboard 758 assertions PASS, Node perf/browser/UX evidence 73/73 PASS(기존 60 + UX 13).
+- `067b044` 동일 revision·fixture·environment에서 Public baseline A/B를 완료했다. 두 실행 모두 budget GREEN, failed 0, repository/outbound counter 0, exit Job PID 0, retained secret pattern 0이다.
+- R1B 증거 schema/validator는 준비됐지만 runner/state/reset/recorder와 cohort 결과는 없다. W0-01 전체는 완료가 아니며 baseline 10명·50 trial과 R3 실제 Chromium 12-cell이 남아 있다.
 
 ## 3. 개선 목표와 완료 정의
 
@@ -308,8 +315,8 @@ UX baseline protocol:
 - 각 cohort는 Dynamo를 가끔 쓰는 관리자 5명과 정기적으로 쓰는 관리자 5명으로 구성하고 구현 참여자는 제외한다.
 - 참가자 1명당 다섯 과업을 한 번씩 수행해 phase당 정확히 50 trial을 만든다.
 - 과업 순서는 balanced Latin-square로 배치한다.
-- browser, viewport, font-ready 조건, 평가자 script, fixture hash를 두 phase에서 고정한다.
-- completed, unassisted, duration_ms, help_count, critical_error, SEQ 1~7을 trial별로 기록한다.
+- browser, viewport, font-ready 조건, 평가자 script SHA-256, fixture hash를 두 phase에서 고정한다.
+- participant ID는 `B-`/`F-` phase pseudonym만 사용하고, completed, unassisted, duration_ms, help_count, critical_error, SEQ 1~7, write_count, outbound_count 0, start_state_hash, end_state_hash를 trial별로 기록한다.
 - shared, staging, production guild와 database는 사용하지 않는다.
 
 완료 기준:
@@ -1126,21 +1133,22 @@ W5-06 최종 matrix는 여기에 save pending/error/success/outcome-unknown, dep
 
 1. 지정 guild를 검색하고 지정 module control을 연다.
 2. deployment=false, guild=true에서 local gate, effective state, blocker를 정확히 설명한다.
-3. 지정 command를 filter하고 form을 수정한 뒤 dirty close를 거부·수락해 committed 값으로 돌아간다.
-4. 응답 유실에서 재전송하지 않고 원래 request ID의 status 조회로 결론을 얻는다.
-5. deployment 영향 확인 후 변경하고 Undo해 정확한 이전 presence/value로 돌아간다.
+3. 지정 command 설정을 변경하고 닫기를 한 번 취소한 뒤, 변경을 버리고 서버의 committed 값으로 돌아간다.
+4. 저장 응답 유실에서 같은 변경을 재전송하지 않고 방금 요청의 결과를 확인해 작업을 끝낸다.
+5. deployment 전체 영향을 확인한 뒤 지정 값을 변경하고, 방금 변경을 되돌려 시작 전 presence/value로 복구한다.
 
 연구 protocol:
 
 - W0-01과 다른 final cohort 10명, occasional 5명/regular 5명, 구현 참여자 제외.
 - 참가자당 5개 과업, 정확히 50 final trial, balanced Latin-square.
-- 같은 fixture hash, browser, viewport, font-ready, 평가자 script를 사용한다.
+- 같은 fixture hash, browser, viewport, font-ready, 평가자 script SHA-256을 사용한다.
 - 도움은 참가자가 30초 동안 진전하지 못하고 요청했을 때만 정해진 한 문장을 제공하며 해당 trial은 assisted다.
 - timer는 과업 카드 공개 시 시작하고 성공 DOM/state 도달 또는 중단 선언 시 종료한다.
 - critical error는 false_success, wrong_scope, duplicate_write, unsafe_cleanup, unrecovered_data_loss의 닫힌 목록이다.
 - 과업 4·5는 deterministic fake dashboard에서만 수행하고 trial마다 fixture를 초기화한다.
 - 예상 route를 모두 mock하고 unmocked request를 abort하며 외부 Mongo/Discord/Toss 요청은 0이다.
 - shared/staging/production guild를 사용하지 않는다.
+- evidence는 W0-01 schema/validator 계약에 맞춰 phase pseudonym, write_count, outbound_count 0, start_state_hash, end_state_hash를 포함해 보존하고 결과 요약에는 participant/trial raw record를 싣지 않는다.
 
 mutation oracle:
 
@@ -1469,7 +1477,7 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 | ID | 작업 | 우선순위 | 상태 | 선행조건 | 예상 |
 | --- | --- | --- | --- | --- | --- |
 | W0-00 | self-hosted deterministic Fira | P1 | 완료 (609d3c9) | 없음 | 1일 |
-| W0-01 | 성능·Mongo·브라우저·UX 기준선 | P0 | 진행 중 | W0-00 완료 | 4~6일 |
+| W0-01 | 성능·Mongo·브라우저·UX 기준선 | P0 | 진행 중 (R0/R1 완료, R1B/R3 대기) | W0-00 완료 | 4~6일 |
 | W0-02 | strict Clippy blocker | P1 | 완료 (99dff55) | 없음 | 0.5일 |
 | W1-01 | moderation/env tactical floor | P0 | 완료 (0f6be8d) | 없음, focused RED부터 | 1~2일 |
 | W1-02 | finite HTTP/Discord directory | P1 | 미착수 | W0-01 | 2~3일 |

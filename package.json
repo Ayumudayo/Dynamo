@@ -8,7 +8,7 @@
     "node": ">=18.0.0"
   },
   "scripts": {
-    "perf:test": "node --test tests/perf/dashboard-load.test.cjs tests/perf/dashboard-browser-runner.test.cjs",
+    "perf:test": "node --test tests/perf/dashboard-load.test.cjs tests/perf/dashboard-browser-runner.test.cjs tests/perf/dashboard-ux-study-validator.test.cjs",
     "perf:dashboard": "node scripts/perf/dashboard-load.cjs",
     "dashboard:smoke:auth": "node scripts/perf/refuse-unsafe-dashboard-smoke.cjs",
     "dashboard:smoke": "node scripts/perf/refuse-unsafe-dashboard-smoke.cjs",

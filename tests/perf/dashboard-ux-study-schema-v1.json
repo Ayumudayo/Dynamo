@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dynamo.invalid/schemas/dashboard-ux-study-v1.json",
+  "title": "Dynamo dashboard UX study evidence v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "study_phase", "manifest", "trials"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "study_phase": { "enum": ["baseline", "final"] },
+    "manifest": { "$ref": "#/$defs/manifest" },
+    "trials": {
+      "type": "array",
+      "minItems": 50,
+      "maxItems": 50,
+      "items": { "$ref": "#/$defs/trial" }
+    }
+  },
+  "$defs": {
+    "lowerHex40": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "lowerHex64": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "manifest": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["study_revision", "fixture_sha256", "evaluator_script_sha256", "browser"],
+      "properties": {
+        "study_revision": { "$ref": "#/$defs/lowerHex40" },
+        "fixture_sha256": { "$ref": "#/$defs/lowerHex64" },
+        "evaluator_script_sha256": { "$ref": "#/$defs/lowerHex64" },
+        "browser": { "$ref": "#/$defs/browser" }
+      }
+    },
+    "browser": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "playwright_version",
+        "revision",
+        "version",
+        "viewport_width",
+        "viewport_height",
+        "zoom_percent",
+        "os_scale_percent",
+        "font_ready"
+      ],
+      "properties": {
+        "name": { "const": "chromium" },
+        "playwright_version": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$", "maxLength": 32 },
+        "revision": { "type": "string", "pattern": "^[0-9]{1,10}$" },
+        "version": { "type": "string", "pattern": "^[0-9]+(?:\\.[0-9]+){2,3}$", "maxLength": 32 },
+        "viewport_width": { "type": "integer", "minimum": 320, "maximum": 7680 },
+        "viewport_height": { "type": "integer", "minimum": 320, "maximum": 4320 },
+        "zoom_percent": { "type": "integer", "minimum": 50, "maximum": 200 },
+        "os_scale_percent": { "type": "integer", "minimum": 100, "maximum": 300 },
+        "font_ready": { "const": true }
+      }
+    },
+    "trial": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "schema_version",
+        "study_phase",
+        "study_revision",
+        "fixture_sha256",
+        "browser_manifest_sha256",
+        "participant_id",
+        "experience_group",
+        "sequence_id",
+        "task_id",
+        "position",
+        "completed",
+        "unassisted",
+        "duration_ms",
+        "comparison_duration_ms",
+        "help_count",
+        "critical_error",
+        "seq",
+        "write_count",
+        "outbound_count",
+        "start_state_hash",
+        "end_state_hash"
+      ],
+      "properties": {
+        "schema_version": { "const": 1 },
+        "study_phase": { "enum": ["baseline", "final"] },
+        "study_revision": { "$ref": "#/$defs/lowerHex40" },
+        "fixture_sha256": { "$ref": "#/$defs/lowerHex64" },
+        "browser_manifest_sha256": { "$ref": "#/$defs/lowerHex64" },
+        "participant_id": { "type": "string", "pattern": "^[BF]-[OR]0[1-5]$" },
+        "experience_group": { "enum": ["occasional", "regular"] },
+        "sequence_id": { "type": "string", "pattern": "^S(?:0[1-9]|10)$" },
+        "task_id": { "enum": ["T1", "T2", "T3", "T4", "T5"] },
+        "position": { "type": "integer", "minimum": 1, "maximum": 5 },
+        "completed": { "type": "boolean" },
+        "unassisted": { "type": "boolean" },
+        "duration_ms": { "type": "integer", "minimum": 1, "maximum": 180000 },
+        "comparison_duration_ms": { "type": "integer", "minimum": 1, "maximum": 180000 },
+        "help_count": { "type": "integer", "minimum": 0, "maximum": 1 },
+        "critical_error": {
+          "enum": ["none", "false_success", "wrong_scope", "duplicate_write", "unsafe_cleanup", "unrecovered_data_loss"]
+        },
+        "seq": { "type": "integer", "minimum": 1, "maximum": 7 },
+        "write_count": { "type": "integer", "minimum": 0 },
+        "outbound_count": { "const": 0 },
+        "start_state_hash": { "$ref": "#/$defs/lowerHex64" },
+        "end_state_hash": { "$ref": "#/$defs/lowerHex64" }
+      }
+    }
+  }
+}
