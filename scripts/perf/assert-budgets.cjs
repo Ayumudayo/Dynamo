@@ -109,12 +109,12 @@ function assertCompatible(current, baseline) {
 }
 
 function assertBudgets({ current, budget, baseline = undefined }) {
-  const validatedCurrent = validateResultArtifact(current);
+  const validatedCurrent = validateResultArtifact(current, { retained: true });
   const validatedBudget = validateBudget(budget);
   let validatedBaseline;
   if (validatedBudget.max_p95_ratio !== undefined) {
     if (baseline === undefined) fail('baseline is required for max_p95_ratio');
-    validatedBaseline = validateResultArtifact(baseline);
+    validatedBaseline = validateResultArtifact(baseline, { retained: true });
     assertCompatible(validatedCurrent, validatedBaseline);
     if (validatedBaseline.p95_ms <= 0) fail('baseline p95 must be positive for a ratio check');
   } else if (baseline !== undefined) {

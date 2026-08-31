@@ -155,6 +155,12 @@ function resultArtifact(overrides = {}) {
   };
 }
 
+function retainedResultArtifact(overrides = {}) {
+  const result = resultArtifact(overrides);
+  delete result.instance.nonce;
+  return result;
+}
+
 test('runLoad records bounded concurrency, decoded and wire bytes, and percentiles', async (t) => {
   const body = Buffer.alloc(4096, 'a');
   const compressed = zlib.gzipSync(body);
@@ -672,6 +678,26 @@ test('result artifacts reject network-path and control-character routes', () => 
   }
 });
 
+test('raw and retained result schemas keep handoff nonce boundaries separate', () => {
+  assert.doesNotThrow(() => validateResultArtifact(resultArtifact()));
+  assert.doesNotThrow(() => validateResultArtifact(
+    retainedResultArtifact(),
+    { retained: true },
+  ));
+  assert.throws(
+    () => validateResultArtifact(retainedResultArtifact()),
+    /result instance fields do not match schema/,
+  );
+  assert.throws(
+    () => validateResultArtifact(resultArtifact(), { retained: true }),
+    /result instance fields do not match schema/,
+  );
+  assert.throws(
+    () => validateResultArtifact(retainedResultArtifact(), { retained: false }),
+    /may only be enabled with true/,
+  );
+});
+
 test('runCli publishes failed request evidence and returns exit code 2', async (t) => {
   const { directory, separator } = temporaryDirectory(t);
   const server = http.createServer((request, response) => {
@@ -788,8 +814,8 @@ test('concurrent publishers cannot overwrite the winning result', async (t) => {
 });
 
 test('budget assertions enforce absolute limits and compatible ratio baselines', () => {
-  const baseline = resultArtifact({ p95_ms: 25 });
-  const current = resultArtifact({ p95_ms: 29.9 });
+  const baseline = retainedResultArtifact({ p95_ms: 25 });
+  const current = retainedResultArtifact({ p95_ms: 29.9 });
 
   const observations = assertBudgets({
     current,
@@ -806,7 +832,7 @@ test('budget assertions enforce absolute limits and compatible ratio baselines',
   assert.equal(observations.passed, true);
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact({ p95_ms: 31, max_ms: 31 }),
+      current: retainedResultArtifact({ p95_ms: 31, max_ms: 31 }),
       baseline,
       budget: { max_p95_ratio: 1.2, max_failed: 0 },
     }),
@@ -815,14 +841,14 @@ test('budget assertions enforce absolute limits and compatible ratio baselines',
   assert.throws(
     () => assertBudgets({
       current,
-      baseline: resultArtifact({ path: '/different' }),
+      baseline: retainedResultArtifact({ path: '/different' }),
       budget: { max_p95_ratio: 1.2, max_failed: 0 },
     }),
     /compatible/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact({ p50_ms: 10, p95_ms: 11 }),
+      current: retainedResultArtifact({ p50_ms: 10, p95_ms: 11 }),
       budget: { max_p95_ms: 10, max_failed: 0 },
     }),
     /p95_ms/,
@@ -830,7 +856,7 @@ test('budget assertions enforce absolute limits and compatible ratio baselines',
   assert.throws(
     () => assertBudgets({
       current,
-      baseline: resultArtifact({
+      baseline: retainedResultArtifact({
         ok: 19,
         failed: 1,
         statuses: { 200: 19, 500: 1 },
@@ -840,18 +866,18 @@ test('budget assertions enforce absolute limits and compatible ratio baselines',
     /baseline failed requests/,
   );
   const compatibilityMismatches = [
-    resultArtifact({
+    retainedResultArtifact({
       fixture: { version: 'public-v1', sha256: 'f'.repeat(64) },
     }),
-    resultArtifact({
+    retainedResultArtifact({
       environment: {
-        ...resultArtifact().environment,
+        ...retainedResultArtifact().environment,
         fingerprint_sha256: 'f'.repeat(64),
       },
     }),
-    resultArtifact({
+    retainedResultArtifact({
       instance: {
-        ...resultArtifact().instance,
+        ...retainedResultArtifact().instance,
         fixture_mode: 'ReadOnly',
       },
     }),
@@ -871,50 +897,50 @@ test('budget assertions enforce absolute limits and compatible ratio baselines',
 test('budget assertions reject missing baselines and unknown budget keys', () => {
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact(),
+      current: retainedResultArtifact(),
       budget: { max_p95_ratio: 1.2, max_failed: 0 },
     }),
     /baseline/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact(),
+      current: retainedResultArtifact(),
       budget: { max_failed: 0, permissive: true },
     }),
     /unknown budget key/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact(),
+      current: retainedResultArtifact(),
       budget: { max_failed: 0, require_wire_lt_decoded: false },
     }),
     /only be enabled with true/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact({ content_encodings: {} }),
+      current: retainedResultArtifact({ content_encodings: {} }),
       budget: { max_p95_ms: 30, max_failed: 0 },
     }),
     /missing response evidence/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact({ statuses: {} }),
+      current: retainedResultArtifact({ statuses: {} }),
       budget: { max_p95_ms: 30, max_failed: 0 },
     }),
     /missing response evidence/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact(),
-      baseline: resultArtifact(),
+      current: retainedResultArtifact(),
+      baseline: retainedResultArtifact(),
       budget: { max_p95_ms: 30, max_failed: 0 },
     }),
     /only allowed for max_p95_ratio/,
   );
   assert.throws(
     () => assertBudgets({
-      current: resultArtifact({ content_encodings: { br: 20 } }),
+      current: retainedResultArtifact({ content_encodings: { br: 20 } }),
       budget: {
         max_failed: 0,
         allowed_content_encodings: ['gzip'],
@@ -928,7 +954,7 @@ test('budget CLI reads validated files and emits only the safe decision', (t) =>
   const { directory, separator } = temporaryDirectory(t);
   const currentPath = `${directory}${separator}current.json`;
   const budgetPath = `${directory}${separator}budget.json`;
-  fs.writeFileSync(currentPath, JSON.stringify(resultArtifact()), { flag: 'wx' });
+  fs.writeFileSync(currentPath, JSON.stringify(retainedResultArtifact()), { flag: 'wx' });
   fs.writeFileSync(
     budgetPath,
     JSON.stringify({ max_p95_ms: 30, max_failed: 0 }),
@@ -953,7 +979,7 @@ test('budget CLI emits observed and allowed values on threshold failure', (t) =>
   const budgetPath = `${directory}${separator}budget.json`;
   fs.writeFileSync(
     currentPath,
-    JSON.stringify(resultArtifact({ p50_ms: 10, p95_ms: 11 })),
+    JSON.stringify(retainedResultArtifact({ p50_ms: 10, p95_ms: 11 })),
     { flag: 'wx' },
   );
   fs.writeFileSync(

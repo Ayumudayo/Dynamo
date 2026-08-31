@@ -353,7 +353,13 @@ function validateCountMap(value, label, keyValidator) {
   return result;
 }
 
-function validateResultArtifact(value) {
+function validateResultArtifact(value, options = {}) {
+  if (!isPlainObject(options)) fail('result validation options must be an object');
+  assertExactKeys(options, options.retained === undefined ? [] : ['retained'], 'result validation options');
+  if (options.retained !== undefined && options.retained !== true) {
+    fail('retained result validation may only be enabled with true');
+  }
+  const retained = options.retained === true;
   const topLevelKeys = [
     'schema_version',
     'runner_version',
@@ -384,7 +390,7 @@ function validateResultArtifact(value) {
     value.instance,
     [
       'revision',
-      'nonce',
+      ...(retained ? [] : ['nonce']),
       'pid',
       'fixture_mode',
       'outbound_calls_before',
@@ -394,7 +400,9 @@ function validateResultArtifact(value) {
     'result instance',
   );
   if (value.instance.revision !== sourceState.head) fail('result instance revision mismatch');
-  if (!/^[0-9a-f]{64}$/.test(value.instance.nonce)) fail('result instance nonce is invalid');
+  if (!retained && !/^[0-9a-f]{64}$/.test(value.instance.nonce)) {
+    fail('result instance nonce is invalid');
+  }
   assertSafeInteger(value.instance.pid, 1, 4_294_967_295, 'result instance pid');
   if (!['Public', 'GuildDetail', 'ReadOnly'].includes(value.instance.fixture_mode)) {
     fail('result fixture mode is invalid');
