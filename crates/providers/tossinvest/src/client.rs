@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fmt,
     sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -21,6 +22,9 @@ use crate::{
 
 const OAUTH_TOKEN_PATH: &str = "/oauth2/token";
 const TOKEN_REFRESH_SKEW_SECONDS: i64 = 60;
+const TOSS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const TOSS_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const TOSS_TOTAL_DEADLINE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct TossInvestResponse {
@@ -107,7 +111,11 @@ impl TossInvestClient {
     /// so later provider tasks can safely construct shared service wrappers around one client.
     pub fn new(config: TossInvestConfig) -> Self {
         Self {
-            http_client: Client::new(),
+            http_client: Client::builder()
+                .connect_timeout(TOSS_CONNECT_TIMEOUT)
+                .timeout(TOSS_REQUEST_TIMEOUT)
+                .build()
+                .expect("fixed Toss HTTP client configuration should be valid"),
             shared_state: shared_state_for(&config),
             config,
         }
@@ -157,6 +165,46 @@ impl TossInvestClient {
     }
 
     async fn send_authenticated_with<E, Fut>(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+        execute: E,
+    ) -> Result<TossInvestResponse>
+    where
+        E: FnMut(RequestBuilder) -> Fut,
+        Fut: std::future::Future<Output = Result<TossInvestResponse>>,
+    {
+        self.send_authenticated_with_deadline(group, method, path, TOSS_TOTAL_DEADLINE, execute)
+            .await
+    }
+
+    async fn send_authenticated_with_deadline<E, Fut>(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+        total_deadline: Duration,
+        execute: E,
+    ) -> Result<TossInvestResponse>
+    where
+        E: FnMut(RequestBuilder) -> Fut,
+        Fut: std::future::Future<Output = Result<TossInvestResponse>>,
+    {
+        tokio::time::timeout(
+            total_deadline,
+            self.send_authenticated_attempts(group, method, path, execute),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Toss authenticated operation exceeded its {} ms total deadline",
+                total_deadline.as_millis()
+            )
+        })?
+    }
+
+    async fn send_authenticated_attempts<E, Fut>(
         &self,
         group: TossRateLimitGroup,
         method: Method,
@@ -498,7 +546,11 @@ impl TossInvestClient {
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
 
     use chrono::{TimeDelta, Utc};
@@ -885,6 +937,113 @@ mod tests {
             seen_headers.lock().unwrap().as_slice(),
             ["Bearer old-token", "Bearer new-token"]
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_total_deadline_includes_waiting_for_token_lock() {
+        let client = TossInvestClient::new(test_config("client-id-deadline-token-lock"));
+        let _token_lock = client.shared_state.access_token.lock().await;
+
+        let error = client
+            .send_authenticated_with_deadline(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                Duration::from_millis(20),
+                |_| async { unreachable!("request must not execute while token lock is held") },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("total deadline"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_total_deadline_includes_endpoint_limiter_wait() {
+        let client = TossInvestClient::new(test_config("client-id-deadline-endpoint-limiter"));
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+        client
+            .rate_limiter()
+            .acquire(TossRateLimitGroup::MarketData)
+            .await;
+
+        let error = client
+            .send_authenticated_with_deadline(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                Duration::from_millis(20),
+                |_| async { unreachable!("request must not execute before limiter admission") },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("total deadline"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_total_deadline_is_not_reset_for_second_attempt_body() {
+        let client = TossInvestClient::new(test_config("client-id-deadline-second-body"));
+        client
+            .test_set_cached_token("old-token", "Bearer", Utc::now() + TimeDelta::seconds(3600))
+            .await;
+        client
+            .test_set_next_refresh_token(
+                "new-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_execute = attempts.clone();
+
+        let error = client
+            .send_authenticated_with_deadline(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                Duration::from_millis(250),
+                move |_| {
+                    let attempt = attempts_for_execute.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if attempt == 0 {
+                            Ok(TossInvestResponse::test_json(
+                                StatusCode::UNAUTHORIZED,
+                                r#"{"error":{"code":"invalid-token","message":"expired","requestId":"req-1"}}"#,
+                            ))
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            Ok(TossInvestResponse::test_json(
+                                StatusCode::OK,
+                                r#"{"result":{"ok":true}}"#,
+                            ))
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("total deadline"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

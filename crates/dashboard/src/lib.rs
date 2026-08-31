@@ -3,7 +3,7 @@ use std::{
     env,
     net::SocketAddr,
     sync::{Arc, OnceLock},
-    time::Instant,
+    time::{Duration, Instant},
 };
 
 use axum::{
@@ -59,6 +59,23 @@ const OAUTH_STATE_TTL_MINUTES: i64 = 15;
 const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 const DEFAULT_INVITE_PERMISSIONS: u64 = 2_146_958_847;
 const FONT_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
+const DASHBOARD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const DASHBOARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn build_dashboard_http_client_with_timeouts(
+    connect_timeout: Duration,
+    request_timeout: Duration,
+) -> anyhow::Result<reqwest::Client> {
+    Ok(reqwest::Client::builder()
+        .user_agent("Dynamo Dashboard/0.1.0")
+        .connect_timeout(connect_timeout)
+        .timeout(request_timeout)
+        .build()?)
+}
+
+fn build_dashboard_http_client() -> anyhow::Result<reqwest::Client> {
+    build_dashboard_http_client_with_timeouts(DASHBOARD_CONNECT_TIMEOUT, DASHBOARD_REQUEST_TIMEOUT)
+}
 
 fn font_asset_router<S>() -> Router<S>
 where
@@ -151,9 +168,7 @@ pub async fn run_production() -> anyhow::Result<()> {
     let module_catalog = registry.catalog().clone();
     let command_catalog = registry.command_catalog().clone();
     let catalog_summary = catalog_startup_summary(&module_catalog, &command_catalog);
-    let http = reqwest::Client::builder()
-        .user_agent("Dynamo Dashboard/0.1.0")
-        .build()?;
+    let http = build_dashboard_http_client()?;
     let persistence = dynamo_app::persistence_from_env().await?;
     validate_dashboard_persistence(&config, &module_catalog, &command_catalog, &persistence)?;
     let app_info = fetch_application_info(&http, &config).await?;
@@ -580,9 +595,16 @@ struct GuildCard {
     name: String,
     icon_url: Option<String>,
     manageable: bool,
-    bot_present: bool,
+    bot_presence: BotGuildPresence,
     manage_url: String,
     invite_url: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BotGuildPresence {
+    Present,
+    Missing,
+    Unavailable,
 }
 
 #[derive(Debug, Deserialize, Clone, Default)]
@@ -1121,8 +1143,20 @@ async fn guild_page(
         ))
         .into_response();
     };
-    if !card.bot_present {
-        return Html(render_install_required_page(&state, &session, &card)).into_response();
+    match card.bot_presence {
+        BotGuildPresence::Present => {}
+        BotGuildPresence::Missing => {
+            return Html(render_install_required_page(&state, &session, &card)).into_response();
+        }
+        BotGuildPresence::Unavailable => {
+            return Html(render_error_page(
+                &state,
+                Some(&session),
+                "Bot Status Unavailable",
+                "Discord did not return the bot's current server status. Please try again later.",
+            ))
+            .into_response();
+        }
     }
 
     let deployment = state
@@ -1490,13 +1524,13 @@ async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) ->
         .collect::<Vec<_>>();
 
     stream::iter(manageable.into_iter().map(|guild| async move {
-        let bot_present = bot_is_in_guild(state, guild.id).await;
+        let bot_presence = bot_is_in_guild(state, guild.id).await;
         GuildCard {
             id: guild.id,
             name: guild.name.clone(),
             icon_url: guild_icon_url(&guild),
             manageable: true,
-            bot_present,
+            bot_presence,
             manage_url: format!("/guild/{}", guild.id),
             invite_url: build_bot_invite_url(state, guild.id),
         }
@@ -1554,10 +1588,14 @@ fn user_can_manage_guild(guild: &DashboardGuild) -> bool {
     bits & administrator == administrator || bits & manage_guild == manage_guild
 }
 
-async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> bool {
+async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> BotGuildPresence {
     #[cfg(feature = "perf-harness")]
     if let Some(runtime) = state.perf_runtime.as_ref() {
-        return runtime.fixture_bot_present().await;
+        return if runtime.fixture_bot_present().await {
+            BotGuildPresence::Present
+        } else {
+            BotGuildPresence::Missing
+        };
     }
 
     let request = state
@@ -1565,8 +1603,35 @@ async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> bool {
         .get(format!("{DISCORD_API_BASE}/guilds/{guild_id}"))
         .header("Authorization", format!("Bot {}", state.config.bot_token));
     match send_dashboard_http(state, request).await {
-        Ok(response) => response.status().is_success(),
-        Err(_) => false,
+        Ok(response) => {
+            let presence = classify_bot_guild_status(response.status());
+            if presence != BotGuildPresence::Unavailable {
+                return presence;
+            }
+            warn!(
+                guild_id,
+                status = %response.status(),
+                "Discord guild presence lookup returned an unavailable status"
+            );
+            BotGuildPresence::Unavailable
+        }
+        Err(error) => {
+            warn!(
+                ?error,
+                guild_id, "Discord guild presence lookup was unavailable"
+            );
+            BotGuildPresence::Unavailable
+        }
+    }
+}
+
+fn classify_bot_guild_status(status: StatusCode) -> BotGuildPresence {
+    if status.is_success() {
+        BotGuildPresence::Present
+    } else if status == StatusCode::NOT_FOUND {
+        BotGuildPresence::Missing
+    } else {
+        BotGuildPresence::Unavailable
     }
 }
 
@@ -1655,25 +1720,42 @@ fn render_selector_page(
     session: &DashboardSession,
     guild_cards: &[GuildCard],
 ) -> String {
-    let manageable_now = guild_cards.iter().filter(|card| card.bot_present).count();
-    let needs_install = guild_cards.len().saturating_sub(manageable_now);
+    let manageable_now = guild_cards
+        .iter()
+        .filter(|card| card.bot_presence == BotGuildPresence::Present)
+        .count();
+    let needs_install = guild_cards
+        .iter()
+        .filter(|card| card.bot_presence == BotGuildPresence::Missing)
+        .count();
+    let unavailable = guild_cards
+        .iter()
+        .filter(|card| card.bot_presence == BotGuildPresence::Unavailable)
+        .count();
     let connected_markup = guild_cards
         .iter()
-        .filter(|card| card.bot_present)
+        .filter(|card| card.bot_presence == BotGuildPresence::Present)
         .map(render_guild_card)
         .collect::<Vec<_>>()
         .join("\n");
     let install_markup = guild_cards
         .iter()
-        .filter(|card| !card.bot_present)
+        .filter(|card| card.bot_presence == BotGuildPresence::Missing)
+        .map(render_guild_card)
+        .collect::<Vec<_>>()
+        .join("\n");
+    let unavailable_markup = guild_cards
+        .iter()
+        .filter(|card| card.bot_presence == BotGuildPresence::Unavailable)
         .map(render_guild_card)
         .collect::<Vec<_>>()
         .join("\n");
 
     let content = format!(
-        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section>",
+        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Status Unavailable</dt><dd>{unavailable}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section><section id=\"status-unavailable\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Unavailable</p><h2>Server Status Could Not Be Checked</h2></div><span class=\"pill\">{unavailable}</span></div><div class=\"module-grid\">{unavailable_markup}</div></section>",
         manageable_now = manageable_now,
         needs_install = needs_install,
+        unavailable = unavailable,
         total = guild_cards.len(),
         connected_markup = if connected_markup.is_empty() {
             "<article class=\"panel empty-state\"><h3>No connected servers</h3><p>Invite the bot into one of your manageable servers to unlock guild settings here.</p></article>".to_string()
@@ -1684,6 +1766,11 @@ fn render_selector_page(
             "<article class=\"panel empty-state\"><h3>Nothing pending</h3><p>Every eligible server already has the bot installed.</p></article>".to_string()
         } else {
             install_markup
+        },
+        unavailable_markup = if unavailable_markup.is_empty() {
+            "<article class=\"panel empty-state\"><h3>All statuses available</h3><p>Discord returned a current status for every eligible server.</p></article>".to_string()
+        } else {
+            unavailable_markup
         },
     );
 
@@ -1699,21 +1786,21 @@ fn render_selector_page(
 }
 
 fn render_guild_card(card: &GuildCard) -> String {
-    let badge = if card.bot_present {
-        "<span class=\"pill pill-success\">Connected</span>"
-    } else {
-        "<span class=\"pill pill-warn\">Install Required</span>"
+    let badge = match card.bot_presence {
+        BotGuildPresence::Present => "<span class=\"pill pill-success\">Connected</span>",
+        BotGuildPresence::Missing => "<span class=\"pill pill-warn\">Install Required</span>",
+        BotGuildPresence::Unavailable => "<span class=\"pill\">Status Unavailable</span>",
     };
-    let action = if card.bot_present {
-        format!(
+    let action = match card.bot_presence {
+        BotGuildPresence::Present => format!(
             "<a class=\"button button-primary card-action\" href=\"{}\">Manage Server</a>",
             card.manage_url
-        )
-    } else {
-        format!(
+        ),
+        BotGuildPresence::Missing => format!(
             "<a class=\"button button-secondary card-action\" href=\"{}\">Invite Bot</a>",
             card.invite_url
-        )
+        ),
+        BotGuildPresence::Unavailable => String::new(),
     };
     let media = card
         .icon_url
@@ -1738,10 +1825,14 @@ fn render_guild_card(card: &GuildCard) -> String {
         media = media,
         name = escape_html(&card.name),
         badge = badge,
-        description = if card.bot_present {
-            "Open guild-scoped module and command settings."
-        } else {
-            "The bot is not in this server yet. Install it first, then return here."
+        description = match card.bot_presence {
+            BotGuildPresence::Present => "Open guild-scoped module and command settings.",
+            BotGuildPresence::Missing => {
+                "The bot is not in this server yet. Install it first, then return here."
+            }
+            BotGuildPresence::Unavailable => {
+                "Discord did not return the bot's current status. Try again later."
+            }
         },
         guild_id = card.id,
         action = action,
@@ -4393,24 +4484,27 @@ async function requestGuildCommandSync(guildId) {
 
 #[cfg(test)]
 mod tests {
+    use std::io::ErrorKind;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    use std::time::{Duration as StdDuration, Instant as StdInstant};
 
     use super::{
-        DashboardConfig, DashboardGuild, DashboardSession, DashboardState, DashboardUser,
-        DiscordApplicationInfo, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG,
+        BotGuildPresence, DashboardConfig, DashboardGuild, DashboardSession, DashboardState,
+        DashboardUser, DiscordApplicationInfo, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG,
         FIRA_CODE_VARIABLE_PATH, FIRA_CODE_VARIABLE_SHA256, FIRA_SANS_BOLD_BYTES,
         FIRA_SANS_BOLD_ETAG, FIRA_SANS_BOLD_PATH, FIRA_SANS_BOLD_SHA256, FIRA_SANS_LIGHT_BYTES,
         FIRA_SANS_LIGHT_ETAG, FIRA_SANS_LIGHT_PATH, FIRA_SANS_LIGHT_SHA256, FIRA_SANS_MEDIUM_BYTES,
         FIRA_SANS_MEDIUM_ETAG, FIRA_SANS_MEDIUM_PATH, FIRA_SANS_MEDIUM_SHA256,
         FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG, FIRA_SANS_REGULAR_PATH,
         FIRA_SANS_REGULAR_SHA256, FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG,
-        FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256, FONT_CACHE_CONTROL,
+        FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256, FONT_CACHE_CONTROL, GuildCard,
         GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME, audit_action_label,
-        audit_entity_label, build_dashboard_router, dashboard_styles, escape_html,
-        font_asset_router, render_audit_logs_section, render_dashboard_page_shell, render_field,
+        audit_entity_label, build_dashboard_http_client_with_timeouts, build_dashboard_router,
+        classify_bot_guild_status, dashboard_styles, escape_html, font_asset_router,
+        render_audit_logs_section, render_dashboard_page_shell, render_field, render_guild_card,
         render_settings_modal, request_id_for_logging, request_path_for_logging,
         request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
     };
@@ -4429,6 +4523,168 @@ mod tests {
     use dynamo_repositories::GuildSettingsRepository;
     use dynamo_settings::GuildCommandSettings;
     use tower::ServiceExt;
+
+    async fn write_raw_response(stream: &tokio::net::TcpStream, mut bytes: &[u8]) {
+        while !bytes.is_empty() {
+            stream.writable().await.expect("loopback socket writable");
+            match stream.try_write(bytes) {
+                Ok(0) => panic!("loopback socket closed before response completed"),
+                Ok(written) => bytes = &bytes[written..],
+                Err(error) if error.kind() == ErrorKind::WouldBlock => continue,
+                Err(error) => panic!("failed to write loopback response: {error}"),
+            }
+        }
+    }
+
+    async fn read_raw_request(stream: &tokio::net::TcpStream) {
+        let mut request = Vec::new();
+        let mut buffer = [0u8; 1024];
+        while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+            stream.readable().await.expect("loopback socket readable");
+            match stream.try_read(&mut buffer) {
+                Ok(0) => panic!("loopback client closed before request completed"),
+                Ok(read) => request.extend_from_slice(&buffer[..read]),
+                Err(error) if error.kind() == ErrorKind::WouldBlock => continue,
+                Err(error) => panic!("failed to read loopback request: {error}"),
+            }
+        }
+    }
+
+    async fn spawn_delayed_raw_server(delay_headers: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback raw server");
+        let address = listener.local_addr().expect("loopback address");
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.expect("accept loopback request");
+            read_raw_request(&stream).await;
+            if delay_headers {
+                tokio::time::sleep(StdDuration::from_millis(350)).await;
+            }
+            write_raw_response(&stream, b"HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\n").await;
+            if !delay_headers {
+                tokio::time::sleep(StdDuration::from_millis(350)).await;
+            }
+            write_raw_response(&stream, b"OK").await;
+        });
+        format!("http://{address}/delayed")
+    }
+
+    async fn spawn_stalled_tls_server() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback TLS stall server");
+        let address = listener.local_addr().expect("loopback address");
+        tokio::spawn(async move {
+            let (_stream, _) = listener.accept().await.expect("accept loopback connection");
+            tokio::time::sleep(StdDuration::from_millis(350)).await;
+        });
+        format!("https://{address}/stalled-connect")
+    }
+
+    #[tokio::test]
+    async fn dashboard_http_delayed_connect_is_bounded() {
+        let url = spawn_stalled_tls_server().await;
+        let client = build_dashboard_http_client_with_timeouts(
+            StdDuration::from_millis(100),
+            StdDuration::from_secs(1),
+        )
+        .expect("dashboard HTTP client");
+        let started = StdInstant::now();
+
+        let error = client
+            .get(url)
+            .send()
+            .await
+            .expect_err("stalled TLS connection must time out");
+
+        let elapsed = started.elapsed();
+        assert!(error.is_timeout(), "expected connect timeout, got {error}");
+        assert!(elapsed >= StdDuration::from_millis(80));
+        assert!(elapsed < StdDuration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn dashboard_http_delayed_headers_are_bounded() {
+        let url = spawn_delayed_raw_server(true).await;
+        let client = build_dashboard_http_client_with_timeouts(
+            StdDuration::from_millis(100),
+            StdDuration::from_millis(100),
+        )
+        .expect("dashboard HTTP client");
+        let started = StdInstant::now();
+
+        let error = client
+            .get(url)
+            .send()
+            .await
+            .expect_err("delayed headers must time out");
+
+        let elapsed = started.elapsed();
+        assert!(error.is_timeout(), "expected timeout, got {error}");
+        assert!(elapsed >= StdDuration::from_millis(80));
+        assert!(elapsed < StdDuration::from_secs(1));
+    }
+
+    #[tokio::test]
+    async fn dashboard_http_delayed_body_is_bounded() {
+        let url = spawn_delayed_raw_server(false).await;
+        let client = build_dashboard_http_client_with_timeouts(
+            StdDuration::from_millis(100),
+            StdDuration::from_millis(100),
+        )
+        .expect("dashboard HTTP client");
+        let started = StdInstant::now();
+        let response = client.get(url).send().await.expect("response headers");
+
+        let error = response
+            .bytes()
+            .await
+            .expect_err("delayed body must time out");
+
+        let elapsed = started.elapsed();
+        assert!(error.is_timeout(), "expected timeout, got {error}");
+        assert!(elapsed >= StdDuration::from_millis(80));
+        assert!(elapsed < StdDuration::from_secs(1));
+    }
+
+    #[test]
+    fn bot_guild_presence_only_treats_not_found_as_missing() {
+        assert_eq!(
+            classify_bot_guild_status(StatusCode::OK),
+            BotGuildPresence::Present
+        );
+        assert_eq!(
+            classify_bot_guild_status(StatusCode::NOT_FOUND),
+            BotGuildPresence::Missing
+        );
+        assert_eq!(
+            classify_bot_guild_status(StatusCode::TOO_MANY_REQUESTS),
+            BotGuildPresence::Unavailable
+        );
+        assert_eq!(
+            classify_bot_guild_status(StatusCode::INTERNAL_SERVER_ERROR),
+            BotGuildPresence::Unavailable
+        );
+    }
+
+    #[test]
+    fn unavailable_bot_presence_does_not_render_install_action() {
+        let rendered = render_guild_card(&GuildCard {
+            id: 42,
+            name: "Unavailable Guild".to_string(),
+            icon_url: None,
+            manageable: true,
+            bot_presence: BotGuildPresence::Unavailable,
+            manage_url: "/guild/42".to_string(),
+            invite_url: "https://discord.com/invite".to_string(),
+        });
+
+        assert!(rendered.contains("Status Unavailable"));
+        assert!(!rendered.contains("Install Required"));
+        assert!(!rendered.contains("Invite Bot"));
+        assert!(!rendered.contains("https://discord.com/invite"));
+    }
 
     enum GuildSettingsReadResult {
         Absent,
