@@ -8,24 +8,24 @@
 
 기준 커밋: 714a17b1728889054cb6fbf45f8d98e0554b1413
 
-예상 총공수: 71~109 엔지니어일
+문서 상태: 장기 개선 backlog와 역사적 설계 근거. 현재 iteration의 일정·선행조건·완료 gate가 아님.
 
-예상 중요 경로: 3인 병렬 기준 7~10주, 7일 관찰과 24시간 soak 포함
+현재 활성 범위와 순서: [DYNAMO_REMAINING_WORK_PLAN.md](DYNAMO_REMAINING_WORK_PLAN.md)의 C1~C6만 따른다.
 
-진행 상태 갱신: 2026-07-31 이후의 실제 상태, 차단점, 다음 실행 순서는 [DYNAMO_REMAINING_WORK_PLAN.md](DYNAMO_REMAINING_WORK_PLAN.md)를 따른다.
+이 문서의 71~109 엔지니어일, 36개 작업, 전체 dependency graph, canary/soak와 closure 조건은 이번 iteration에서 비활성이다. 사용자가 명시적으로 승격하거나 활성 checkpoint의 직접 blocker가 된 항목만 실행 문서로 옮긴다.
 
 ## 1. 문서 목적
 
 이 문서는 Dynamo의 보안 취약 경로, 런타임 병목, 대시보드 사용성 문제를 실제 제품 코드에서 개선하기 위한 통합 실행 계획서다.
 
-기존의 세부 감사 문서는 근거 자료로 유지하되, 실제 구현 순서와 작업 경계는 이 문서를 기준으로 관리한다.
+기존의 세부 감사 문서는 근거 자료로 유지한다. 실제 구현 순서와 작업 경계는 축소 실행 계획서를 기준으로 관리한다.
 
 - 보안 상세 근거: docs/superpowers/plans/2026-07-12-security-remediation.md
 - 성능 상세 근거: docs/superpowers/plans/2026-07-12-performance-remediation.md
 - UI 상세 근거: docs/superpowers/plans/2026-07-12-dashboard-ux-remediation.md
 - 전체 의존성 근거: docs/superpowers/plans/2026-07-12-security-performance-dashboard-remediation-program.md
 
-이 문서는 일정, 작업 소유권, 병렬화, 상태 보고의 기준이다. 각 상세 근거 문서의 인터페이스, RED/GREEN, fail-closed, rollback 계약은 계속 규범적이며 이 문서의 축약된 문구로 약화되지 않는다. 충돌하면 더 엄격한 안전·검증 기준을 적용하고, 작업 추적표에는 충돌과 결정을 기록한다.
+이 문서는 발견 사항과 장기 선택지를 보존한다. 현재 실행 계획과 충돌하면 축소 실행 계획서가 우선한다. 여기의 상세 계약은 활성 slice에 직접 필요한 범위에서만 참고하며, 이를 이유로 비활성 작업을 함께 구현하지 않는다.
 
 이 계획은 새로운 마이크로서비스나 프런트엔드 프레임워크를 도입하지 않는다. 현재 Rust 단일 호스트 구조, Axum 서버 렌더링, MongoDB, vanilla CSS/JavaScript, Playwright 구성을 유지한다.
 
@@ -190,7 +190,7 @@
 
 각 통합 작업의 완료는 이 표에 매핑된 상세 근거의 필수 fixture와 rollback 하한도 함께 통과해야 한다.
 
-## 6. 전체 실행 순서
+## 6. 장기 backlog 실행 순서 (현재 비활성)
 
     W1-01 tactical security  ───────────────────────────────┐
                                                            │
@@ -234,7 +234,7 @@
 
 소비 작업은 같은 타입이나 저장 형식을 새로 만들지 않는다. 필요한 계약이 부족하면 소유 작업으로 변경 요청을 되돌리고 한 경계에서만 수정한다.
 
-## 7. 단계별 작업 계획
+## 7. 장기 backlog 단계별 설계 (활성 slice만 참고)
 
 ## Phase 0. 기준선과 테스트 기반
 
@@ -1461,7 +1461,7 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 
 7일 관찰은 W4-01과 W4-03의 exact binary가 staging에 배포되고 hard cap/gauge가 활성화된 시점부터 센다. supervisor, Stock, cap 코드·설정이 바뀌면 clock을 reset한다. actual worker, permit, rejection, cancellation, provider error, p99 concurrency를 기록하고 W6-04 전에 완료한다.
 
-## 13. 작업 추적표
+## 13. 장기 backlog 추적표 (현재 iteration 집계 아님)
 
 | ID | 작업 | 우선순위 | 상태 | 선행조건 | 예상 |
 | --- | --- | --- | --- | --- | --- |
@@ -1469,11 +1469,11 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 | W0-01 | 성능·Mongo·브라우저 기준선 | P0 | 진행 중 (R0/R1 완료, R3 대기; R1B 비필수) | W0-00 완료 | 잔여 1~2일 |
 | W0-02 | strict Clippy blocker | P1 | 완료 (99dff55) | 없음 | 0.5일 |
 | W1-01 | moderation/env tactical floor | P0 | 완료 (0f6be8d) | 없음, focused RED부터 | 1~2일 |
-| W1-02 | finite HTTP/Discord directory | P1 | 미착수 | W0-01A 완료 | 2~3일 |
-| W1-03 | write-free settings read | P1 | 다음 작업 | W0-01A 완료 | 1~2일 |
+| W1-02 | finite HTTP/Discord directory | P1 | A slice만 활성, 나머지 deferred | W0-01A 완료 | 활성 1~2일 |
+| W1-03 | write-free settings read | P1 | A slice 다음 작업 | W0-01A 완료 | 활성 1~2일 |
 | W1-04 | hashed CSS/JS + read-only smoke | P1 | 미착수 | W0-01 | 1~2일 |
 | W1-05 | accessibility/responsive foundation | P1 | 미착수 | W1-04 | 2~3일 |
-| W2-01 | current auth/mutation identity | P0 | 미착수 | W1-02/03 | 4~6일 |
+| W2-01 | current auth/mutation identity | P0 | current-auth A slice만 활성 | W1-02A/W1-03A | 활성 2~3일 |
 | W2-02 | component/modal live policy | P1 | 미착수 | W1-03 | 1~2일 |
 | W2-03A | guild-scoped effect 계약 | P1 | 미착수 | W1-01 | 1~2일 |
 | W2-03B | 여섯 모듈 effect 전환 | P1 | 미착수 | W2-02/W2-03A | 2~3일 |
@@ -1484,14 +1484,14 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 | W3-04 | dashboard mutation durability | P0 | 미착수 | W2-01/W3-01/W3-03B | 5~8일 |
 | W4-01 | WorkSupervisor | P1 | 미착수 | W0-01A/W1-02 | 2~3일 |
 | W4-02 | settings snapshot cache | P1 | 미착수 | W2-02/W3-04 | 2~4일 |
-| W4-03 | Stock worker lifecycle | P1 | 미착수 | W2-02/W4-01 | 2~3일 |
+| W4-03 | Stock worker lifecycle | P1 | local cancellation A slice만 활성 | 없음 | 활성 1~2일 |
 | W4-04A | session/OAuth/GameInfo/retry bound | P1 | 미착수 | W1-02/W2-01/W4-01 | 2~3일 |
 | W4-04B | Toss single-flight/cache | P1 | 미착수 | W4-04A | 1~2일 |
 | W4-04C | stats/invite adapter + presence 재검증 | P1 | 미착수 | W1-02/W4-01/W4-02 | 2~3일 |
 | W4-05 | giveaway edit coalescing | P2 | 미착수 | W3-03A/W4-01 | 1~2일 |
 | W4-06 | suggestion effect ownership | P1 | 미착수 | W3-03A/W4-01 | 2~3일 |
-| W5-01 | local/effective/blocker UI | P1 | 미착수 | W1-03/04 | 2일 |
-| W5-02 | fail-closed read UI | P1 | 미착수 | W1-02/03, audit/sync close는 W3-04 | 2일 |
+| W5-01 | local/effective/blocker UI | P1 | read-side A slice만 활성 | W1-03A | 활성 slice에 포함 |
+| W5-02 | fail-closed read UI | P1 | guild/deployment A slice만 활성 | W1-02A/W1-03A | 합계 2~3일 |
 | W5-03 | authoritative save/reconcile | P0 | 미착수 | W1-04/W3-04/W4-02 | 4~6일 |
 | W5-04 | dirty/confirm/Undo | P1 | 미착수 | W5-03 | 2~3일 |
 | W5-05 | long list/lazy modal | P2 | 미착수 | W1-04/W2-01/W5-01/03/04 | 2~3일 |
@@ -1504,7 +1504,7 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 
 기존 71~109 엔지니어일 합계는 human-study 범위가 포함된 역사적 수치이므로 더 이상 일정 기준으로 사용하지 않는다. 새 세션은 각 작업 행의 잔여 예상과 실제 evidence를 사용한다. Mongo duplicate repair와 dependency fallout는 별도 contingency다.
 
-## 14. 첫 delivery checkpoints
+## 14. 역사적 delivery checkpoints
 
 지원 checkpoint:
 
@@ -1519,7 +1519,7 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 
 W1-01과 W0-00은 제어-plane이나 전체 benchmark 완료를 기다리지 않고 refactor에서 즉시 병렬 시작할 수 있다. 세 제품 checkpoint의 병합 순서는 RED/GREEN 준비 상태에 따라 달라질 수 있지만, W0-01 측정은 W0-00 뒤에만 시작하고 대규모 authorization/persistence 변경 전에는 관련 기준선을 통과해야 한다.
 
-## 15. 최종 완료 체크리스트
+## 15. 장기 program 최종 체크리스트 (현재 비활성)
 
 - [ ] W6-05 verifier가 정확히 36개 unique 보안 occurrence와 재현 가능한 증거를 확인
 - [ ] stale guild grant와 retained component bypass 0
@@ -1543,13 +1543,15 @@ W1-01과 W0-00은 제어-plane이나 전체 benchmark 완료를 기다리지 않
 
 ## 16. 새 세션에서 바로 수행할 작업
 
-1. `refactor` 브랜치와 clean worktree를 확인하고 추가 control-plane 또는 하위 작업 브랜치를 만들지 않는다.
-2. `edbf95c` 이후 문서-only 인계 커밋을 확인한다.
-3. W1-03 focused RED로 guild settings GET의 현재 write 동작을 고정한다.
-4. repository `Option` read 경계와 absent/existing/unavailable dashboard 계약을 구현한다.
-5. GET write 0을 fake repository와 isolated Mongo에서 증명하고 package/workspace test와 strict Clippy를 통과시킨다.
-6. 다음 순서는 W1-02 → W2-01/02 → W2-03A/B → W3-01~04 → W4 → R3 → W5-01~03 → W6로 유지한다.
+이 장기 문서에서 작업을 직접 시작하지 않는다. [축소 실행 계획서](DYNAMO_REMAINING_WORK_PLAN.md)의 범위와 중단 조건을 먼저 읽는다.
 
-사람 대상 UX baseline/final, runner, recorder, 참가자 모집은 재개하지 않는다. UI 편의성은 사용자가 직접 판단하며 자동화는 보안·상태 정확성·mutation 안전성·접근성·반응형 회귀를 소유한다.
+현재 활성 순서는 다음 6개뿐이다.
 
-이 시점부터 진척률은 제어 스크립트 수가 아니라 완료된 제품 작업 패키지와 통과한 acceptance criterion으로 보고한다.
+1. W1-03A write-free guild settings read
+2. W1-02A bounded HTTP floor
+3. W2-01A current guild mutation authorization
+4. W4-03A local Stock worker cancellation
+5. W5-01/W5-02A truthful read-side dashboard state
+6. modest UI pass, 기존 회귀 test, 사용자 직접 확인
+
+W1-02, W2-01, W4-03, W5-01/02의 이 문서 본문 전체가 활성인 것은 아니다. 축소 문서에 명시한 A slice와 non-goal이 우선한다. 나머지 W2~W6, R3 12-cell, deep scan, human UX 연구, canary/soak는 backlog다.
