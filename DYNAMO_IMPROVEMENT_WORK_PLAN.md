@@ -36,7 +36,7 @@
 | 상위 보안·성능·UI 계획 | 작성 완료 | 개선 대상과 장기 의존성은 정리되어 있음 |
 | 실행 통제 부트스트랩 | 완료 | 커밋 714a17b, 제품 동작 변경 없음 |
 | 보안 제품 개선 | W1-01 완료 | moderation hierarchy와 secret file 안전 바닥은 적용, 나머지 권한·effect 작업은 미완료 |
-| 성능 제품 개선 | W0-01 진행 중 | R0 live runner와 R1 Public A/B 완료; R1B UX baseline과 R3 actual browser 대기 |
+| 성능 제품 개선 | W0-01 진행 중 | R0 live runner와 R1 Public A/B 완료; 사람 UX 연구는 비필수, R3 actual browser 대기 |
 | 대시보드 UI 개선 | W0-00 완료 | 외부 폰트 요청은 제거, 상태 오표시·false success·모바일·접근성 개선은 미완료 |
 | 전체 제품 개선 진척도 | 3/36 완료, 약 8% | W0-00, W0-02, W1-01 완료; W0-01 착수 |
 
@@ -57,7 +57,7 @@
 - `60bdf63`~`067b044`: sanitized descendant/launch 진단, exact VCTIP Job cleanup, physical Node path resolution, graceful shutdown drain, nonce-free retained result schema를 적용했다.
 - isolated process Job PASS, isolated dashboard 758 assertions PASS, Node perf/browser/UX evidence 73/73 PASS(기존 60 + UX 13).
 - `067b044` 동일 revision·fixture·environment에서 Public baseline A/B를 완료했다. 두 실행 모두 budget GREEN, failed 0, repository/outbound counter 0, exit Job PID 0, retained secret pattern 0이다.
-- R1B 증거 schema/validator는 준비됐지만 runner/state/reset/recorder와 cohort 결과는 없다. W0-01 전체는 완료가 아니며 baseline 10명·50 trial과 R3 실제 Chromium 12-cell이 남아 있다.
+- R1B 증거 schema/validator는 `edbf95c`에 준비했다. 2026-08-31 사용자 결정으로 human runner/cohort 연구는 필수 gate에서 제외했다. W0-01 전체는 아직 완료가 아니며 R3 실제 Chromium 12-cell이 남아 있다.
 
 ## 3. 개선 목표와 완료 정의
 
@@ -200,7 +200,7 @@
        └─ W4-01 supervisor foundation ── W4 consumers ─────┤
                                                            │
     W1-03/04 ── W5-01/02 early UI                          │
-    W3-04 + W4-02 ── W5-03/04/05 ── W5-06 UX gate ────────┤
+    W3-04 + W4-02 ── W5-03/04/05 ── W5-06 자동 gate + 사용자 검토 ─┤
                                                            │
     7일 관찰 + W6-01/02/03/05 ── W6-04 canary/soak ────────┘
 
@@ -230,7 +230,7 @@
 | WorkSupervisor, CappedTtlMap, 범용 SingleFlight | W4-01 | W4 이후 신규 소비자; W1-02 GuildPresenceCache 내부 구현은 제외 |
 | deterministic font/license/route | W0-00 | W0-01, W1-04, W5-06 |
 | hashed CSS/JavaScript pipeline | W1-04 | W5-01~06 |
-| UX 연구 protocol과 baseline schema | W0-01 | W5-06 |
+| 선택적 UX 연구 schema | W0-01 | 필수 소비자 없음; 사용자 요청 시 재사용 |
 
 소비 작업은 같은 타입이나 저장 형식을 새로 만들지 않는다. 필요한 계약이 부족하면 소유 작업으로 변경 요청을 되돌리고 한 경계에서만 수정한다.
 
@@ -280,7 +280,7 @@
 
 실행 기록: 609d3c9에서 완료. asset contract, 전체 dashboard 20 tests, strict Clippy, 외부 font URL 0건을 확인했다.
 
-### W0-01. 재현 가능한 성능·브라우저·UX 기준선
+### W0-01. 재현 가능한 성능·브라우저 기준선
 
 예상: 4~6 엔지니어일
 
@@ -307,17 +307,13 @@
 - process RSS
 - layout overflow와 DOM node 수
 - 첫 텍스트 표시, font 적용 시간, CLS, computed font face
-- W5-06의 다섯 사용자 과업별 시간, 오류, 도움 요청, SEQ
+- 4개 viewport의 overflow, DOM, focus, console/page error와 안전 counter
 
-UX baseline protocol:
+UX 연구 경계:
 
-- baseline 10명과 final 10명은 서로 다른 참가자로 구성한다.
-- 각 cohort는 Dynamo를 가끔 쓰는 관리자 5명과 정기적으로 쓰는 관리자 5명으로 구성하고 구현 참여자는 제외한다.
-- 참가자 1명당 다섯 과업을 한 번씩 수행해 phase당 정확히 50 trial을 만든다.
-- 과업 순서는 balanced Latin-square로 배치한다.
-- browser, viewport, font-ready 조건, 평가자 script SHA-256, fixture hash를 두 phase에서 고정한다.
-- participant ID는 `B-`/`F-` phase pseudonym만 사용하고, completed, unassisted, duration_ms, help_count, critical_error, SEQ 1~7, write_count, outbound_count 0, start_state_hash, end_state_hash를 trial별로 기록한다.
-- shared, staging, production guild와 database는 사용하지 않는다.
+- `edbf95c`의 schema/validator/runbook은 선택적 참고 자산으로 보존한다.
+- human-study runner, recorder, baseline/final cohort는 현재 구현하지 않으며 W0-01, W5, W6의 완료 조건이 아니다.
+- UI 편의성은 사용자가 직접 판단한다. 자동화는 상태 정확성, mutation/outbound 안전성, keyboard/focus, 접근성, 반응형 회귀만 소유한다.
 
 완료 기준:
 
@@ -325,7 +321,7 @@ UX baseline protocol:
 - 테스트용 Mongo URI와 production URI가 같으면 실행을 거부한다.
 - 성공, 오류, panic 모두 exact database cleanup을 확인한다.
 - Playwright는 local fake transport를 사용하며 live Discord/Toss에 요청하지 않는다.
-- UX baseline은 동일한 비운영 fixture, 참가자 구성, 과업 문구, 도움 규칙으로 기록한다.
+- 실제 Chromium matrix는 동일한 비운영 fixture, browser lock, viewport, route allowlist로 기록한다.
 - benchmark metadata에 revision, OS, power profile, CPU, Rust/Node/browser version, build profile, fixture hash를 기록한다.
 
 ### W0-02. Strict Clippy 기준선 복구
@@ -1127,7 +1123,7 @@ W5-06 최종 matrix는 여기에 save pending/error/success/outcome-unknown, dep
 
 ### W5-06. UI 품질 검증
 
-예상: 3~5 엔지니어일, 참가자 모집 대기시간 별도
+예상: 1~2 엔지니어일 + 사용자 직접 검토
 
 고정 작업:
 
@@ -1137,18 +1133,14 @@ W5-06 최종 matrix는 여기에 save pending/error/success/outcome-unknown, dep
 4. 저장 응답 유실에서 같은 변경을 재전송하지 않고 방금 요청의 결과를 확인해 작업을 끝낸다.
 5. deployment 전체 영향을 확인한 뒤 지정 값을 변경하고, 방금 변경을 되돌려 시작 전 presence/value로 복구한다.
 
-연구 protocol:
+검증 경계:
 
-- W0-01과 다른 final cohort 10명, occasional 5명/regular 5명, 구현 참여자 제외.
-- 참가자당 5개 과업, 정확히 50 final trial, balanced Latin-square.
-- 같은 fixture hash, browser, viewport, font-ready, 평가자 script SHA-256을 사용한다.
-- 도움은 참가자가 30초 동안 진전하지 못하고 요청했을 때만 정해진 한 문장을 제공하며 해당 trial은 assisted다.
-- timer는 과업 카드 공개 시 시작하고 성공 DOM/state 도달 또는 중단 선언 시 종료한다.
-- critical error는 false_success, wrong_scope, duplicate_write, unsafe_cleanup, unrecovered_data_loss의 닫힌 목록이다.
-- 과업 4·5는 deterministic fake dashboard에서만 수행하고 trial마다 fixture를 초기화한다.
-- 예상 route를 모두 mock하고 unmocked request를 abort하며 외부 Mongo/Discord/Toss 요청은 0이다.
-- shared/staging/production guild를 사용하지 않는다.
-- evidence는 W0-01 schema/validator 계약에 맞춰 phase pseudonym, write_count, outbound_count 0, start_state_hash, end_state_hash를 포함해 보존하고 결과 요약에는 participant/trial raw record를 싣지 않는다.
+- deterministic fake dashboard와 실제 locked Chromium으로 전체 route/state matrix를 실행한다.
+- 예상 route를 모두 allowlist하고 unmocked request를 abort하며 외부 Mongo/Discord/Toss 요청은 0이다.
+- write count, start/end state hash, request identity와 browser error를 자동 oracle로 검증한다.
+- human cohort, timer, 도움, SEQ와 baseline/final 속도 비교는 필수 범위가 아니다.
+- 사용자는 자동 gate가 GREEN인 화면을 직접 확인하고 시각적 완성도와 편의성을 승인하거나 후속 항목을 기록한다.
+- shared/staging/production guild를 UI fixture로 사용하지 않는다.
 
 mutation oracle:
 
@@ -1157,15 +1149,12 @@ mutation oracle:
 
 완료 기준:
 
-- critical error 0.
-- 50회 중 46회 이상 도움 없이 완료.
-- 각 작업 median SEQ 5/7 이상.
-- 어떤 작업·경험 집단도 baseline보다 느려지지 않음.
-- 최소 3개 작업 median 시간이 10% 이상 개선.
-- keyboard-only와 실제 Windows Narrator로 pending/error/success/outcome-unknown, confirmation, Undo, lazy modal Retry, dirty close, 409를 확인한다.
+- 자동 matrix에서 false_success, wrong_scope, duplicate_write, unsafe_cleanup, unrecovered_data_loss 0.
+- keyboard-only와 Windows Narrator smoke로 pending/error/success/outcome-unknown, confirmation, Undo, lazy modal Retry, dirty close, 409를 확인한다.
 - field error는 aria-invalid와 aria-describedby로 연결하고 submit 실패 후 첫 invalid field로 focus 이동.
 - normal/hover/focus/disabled control과 muted/accent text의 계산된 contrast 통과.
-- 별도 375px human sanity pass와 전체 route/state 자동 matrix에서 overflow tolerance 0.
+- 375/768/1024/1440px 전체 route/state matrix에서 overflow tolerance 0.
+- 사용자 직접 검토 결과를 승인 또는 구체적인 후속 작업으로 기록한다.
 
 ## Phase 6. 의존성, 배포, canary
 
@@ -1452,14 +1441,14 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 
 | 주차 | A 보안·런타임 | B persistence·성능 | C 대시보드·UX |
 | --- | --- | --- | --- |
-| 1주차 | W1-01 즉시 RED/GREEN | W0-00 font, W0-01 기준선, W0-02 | W1-04 asset/test 설계 |
-| 2주차 | W1-02, W2-03A | W1-03, W3-01 preflight | W1-04, W1-05 |
+| 1주차 | W1-02, W2-03A | W1-03, W3-01 preflight | R3 자동 browser/test 설계 |
+| 2주차 | W2-01/02 준비 | W3-01 apply/readback | W1-04, W1-05 |
 | 3주차 | W2-01/02, W2-03B | W3-01 apply/readback | W5-01/02를 조기 구현 |
 | 4주차 | W3-04 계약·failure fixture | W3-02, W3-03A/B | W5-01/02 상태 matrix 완료 |
 | 5주차 | W4-01, W4-03 | W3-04 구현·cutover | W5-03 준비와 Playwright matrix |
 | 6주차 | W4-04A/B/C, W4-06 | W4-02, W4-05 | W5-03/04 |
-| 7주차 | 7일 observe-only 시작 | W6-01/02/03 준비 | W5-05/06 final cohort |
-| 8주차 | 관찰·closure 지원 | W6-03 staging과 closure 뒤 final artifact | UX evidence와 W6-05 |
+| 7주차 | 7일 observe-only 시작 | W6-01/02/03 준비 | W5-05/06 자동 gate·사용자 검토 |
+| 8주차 | 관찰·closure 지원 | W6-03 staging과 closure 뒤 final artifact | 회귀 evidence와 W6-05 |
 | 9~10주차 | duplicate/dependency contingency | W6-04 canary/soak | regression·접근성 재검증 |
 
 기간 가정:
@@ -1467,7 +1456,7 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 - 1인: 16~24주.
 - 2인: 10~15주.
 - 3인: 7~10주.
-- 참가자 모집, 실제 Mongo duplicate repair, dependency compiler fallout는 범위 밖 지연으로 별도 보고한다.
+- 실제 Mongo duplicate repair와 dependency compiler fallout는 범위 밖 지연으로 별도 보고한다.
 - crates/dashboard/src/main.rs, dashboard.css, dashboard.js를 함께 바꾸는 작업은 동시에 병합하지 않고 C 소유 queue에서 순차 통합한다.
 
 7일 관찰은 W4-01과 W4-03의 exact binary가 staging에 배포되고 hard cap/gauge가 활성화된 시점부터 센다. supervisor, Stock, cap 코드·설정이 바뀌면 clock을 reset한다. actual worker, permit, rejection, cancellation, provider error, p99 concurrency를 기록하고 W6-04 전에 완료한다.
@@ -1477,23 +1466,23 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 | ID | 작업 | 우선순위 | 상태 | 선행조건 | 예상 |
 | --- | --- | --- | --- | --- | --- |
 | W0-00 | self-hosted deterministic Fira | P1 | 완료 (609d3c9) | 없음 | 1일 |
-| W0-01 | 성능·Mongo·브라우저·UX 기준선 | P0 | 진행 중 (R0/R1 완료, R1B/R3 대기) | W0-00 완료 | 4~6일 |
+| W0-01 | 성능·Mongo·브라우저 기준선 | P0 | 진행 중 (R0/R1 완료, R3 대기; R1B 비필수) | W0-00 완료 | 잔여 1~2일 |
 | W0-02 | strict Clippy blocker | P1 | 완료 (99dff55) | 없음 | 0.5일 |
 | W1-01 | moderation/env tactical floor | P0 | 완료 (0f6be8d) | 없음, focused RED부터 | 1~2일 |
-| W1-02 | finite HTTP/Discord directory | P1 | 미착수 | W0-01 | 2~3일 |
-| W1-03 | write-free settings read | P1 | 미착수 | W0-01 | 1일 |
+| W1-02 | finite HTTP/Discord directory | P1 | 미착수 | W0-01A 완료 | 2~3일 |
+| W1-03 | write-free settings read | P1 | 다음 작업 | W0-01A 완료 | 1~2일 |
 | W1-04 | hashed CSS/JS + read-only smoke | P1 | 미착수 | W0-01 | 1~2일 |
 | W1-05 | accessibility/responsive foundation | P1 | 미착수 | W1-04 | 2~3일 |
 | W2-01 | current auth/mutation identity | P0 | 미착수 | W1-02/03 | 4~6일 |
 | W2-02 | component/modal live policy | P1 | 미착수 | W1-03 | 1~2일 |
 | W2-03A | guild-scoped effect 계약 | P1 | 미착수 | W1-01 | 1~2일 |
 | W2-03B | 여섯 모듈 effect 전환 | P1 | 미착수 | W2-02/W2-03A | 2~3일 |
-| W3-01 | Mongo index contract | P1 | 미착수 | W0-01 | 3~5일 + duplicate contingency |
+| W3-01 | Mongo index contract | P1 | 미착수 | W0-01A 완료 | 3~5일 + duplicate contingency |
 | W3-02 | atomic stats | P1 | 미착수 | W3-01 | 2일 |
 | W3-03A | giveaway/suggestion atomic adapter | P1 | 미착수 | W3-01 | 2~3일 |
 | W3-03B | invite delta/audit retention | P1 | 미착수 | W2-01/W3-02 | 2~3일 |
 | W3-04 | dashboard mutation durability | P0 | 미착수 | W2-01/W3-01/W3-03B | 5~8일 |
-| W4-01 | WorkSupervisor | P1 | 미착수 | W0-01/W1-02 | 2~3일 |
+| W4-01 | WorkSupervisor | P1 | 미착수 | W0-01A/W1-02 | 2~3일 |
 | W4-02 | settings snapshot cache | P1 | 미착수 | W2-02/W3-04 | 2~4일 |
 | W4-03 | Stock worker lifecycle | P1 | 미착수 | W2-02/W4-01 | 2~3일 |
 | W4-04A | session/OAuth/GameInfo/retry bound | P1 | 미착수 | W1-02/W2-01/W4-01 | 2~3일 |
@@ -1506,20 +1495,20 @@ isolated Mongo 검증은 production URI 불일치 preflight, selected test 1개 
 | W5-03 | authoritative save/reconcile | P0 | 미착수 | W1-04/W3-04/W4-02 | 4~6일 |
 | W5-04 | dirty/confirm/Undo | P1 | 미착수 | W5-03 | 2~3일 |
 | W5-05 | long list/lazy modal | P2 | 미착수 | W1-04/W2-01/W5-01/03/04 | 2~3일 |
-| W5-06 | 재현 가능한 UI quality gate | Gate | 미착수 | W0-01/W5-01~05 | 3~5일 + 모집 대기 |
-| W6-01 | dependency remediation | P1 | 미착수 | W5-06, audit는 병렬 가능 | 2~4일 + fallout |
+| W5-06 | 자동 UI quality gate + 사용자 검토 | Gate | 미착수 | W0-01/W5-01~05 | 1~2일 + 사용자 검토 |
+| W6-01 | dependency remediation | P1 | 미착수 | 없음, audit 병렬 가능 | 2~4일 + fallout |
 | W6-02 | PM2 retention | P2 | 미착수 | W1-01 | 1일 |
 | W6-03 | deterministic Pi artifact | P2 | 미착수 | W1-01/W6-01/02 | 2~3일 |
 | W6-04 | exact-HEAD canary/rollback | Gate | 미착수 | W4 관찰/W5-06/W6-01~03/W6-05 GREEN | 1~2일 + soak |
 | W6-05 | 36-finding closure matrix | Gate | 미착수 | W1~W6-03/W5-06/staging evidence | 1~2일 |
 
-공수 원장 합계는 71~109 엔지니어일이다. 병렬화는 달력 기간만 줄이며 이 합계를 줄이지 않는다. Mongo duplicate repair, dependency fallout, 참가자 모집 대기는 합계 밖 contingency다.
+기존 71~109 엔지니어일 합계는 human-study 범위가 포함된 역사적 수치이므로 더 이상 일정 기준으로 사용하지 않는다. 새 세션은 각 작업 행의 잔여 예상과 실제 evidence를 사용한다. Mongo duplicate repair와 dependency fallout는 별도 contingency다.
 
 ## 14. 첫 delivery checkpoints
 
 지원 checkpoint:
 
-1. test(remediation): establish isolated performance, Mongo, browser, and UX baselines after deterministic fonts
+1. test(remediation): establish isolated performance, Mongo, and browser baselines after deterministic fonts
 2. fix(clippy): restore strict workspace lint baseline
 
 제품 checkpoint:
@@ -1545,19 +1534,22 @@ W1-01과 W0-00은 제어-plane이나 전체 benchmark 완료를 기다리지 않
 - [ ] 4개 viewport overflow 0
 - [ ] keyboard/Narrator/focus/contrast 기준 통과
 - [ ] isolated default smoke selected test 1개 이상, skip 0, outbound/mutation/Mongo write 0
-- [ ] 서로 다른 baseline/final cohort 각 10명·50 trial에서 UX 기준 통과
+- [ ] 자동 UI 안전 gate 통과 및 사용자 직접 화면 검토 결과 기록
 - [ ] npm audit 0 및 dependency advisory 처리 완료
 - [ ] deterministic candidate/rollback artifact hash 검증
 - [ ] W4 exact binary 7일 관찰 통과
 - [ ] 30분 canary와 24시간 soak 통과
 - [ ] rollback이 보안 바닥과 원자·bounded 경계를 유지
 
-## 16. 승인 후 바로 수행할 작업
+## 16. 새 세션에서 바로 수행할 작업
 
-1. 현재 refactor 브랜치를 유지하고 추가 control-plane 또는 하위 작업 브랜치를 만들지 않는다.
-2. W1-01 moderation/env focused RED를 즉시 작성한다.
-3. W0-00 deterministic font를 별도 파일 소유권으로 병렬 시작한다.
-4. W0-00 GREEN 뒤 W0-01 isolated baseline을 시작하고, W1-01 GREEN과 secure-env 계약을 통과시켜 P0 제품 커밋을 만든다.
-5. W1-03과 W1-04를 준비하고 작업 추적표에 실제 owner, 시작일, evidence path를 기록한다.
+1. `refactor` 브랜치와 clean worktree를 확인하고 추가 control-plane 또는 하위 작업 브랜치를 만들지 않는다.
+2. `edbf95c` 이후 문서-only 인계 커밋을 확인한다.
+3. W1-03 focused RED로 guild settings GET의 현재 write 동작을 고정한다.
+4. repository `Option` read 경계와 absent/existing/unavailable dashboard 계약을 구현한다.
+5. GET write 0을 fake repository와 isolated Mongo에서 증명하고 package/workspace test와 strict Clippy를 통과시킨다.
+6. 다음 순서는 W1-02 → W2-01/02 → W2-03A/B → W3-01~04 → W4 → R3 → W5-01~03 → W6로 유지한다.
+
+사람 대상 UX baseline/final, runner, recorder, 참가자 모집은 재개하지 않는다. UI 편의성은 사용자가 직접 판단하며 자동화는 보안·상태 정확성·mutation 안전성·접근성·반응형 회귀를 소유한다.
 
 이 시점부터 진척률은 제어 스크립트 수가 아니라 완료된 제품 작업 패키지와 통과한 acceptance criterion으로 보고한다.

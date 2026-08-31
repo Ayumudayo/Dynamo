@@ -6,7 +6,7 @@
 
 대상 브랜치: `refactor`
 
-기준 커밋: `067b044` (`fix(perf): validate retained result schema`)
+제품·검증 기준 커밋: `edbf95c` (`test(ux): define baseline evidence contract`)
 
 상위 계획: [DYNAMO_IMPROVEMENT_WORK_PLAN.md](DYNAMO_IMPROVEMENT_WORK_PLAN.md)
 
@@ -25,11 +25,11 @@
 | 구분 | 작업 | 상태 | 현재 증거 |
 | --- | --- | --- | --- |
 | 완료 | W0-00, W0-02, W1-01 | 3/36 완료 | `609d3c9`, `99dff55`·`36fef09`, `0f6be8d` |
-| 부분 완료 | W0-01 | R0·R1 완료, R1B 대기 | live Public baseline A/B와 격리 cleanup GREEN; 사람 대상 UX baseline과 실제 browser는 미완료 |
+| 부분 완료 | W0-01 | R0·R1 완료, R3 대기 | live Public baseline A/B와 격리 cleanup GREEN; 사람 대상 UX 연구는 필수 gate에서 제외, 실제 browser는 미완료 |
 | 미착수 | 나머지 32개 | 미착수 | 상위 계획의 작업 추적표 기준 |
-| 현재 중요 경로 | R1B 기술 preflight → UX baseline → W1-03 → W0-01B 실제 브라우저 → W1-04/05 | 기술·외부 준비 필요 | human-study runner/state/reset/recorder와 참가자 10명 미준비 |
+| 현재 중요 경로 | W1-03 → W1-02 → W2 권한/effect → W3 원자 persistence → W4 bounded runtime → R3 자동 browser → W5 상태 정확성 → W6 배포 | 즉시 착수 가능 | 다음 checkpoint는 W1-03 write-free settings read |
 
-완료율은 여전히 3/36이다. 동일 revision·fixture의 retained Public baseline 2회는 확보했지만 R1B의 50 trial과 실제 브라우저 실행이 없으므로 W0-01 전체를 완료 작업으로 올리지 않는다.
+완료율은 여전히 3/36이다. 동일 revision·fixture의 retained Public baseline 2회는 확보했지만 실제 read-only Chromium matrix가 없으므로 W0-01 전체를 완료 작업으로 올리지 않는다. 사람 대상 10명·50 trial은 2026-08-31 사용자 결정으로 필수 완료 조건에서 제외했다.
 
 ### 2.2 이미 확보한 기반
 
@@ -53,31 +53,31 @@
 - `ReadOnly+Playwright`, `GuildDetail+Load`, `Public+Npm`은 결과 inventory에 예정 조합으로만 존재한다.
 - Playwright 계약 테스트는 통과했지만 실제 Chromium 12-cell UI matrix는 실행하지 않았다.
 - dashboard GET이 Mongo write 0이라는 제품 계약은 아직 성립하지 않는다.
-- 실제 사용자가 UI를 편리하게 사용할 수 있다는 결론을 낼 baseline/final 50 trial은 수행하지 않았다.
+- UI 편의성은 사용자가 직접 검토·판단한다. 사람 대상 baseline/final 50 trial은 수행하지 않으며 완료 차단 조건으로 사용하지 않는다.
 - 보안 전체 deep scan은 사용량 제한으로 완료하지 않았다. 이후 보안 작업은 표준·범위 제한 검증과 36개 closure matrix로 추적한다.
 
 ## 3. 즉시 실행 순서
 
 ```mermaid
 flowchart LR
-    A["R0 프로세스 잔류 원인 규명"] --> B["R1 Public+Load 2회 기준선"]
-    B --> C["R1B 사람 대상 UX baseline 50 trial"]
-    C --> D["R2 W1-03 write-free read"]
-    D --> E["R3 ReadOnly+Playwright 연결"]
-    E --> F["R4 W1-04 자산·read-only smoke"]
-    F --> G["R5 W1-05 접근성·반응형 기반"]
-    G --> H["R6 W2~W6 제품 개선"]
-    H --> I["R7 최종 자동·사람 UI 검증과 canary"]
+    A["완료: R0/R1 격리·Public baseline"] --> B["다음: R2 W1-03 write-free read"]
+    B --> C["W1-02 finite HTTP/Discord"]
+    C --> D["W2 current auth·guild-scoped effect"]
+    D --> E["W3 index·원자 persistence"]
+    E --> F["W4 bounded runtime"]
+    F --> G["R3 자동 ReadOnly+Playwright"]
+    G --> H["W5 상태 정확성·자동 접근성"]
+    H --> I["W6 dependency·artifact·canary"]
 ```
 
-W0-01의 live runner, Public baseline, 사람 대상 UX baseline을 먼저 끝내고 W1-03을 첫 제품 checkpoint로 처리한다. W1-03 전에는 GuildDetail 부하 결과의 GET write 수를 성능 회귀로 판정하지 않는다. W1-03 후에야 read-only 브라우저 경로와 UI 상태 표현을 신뢰할 수 있다.
+R0/R1이 완료됐으므로 W1-03을 다음 제품 checkpoint로 즉시 시작한다. W1-03 전에는 GuildDetail 부하 결과의 GET write 수를 성능 회귀로 판정하지 않는다. W1-03 후에 read-only 브라우저 경로와 UI 상태 표현을 신뢰할 수 있다.
 
 상위 계획의 순환 의존성을 실행 가능하게 만들기 위해 W0-01을 두 checkpoint로 공식 분할한다.
 
-- W0-01A: R0, R1, R1B의 runner·Public·사람 대상 baseline. W1-03의 필수 선행조건이다.
+- W0-01A: R0/R1 runner·Public baseline. 완료됐으며 W1-03을 시작할 수 있다. R1B 연구 schema는 참고 자산으로만 유지한다.
 - W0-01B: R3의 실제 `ReadOnly+Playwright`와 W1-03 이후 mutation-zero browser closure.
 
-W0-01 전체 상태는 W0-01B까지 끝날 때까지 “진행 중”으로 유지한다. W1-03은 W0-01A GREEN 뒤 시작하는 명시적 예외 순서이며, 이 분할을 상위 계획 추적표에도 기록한다.
+W0-01 전체 상태는 W0-01B까지 끝날 때까지 “진행 중”으로 유지한다. 사람 대상 연구의 미실행은 W1-03, W5 또는 릴리스를 차단하지 않는다.
 
 권장 소유권은 다음과 같다. 한 사람이 여러 역할을 맡을 수 있지만 같은 checkpoint의 구현자와 승인 리뷰어는 가능하면 분리한다.
 
@@ -185,7 +185,7 @@ pwsh -NoProfile -File scripts/perf/with-isolated-dashboard.ps1 -FixtureMode Publ
 - 각 성공 attempt에는 정확히 4개 allowlisted leaf만 남고 다른 파일·디렉터리는 없다.
 - 결과 파일만 retained inventory에 남고 URI, nonce, cookie, raw secret은 남지 않는다.
 
-완료 후 상위 계획의 W0-01을 바로 완료로 바꾸지 않는다. R1B의 유효한 50-trial evidence와 W0-01B의 실제 read-only browser baseline까지 확보한 뒤 완료 여부를 판정한다.
+완료 후 상위 계획의 W0-01을 바로 완료로 바꾸지 않는다. W0-01B의 실제 read-only browser baseline까지 확보한 뒤 완료 여부를 판정한다.
 
 ### 5.3 실행 기록 — 2026-08-31
 
@@ -218,42 +218,21 @@ pwsh -NoProfile -File scripts/perf/with-isolated-dashboard.ps1 -FixtureMode Publ
 
 repo-local evidence path는 `output/perf/attempts/<attempt>`이며 Git에는 포함하지 않는다. 두 inventory 모두 URI credential, nonce, cookie, authorization, raw secret pattern 0을 확인했다.
 
-## 5A. R1B — 사람 대상 UX baseline 발행
+## 5A. R1B — 사람 대상 UX 연구 계약
 
-대응 작업: W0-01 잔여
+대응 작업: 비필수 참고 자산
 
-상태: HOLD — evidence schema/validator 완료; human-study runner/state/reset/recorder와 외부 참가자 10명 필요
+상태: 필수 gate에서 제외 (`edbf95c`, 사용자 결정 2026-08-31)
 
 실행 runbook: [docs/ux/DYNAMO_UX_BASELINE_RUNBOOK.md](docs/ux/DYNAMO_UX_BASELINE_RUNBOOK.md)
 
-예상: 2~3 엔지니어일, 참가자 모집 대기시간 별도
+예상: 추가 작업 없음
 
-W1-03을 포함한 dashboard UI·상태 표현 변경 전에 현재 UI의 baseline을 먼저 고정한다. 이 단계가 끝나기 전에는 W1-03, W1-04, W1-05, W5의 UI 변경을 시작하지 않는다.
+사용자가 dashboard UI 편의성을 직접 검토·판단하기로 했으므로 human-study runner, recorder, 참가자 모집과 50-trial baseline/final 비교를 구현하지 않는다. 이 단계는 W1-03, W1-04, W1-05, W5, W6의 선행조건이 아니다.
 
-2026-08-31 현재 trial을 생성하지 않았다. 실제 참가자가 없는 결과, 현재 fixture가 재현하지 못하는 과업, 외부 시스템에 연결된 session은 evidence로 인정하지 않는다.
+2026-08-31 현재 trial은 생성하지 않았다. 이를 누락된 제품 증거나 릴리스 blocker로 계산하지 않는다.
 
-코드 준비도 점검 결과 T1은 UI 동작만 READY, T2는 상태 해석 baseline으로 조건부 READY, T3~T5와 공통 launch/reset/evidence 경로는 HOLD다. 세부 근거와 기술 선행물은 runbook 2.1절을 따른다. 미래 dirty/status/Undo 기능이 현재 UI에 이미 있는 것처럼 fake fixture를 만들지 않는다.
-
-증거 schema와 fail-closed validator는 baseline/final phase binding, 10명·50 trial, Williams sequence, evaluator/browser/fixture digest, right-censor, help, outbound 0, task별 write·state restore oracle을 검증한다. 아직 recorder가 아니며 실제 참가자 결과를 생성하지 않는다.
-
-### 5A.1 실행 계약
-
-- 참가자 10명은 occasional 관리자 5명과 regular 관리자 5명으로 구성하고 구현 참여자는 제외한다.
-- 참가자당 상위 계획 W5-06의 고정 과업 5개를 한 번씩 수행해 정확히 50 trial을 만든다.
-- 과업 순서는 balanced Latin-square로 배치한다.
-- 각 trial 전 deterministic fake fixture를 같은 hash로 초기화한다.
-- browser, viewport, font-ready 조건, 평가자 script, 도움 규칙과 도움 문구 한 문장을 고정한다.
-- shared, staging, production guild/database와 live Discord/Toss를 사용하지 않는다.
-
-### 5A.2 결과와 완료 조건
-
-- trial별 `completed`, `unassisted`, `duration_ms`, `help_count`, `critical_error`, `SEQ 1~7`을 기록한다.
-- participant identifier는 연구용 pseudonym으로 분리하고 제품 로그·repository에는 넣지 않는다.
-- immutable 외부 evidence 위치에 schema, fixture hash, cohort 구성, evaluator script hash, 50개 trial을 보존한다.
-- tracked 문서에는 evidence URI, content digest, schema version, 실행일만 기록한다.
-- 누락 trial, fixture drift, 도움 문구 변경, 외부 요청이 하나라도 있으면 baseline 전체를 무효화한다.
-
-참가자를 확보하지 못했거나 50개 유효 trial을 만들지 못하면 UI 변경을 중단한다. 이 checkpoint를 완료하면 W0-01A를 GREEN으로 판정하고 분할 상태와 evidence를 상위 계획에 기록한다. W0-01 전체 완료 처리는 R3의 W0-01B까지 보류한다.
+`edbf95c`의 schema, validator, contract test와 runbook은 삭제하지 않고 향후 사용자가 정량 연구를 다시 요청할 때 재사용한다. 현재에는 자동 생성 evidence나 가상 참가자 결과를 만들지 않는다. UI에서 계속 필수인 것은 편의성 점수가 아니라 권한, 상태 사실성, mutation 안전성, 외부 요청 0, keyboard/focus/overflow 같은 자동 회귀 계약이다.
 
 ## 6. R2 — W1-03 write-free guild settings read
 
@@ -350,7 +329,7 @@ absent, existing, unavailable은 W1-03의 focused HTML/API 상태 matrix에서 �
 - Playwright 결과에는 8개 안전 counter와 result-only inventory가 있다.
 - 실행 metadata에는 실제 Playwright와 Chromium version/revision이 있다.
 - Chromium, dashboard, cargo/rustc/link helper, 포트, temp dir가 모두 정리된다.
-- `npm run perf:test` 59/59 계약을 유지한다.
+- `npm run perf:test` 현재 73/73 계약을 유지하며 R3 추가 계약 수를 명시적으로 갱신한다.
 
 자동 matrix 통과는 “사용하기 편리하다”의 충분조건이 아니다. 이는 기능·안전·반응형 결함을 찾는 첫 관문이다.
 
@@ -410,43 +389,38 @@ W1-02는 네트워크 지연을 무한 대기로 바꾸지 않으며 timeout, re
 
 세부 인터페이스, 공수, RED/GREEN, rollback 규칙은 상위 계획의 각 작업 절을 따른다. 한 작업의 공통 경계를 다음 작업에서 다시 만들지 않는다.
 
-## 11. UI가 정말 편리한지 검증하는 방법
+## 11. UI 검증 경계
 
-### 11.1 자동 검증과 사람 검증의 구분
+### 11.1 자동화가 소유하는 필수 계약
 
-| 질문 | 자동화로 판정 | 사람 검증 필요 |
-| --- | --- | --- |
-| 화면이 깨지지 않는가 | viewport, overflow, CLS, DOM, console | 보조 확인 |
-| 키보드·스크린리더가 접근 가능한가 | focus, role, name, tab order | Windows Narrator 실제 사용 |
-| 잘못된 쓰기를 막는가 | method/Mongo counter, Red proof | 결과 이해 여부 |
-| 오류에서 복구할 수 있는가 | Retry/Undo/status DOM과 state | 다음 행동을 스스로 찾는지 |
-| 작업이 편리한가 | 시간·오류 수집 도구 | 성공률, 도움 요청, SEQ, 관찰 |
+| 질문 | 필수 증거 |
+| --- | --- |
+| 화면이 깨지지 않는가 | viewport, overflow, CLS, DOM, console assertion |
+| 키보드로 접근 가능한가 | focus, role, name, tab order, dialog focus return |
+| 잘못된 쓰기를 막는가 | method/Mongo counter와 의도적 Red proof |
+| 상태를 사실대로 표시하는가 | local/effective/blocker, absent/unavailable, pending/error/outcome-unknown state matrix |
+| 오류에서 복구 가능한가 | Retry/Undo/status DOM과 server state oracle |
 
-자동 테스트만 통과한 상태에서 “편리하게 구현됐다”고 결론 내리지 않는다.
+자동 테스트는 보안·정확성·회귀를 판정한다. 시각적 완성도와 실제 사용 편의성은 사용자가 직접 검토하고 승인한다.
 
-### 11.2 baseline과 final protocol
+### 11.2 사용자 직접 검토
 
-- baseline 10명과 final 10명은 서로 다른 참가자다.
-- 각 cohort는 occasional 관리자 5명과 regular 관리자 5명이며 구현 참여자는 제외한다.
-- 참가자당 고정 과업 5개를 수행해 phase당 정확히 50 trial을 만든다.
-- 과업 순서는 balanced Latin-square로 배치한다.
-- browser, viewport, font-ready, 평가자 script, fixture hash, 도움 규칙을 두 phase에서 고정한다.
-- trial별 `completed`, `unassisted`, `duration_ms`, `help_count`, `critical_error`, `SEQ 1~7`을 기록한다.
-- shared, staging, production guild/database와 live Discord/Toss를 사용하지 않는다.
+- 구현자는 사용자 검토 전에 자동 route/state matrix와 안전 counter를 GREEN으로 만든다.
+- 사용자는 화면 구성, 정보 밀도, 문구, 조작 편의성을 직접 판단한다.
+- 사용자 검토에서 발견된 문제는 별도 작업으로 기록하되 보안·데이터 무결성 작업을 불필요하게 차단하지 않는다.
+- shared/production guild, database, Discord, Toss를 UI 검토 fixture로 사용하지 않는다.
 
-최종 다섯 과업은 상위 계획 W5-06의 검색·상태 설명·dirty close·응답 유실 reconciliation·Undo 시나리오를 그대로 사용한다.
+기존 UX 연구 schema/runbook은 선택적 참고 자료이며 현재 실행하거나 채우지 않는다.
 
-### 11.3 최종 합격 기준
+### 11.3 최종 UI 합격 기준
 
-- critical error 0
-- 50회 중 46회 이상 도움 없이 완료
-- 각 과업 median SEQ 5/7 이상
-- 어떤 과업·경험 집단도 baseline보다 느려지지 않음
-- 최소 3개 과업의 median 시간이 10% 이상 개선
-- keyboard-only와 Windows Narrator로 pending/error/success/outcome-unknown, confirmation, Undo, lazy modal Retry, dirty close, 409 확인
-- 별도 375px human sanity pass와 전체 자동 route/state matrix의 overflow 0
+- 자동 route/state matrix에서 false success, wrong scope, duplicate write, unrecovered state drift 0
+- keyboard-only와 Windows Narrator smoke로 pending/error/success/outcome-unknown, confirmation, Undo, lazy modal Retry, dirty close, 409 확인
+- 375/768/1024/1440px에서 전체 자동 matrix overflow 0
+- outbound/mutation counter와 접근성 assertion GREEN
+- 사용자가 최종 화면을 직접 검토하고 수용하거나 후속 수정 항목을 기록
 
-참가자 모집 대기는 개발 공수와 별도로 관리한다. baseline cohort를 확보하지 못하면 W5-06 final 비교를 완료할 수 없다.
+참가자 cohort, 50-trial 완료율, SEQ와 시간 비교는 현재 완료 조건이 아니다.
 
 ## 12. CI, 릴리스, 문서 작업
 
@@ -477,11 +451,16 @@ W1-02는 네트워크 지연을 무한 대기로 바꾸지 않으며 timeout, re
 
 1. `fix(perf): bind and drain the actual build process tree`
 2. `test(perf): retain repeatable public dashboard baselines`
-3. `docs(ux): record pre-change usability baseline evidence`
-4. `fix(dashboard): make guild settings reads side-effect free`
-5. `test(dashboard): run the isolated readonly browser matrix`
-6. `refactor(dashboard): serve hashed css and javascript assets`
-7. `fix(dashboard): establish accessible responsive foundations`
+3. `test(ux): define baseline evidence contract` — 완료, 비필수 참고 자산
+4. `fix(dashboard): make guild settings reads side-effect free` — 다음 작업
+5. `fix(network): bound dashboard and Discord HTTP work`
+6. `fix(security): revalidate current dashboard authorization`
+7. `fix(security): scope Discord effects to source guilds`
+8. `fix(persistence): establish indexes and atomic transitions`
+9. `fix(runtime): bound workers, retries, waiters, and caches`
+10. `test(dashboard): run the isolated readonly browser matrix`
+11. `fix(dashboard): make state and save outcomes authoritative`
+12. `build(release): verify deterministic artifact and rollback`
 
 각 checkpoint는 하나의 실패 원인 또는 제품 계약만 소유한다. `output/`의 generated baseline JSON은 Git에 커밋하지 않고 CI 또는 승인된 외부 immutable artifact 저장소에 보존한다. tracked 문서에는 schema version, content digest, evidence URI만 기록하며 temp, DB, cookie, URI credential, nonce를 포함하지 않는다.
 
@@ -500,22 +479,49 @@ W1-02는 네트워크 지연을 무한 대기로 바꾸지 않으며 timeout, re
 
 ## 15. 인계 체크리스트
 
+### 15.1 새 세션 시작점 — 2026-08-31
+
+- 브랜치: `refactor`
+- 제품·검증 기준: `edbf95c test(ux): define baseline evidence contract`
+- 문서 갱신 커밋: 새 세션에서 `git log -1 --oneline`으로 확인
+- 작업 트리: 이 문서 커밋 후 clean이어야 함
+- 다음 작업: R2 / W1-03 write-free guild settings read
+- 사람 대상 UX baseline/final 연구: 필수 gate에서 제외, 구현하지 않음
+- 금지: production/shared guild·DB·Discord·Toss 사용, 관련 없는 runner 재설계, UI 편의성 연구 재개
+
+새 세션 첫 확인 명령:
+
+```powershell
+git branch --show-current
+git status --short
+git log -3 --oneline
+rg -n "## 6\. R2|### W1-03" DYNAMO_REMAINING_WORK_PLAN.md DYNAMO_IMPROVEMENT_WORK_PLAN.md
+```
+
+W1-03 첫 checkpoint 범위:
+
+1. focused RED로 GET이 write를 유발하는 현재 동작을 고정한다.
+2. `GuildSettingsRepository::get -> Result<Option<GuildSettings>, Error>` 경계를 도입한다.
+3. absent/existing/unavailable과 GET write 0을 repository, isolated Mongo, dashboard에서 검증한다.
+4. package test, workspace locked test, strict Clippy를 통과시킨다.
+5. 계획 문서의 W1-03 상태와 실제 증거를 갱신하고 하나의 제품 커밋으로 종료한다.
+
 - [ ] 작업 시작 전 `refactor`와 HEAD를 확인했다.
 - [ ] 작업 트리의 사용자 변경을 보존했다.
 - [ ] R0에서 실제 잔류 process identity를 기록했다.
 - [ ] Public baseline 두 실행의 revision과 fixture hash가 같다.
 - [ ] W1-03 GET write 0과 absent/existing/unavailable을 증명했다.
 - [ ] 실제 Chromium 12-cell matrix를 Pass/Red proof와 함께 실행했다.
-- [ ] UI 자동 검증과 사람 대상 편의성 검증을 구분했다.
+- [ ] UI 자동 안전 검증과 사용자 직접 편의성 판단을 구분했다.
 - [ ] production/shared guild, DB, Discord, Toss에 요청하지 않았다.
 - [ ] CI, release allowlist, 상위 계획 상태를 동기화했다.
 - [ ] 다음 작업자가 재현할 명령과 evidence path를 남겼다.
 
 ## 16. 현재 금지되는 완료 주장
 
-- Public live baseline A/B는 완료했지만 R1B와 R3가 없으므로 W0-01 전체 완료라고 말하지 않는다.
+- Public live baseline A/B는 완료했지만 R3 실제 browser가 없으므로 W0-01 전체 완료라고 말하지 않는다.
 - static browser contract만으로 Playwright E2E가 통과했다고 말하지 않는다.
-- 실제 12-cell matrix와 baseline/final 사람 검증 전에는 UI가 “정말 편리하다”고 말하지 않는다.
+- 자동 검증만으로 UI가 “정말 편리하다”고 말하지 않는다. 편의성의 최종 판단은 사용자에게 있다.
 - 사용량 제한으로 중단한 deep scan을 전체 보안 검증 완료로 표현하지 않는다.
 - runner·PowerShell·CI만 변경하고 보안·성능·UI 제품 개선이 끝났다고 말하지 않는다.
 - push, PR, merge, staging 배포는 실제 성공 증거가 없으면 완료로 기록하지 않는다.

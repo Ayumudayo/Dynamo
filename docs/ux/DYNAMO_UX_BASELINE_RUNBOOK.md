@@ -4,7 +4,9 @@
 
 대응 작업: W0-01A / R1B
 
-상태: `HOLD — evidence schema/validator는 준비됨; deterministic study fixture, runner, 참가자 cohort는 아직 준비되지 않음`
+상태: `선택적 보존 자료 — 2026-08-31 사용자 결정으로 필수 gate에서 제외; 명시적 재요청 전 실행하지 않음`
+
+현재 실행 계획에서는 human-study fixture, runner, recorder와 참가자 cohort를 구현하지 않는다. UI 편의성은 사용자가 직접 판단하며, 이 문서의 10명·50 trial 계약은 향후 사용자가 정량 연구를 다시 요청할 때만 재사용한다. 미실행은 W0-01, W1~W6 또는 릴리스의 blocker가 아니다.
 
 ## 1. 목적
 
