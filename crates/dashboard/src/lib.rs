@@ -1131,11 +1131,35 @@ async fn guild_page(
         .await
         .unwrap_or_default();
     let command_sync_store = load_command_sync_store(&state.persistence).await;
-    let settings = state
-        .persistence
-        .guild_settings_or_default(guild_id)
-        .await
-        .unwrap_or_default();
+    let Some(_) = state.persistence.guild_settings.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Html(render_error_page(
+                &state,
+                Some(&session),
+                "Guild Settings Unavailable",
+                "Guild settings could not be loaded. Please try again.",
+            )),
+        )
+            .into_response();
+    };
+    let (settings, settings_persisted) = match state.persistence.guild_settings(guild_id).await {
+        Ok(Some(settings)) => (settings, true),
+        Ok(None) => (GuildSettings::for_guild(guild_id), false),
+        Err(error) => {
+            warn!(?error, guild_id, "failed to load guild settings page");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_error_page(
+                    &state,
+                    Some(&session),
+                    "Guild Settings Unavailable",
+                    "Guild settings could not be loaded. Please try again.",
+                )),
+            )
+                .into_response();
+        }
+    };
     let active_tab = normalized_tab(query.tab.as_deref());
     let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
     let log_action = parse_audit_action_filter(query.log_action.as_deref());
@@ -1210,8 +1234,18 @@ async fn guild_page(
         &resolved_command_states,
     );
     let overview_panel = format!(
-        "<section id=\"overview\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
+        "<section id=\"overview\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\" data-settings-state=\"{settings_state}\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div>{settings_notice}<div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
         guild_id = guild_id,
+        settings_state = if settings_persisted {
+            "existing"
+        } else {
+            "absent"
+        },
+        settings_notice = if settings_persisted {
+            ""
+        } else {
+            "<p class=\"notice\" data-testid=\"guild-settings-absent\">No guild settings have been saved yet. Defaults are shown.</p>"
+        },
         runtime_notices = render_runtime_notices(&state.module_catalog),
     );
     let modules_section = format!(
@@ -3643,15 +3677,30 @@ async fn get_guild_settings(
     if let Err(response) = require_api_guild_access(&state, &jar, guild_id).await {
         return response;
     }
-    match state.persistence.guild_settings_or_default(guild_id).await {
-        Ok(settings) => Json(settings).into_response(),
-        Err(error) => (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(error_payload(format!(
-                "failed to load guild settings: {error}"
-            ))),
+    let Some(repo) = state.persistence.guild_settings.as_ref() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_payload("guild settings are unavailable".to_string())),
+        )
+            .into_response();
+    };
+    match repo.get(guild_id).await {
+        Ok(Some(settings)) => {
+            ([("x-dynamo-settings-state", "existing")], Json(settings)).into_response()
+        }
+        Ok(None) => (
+            [("x-dynamo-settings-state", "absent")],
+            Json(GuildSettings::for_guild(guild_id)),
         )
             .into_response(),
+        Err(error) => {
+            warn!(?error, guild_id, "failed to load guild settings API");
+            (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_payload("guild settings are unavailable".to_string())),
+            )
+                .into_response()
+        }
     }
 }
 
@@ -3683,8 +3732,8 @@ async fn patch_guild_module_settings(
             .into_response();
     };
 
-    let current_settings = match repo.get_or_create(guild_id).await {
-        Ok(settings) => settings,
+    let current_settings = match repo.get(guild_id).await {
+        Ok(settings) => settings.unwrap_or_else(|| GuildSettings::for_guild(guild_id)),
         Err(error) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -3794,8 +3843,8 @@ async fn patch_guild_command_settings(
             .into_response();
     };
 
-    let current_settings = match repo.get_or_create(guild_id).await {
-        Ok(settings) => settings,
+    let current_settings = match repo.get(guild_id).await {
+        Ok(settings) => settings.unwrap_or_else(|| GuildSettings::for_guild(guild_id)),
         Err(error) => {
             return (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -4344,34 +4393,269 @@ async function requestGuildCommandSync(guildId) {
 
 #[cfg(test)]
 mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
     use super::{
-        DashboardConfig, DashboardGuild, DashboardState, DiscordApplicationInfo,
-        FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG, FIRA_CODE_VARIABLE_PATH,
-        FIRA_CODE_VARIABLE_SHA256, FIRA_SANS_BOLD_BYTES, FIRA_SANS_BOLD_ETAG, FIRA_SANS_BOLD_PATH,
-        FIRA_SANS_BOLD_SHA256, FIRA_SANS_LIGHT_BYTES, FIRA_SANS_LIGHT_ETAG, FIRA_SANS_LIGHT_PATH,
-        FIRA_SANS_LIGHT_SHA256, FIRA_SANS_MEDIUM_BYTES, FIRA_SANS_MEDIUM_ETAG,
-        FIRA_SANS_MEDIUM_PATH, FIRA_SANS_MEDIUM_SHA256, FIRA_SANS_REGULAR_BYTES,
-        FIRA_SANS_REGULAR_ETAG, FIRA_SANS_REGULAR_PATH, FIRA_SANS_REGULAR_SHA256,
-        FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG, FIRA_SANS_SEMIBOLD_PATH,
-        FIRA_SANS_SEMIBOLD_SHA256, FONT_CACHE_CONTROL, audit_action_label, audit_entity_label,
-        build_dashboard_router, dashboard_styles, escape_html, font_asset_router,
-        render_audit_logs_section, render_dashboard_page_shell, render_field,
+        DashboardConfig, DashboardGuild, DashboardSession, DashboardState, DashboardUser,
+        DiscordApplicationInfo, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG,
+        FIRA_CODE_VARIABLE_PATH, FIRA_CODE_VARIABLE_SHA256, FIRA_SANS_BOLD_BYTES,
+        FIRA_SANS_BOLD_ETAG, FIRA_SANS_BOLD_PATH, FIRA_SANS_BOLD_SHA256, FIRA_SANS_LIGHT_BYTES,
+        FIRA_SANS_LIGHT_ETAG, FIRA_SANS_LIGHT_PATH, FIRA_SANS_LIGHT_SHA256, FIRA_SANS_MEDIUM_BYTES,
+        FIRA_SANS_MEDIUM_ETAG, FIRA_SANS_MEDIUM_PATH, FIRA_SANS_MEDIUM_SHA256,
+        FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG, FIRA_SANS_REGULAR_PATH,
+        FIRA_SANS_REGULAR_SHA256, FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG,
+        FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256, FONT_CACHE_CONTROL,
+        GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME, audit_action_label,
+        audit_entity_label, build_dashboard_router, dashboard_styles, escape_html,
+        font_asset_router, render_audit_logs_section, render_dashboard_page_shell, render_field,
         render_settings_modal, request_id_for_logging, request_path_for_logging,
         request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
     };
-    use std::sync::Arc;
-
+    use async_trait::async_trait;
     use axum::{
         body::{Body, to_bytes},
         http::{HeaderMap, HeaderValue, Request, StatusCode, Uri, header},
     };
+    use chrono::{Duration, Utc};
     use dynamo_module_kit::{CommandCatalog, ModuleCatalog, SettingsField, SettingsFieldKind};
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
         DashboardAuditLogPage, DashboardAuditScope,
     };
     use dynamo_persistence_api::Persistence;
+    use dynamo_repositories::GuildSettingsRepository;
+    use dynamo_settings::GuildCommandSettings;
     use tower::ServiceExt;
+
+    enum GuildSettingsReadResult {
+        Absent,
+        Existing(GuildSettings),
+        Unavailable,
+    }
+
+    struct FakeGuildSettingsRepository {
+        result: GuildSettingsReadResult,
+        reads: AtomicUsize,
+        writes: AtomicUsize,
+    }
+
+    impl FakeGuildSettingsRepository {
+        fn new(result: GuildSettingsReadResult) -> Self {
+            Self {
+                result,
+                reads: AtomicUsize::new(0),
+                writes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl GuildSettingsRepository for FakeGuildSettingsRepository {
+        async fn get(&self, _guild_id: u64) -> anyhow::Result<Option<GuildSettings>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            match &self.result {
+                GuildSettingsReadResult::Absent => Ok(None),
+                GuildSettingsReadResult::Existing(settings) => Ok(Some(settings.clone())),
+                GuildSettingsReadResult::Unavailable => {
+                    anyhow::bail!("fake guild settings repository unavailable")
+                }
+            }
+        }
+
+        async fn upsert_module_settings(
+            &self,
+            _guild_id: u64,
+            _module_id: &str,
+            _settings: GuildModuleSettings,
+        ) -> anyhow::Result<GuildSettings> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("unexpected guild settings module write")
+        }
+
+        async fn upsert_command_settings(
+            &self,
+            _guild_id: u64,
+            _command_id: &str,
+            _settings: GuildCommandSettings,
+        ) -> anyhow::Result<GuildSettings> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("unexpected guild settings command write")
+        }
+    }
+
+    fn test_dashboard_state(persistence: Persistence) -> Arc<DashboardState> {
+        Arc::new(DashboardState {
+            config: DashboardConfig {
+                host: "127.0.0.1".parse().expect("loopback address"),
+                port: 3000,
+                public_base_url: "http://127.0.0.1:3000".to_string(),
+                bot_token: "test-token".to_string(),
+                client_secret: "test-secret".to_string(),
+                invite_permissions: 0,
+                admin_user_ids: Vec::new(),
+                register_globally: false,
+                command_sync_interval_seconds: 15,
+            },
+            http: reqwest::Client::new(),
+            app_info: DiscordApplicationInfo {
+                id: "test-app".to_string(),
+                name: "Test App".to_string(),
+                icon: None,
+                owner_user_id: None,
+            },
+            module_catalog: ModuleCatalog::default(),
+            command_catalog: CommandCatalog::default(),
+            persistence,
+            sessions: Default::default(),
+            oauth_states: Default::default(),
+            #[cfg(feature = "perf-harness")]
+            perf_runtime: None,
+        })
+    }
+
+    async fn insert_session(state: &Arc<DashboardState>, session_id: &str, guild_id: u64) {
+        state.sessions.write().await.insert(
+            session_id.to_string(),
+            DashboardSession {
+                user: DashboardUser {
+                    id: 7,
+                    username: "tester".to_string(),
+                    global_name: Some("Tester".to_string()),
+                    avatar: None,
+                },
+                guilds: vec![DashboardGuild {
+                    id: guild_id,
+                    name: "Guild".to_string(),
+                    icon: None,
+                    permissions: (1u64 << 5).to_string(),
+                }],
+                access_token: "test-access-token".to_string(),
+                expires_at: Utc::now() + Duration::minutes(5),
+            },
+        );
+    }
+
+    fn authenticated_request(method: &str, path: &str, session_id: &str) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(
+                header::COOKIE,
+                format!("{SESSION_COOKIE_NAME}={session_id}"),
+            )
+            .body(Body::empty())
+            .expect("valid authenticated request")
+    }
+
+    async fn json_response(response: axum::response::Response) -> serde_json::Value {
+        let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("bounded response body");
+        serde_json::from_slice(&body).expect("JSON response body")
+    }
+
+    #[tokio::test]
+    async fn guild_settings_api_returns_absent_state_without_writing() {
+        let repository = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Absent,
+        ));
+        let state = test_dashboard_state(Persistence {
+            guild_settings: Some(repository.clone()),
+            ..Persistence::default()
+        });
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/guild-settings/42",
+                "test-session",
+            ))
+            .await
+            .expect("guild settings response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-dynamo-settings-state"], "absent");
+        let body = json_response(response).await;
+        assert_eq!(body["guild_id"], 42);
+        assert_eq!(repository.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn guild_settings_api_returns_existing_state_without_writing() {
+        let mut settings = GuildSettings::for_guild(42);
+        settings.modules.insert(
+            "ticket".to_string(),
+            GuildModuleSettings {
+                enabled: true,
+                configuration: serde_json::json!({ "panel_channel_id": "123" }),
+            },
+        );
+        let repository = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Existing(settings),
+        ));
+        let state = test_dashboard_state(Persistence {
+            guild_settings: Some(repository.clone()),
+            ..Persistence::default()
+        });
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/guild-settings/42",
+                "test-session",
+            ))
+            .await
+            .expect("guild settings response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.headers()["x-dynamo-settings-state"], "existing");
+        let body = json_response(response).await;
+        assert_eq!(body["guild_id"], 42);
+        assert_eq!(body["modules"]["ticket"]["enabled"], true);
+        assert_eq!(
+            body["modules"]["ticket"]["configuration"]["panel_channel_id"],
+            "123"
+        );
+        assert_eq!(repository.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn guild_settings_api_returns_service_unavailable_when_read_fails() {
+        let repository = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Unavailable,
+        ));
+        let state = test_dashboard_state(Persistence {
+            guild_settings: Some(repository.clone()),
+            ..Persistence::default()
+        });
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/guild-settings/42",
+                "test-session",
+            ))
+            .await
+            .expect("guild settings response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert!(response.headers().get("x-dynamo-settings-state").is_none());
+        let body = json_response(response).await;
+        assert_eq!(body["message"], "guild settings are unavailable");
+        assert_eq!(repository.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
+    }
 
     #[tokio::test]
     async fn production_router_does_not_expose_perf_instance_route() {

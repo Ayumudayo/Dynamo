@@ -718,16 +718,13 @@ impl DeploymentSettingsRepository for PerfRepositories {
 
 #[async_trait::async_trait]
 impl GuildSettingsRepository for PerfRepositories {
-    async fn get_or_create(&self, guild_id: u64) -> anyhow::Result<GuildSettings> {
+    async fn get(&self, guild_id: u64) -> anyhow::Result<Option<GuildSettings>> {
         self.runtime.increment_repository_reads();
-        // Preserve production semantics: Mongo get_or_create uses an upsert-capable command even
-        // when invoked by a dashboard GET, so the harness must expose that write attempt as RED.
-        self.runtime.increment_repository_mutations();
         ensure!(
             guild_id == self.guild.guild_id,
             "performance fixture repository only contains the target guild"
         );
-        Ok(self.guild.clone())
+        Ok(Some(self.guild.clone()))
     }
 
     async fn upsert_module_settings(
@@ -1622,8 +1619,7 @@ mod tests {
         )
         .await;
         assert_eq!(guild_counters["repository_reads"], 3);
-        // Known RED until W1-03: production get_or_create is an upsert-capable read path.
-        assert_eq!(guild_counters["repository_mutations"], 1);
+        assert_eq!(guild_counters["repository_mutations"], 0);
         assert_eq!(guild_counters["provider_guild_lookups"], 100);
 
         let (readonly_app, readonly_runtime, _shutdown, _) =
@@ -1792,8 +1788,7 @@ mod tests {
         assert_eq!(counters["denied_requests"], 0);
         assert_eq!(counters["server_write_attempts"], 0);
         assert_eq!(counters["repository_reads"], 16);
-        // Five guild-detail renders each reveal the production get_or_create write attempt.
-        assert_eq!(counters["repository_mutations"], 5);
+        assert_eq!(counters["repository_mutations"], 0);
         assert_eq!(counters["provider_guild_lookups"], 600);
         assert_eq!(counters["outbound_calls"], 0);
         assert_eq!(counters["browser_outbound_attempts"], 0);
@@ -1991,9 +1986,10 @@ mod tests {
             .guild_settings
             .as_ref()
             .expect("fixture guild repository")
-            .get_or_create(fixture.guild_id())
+            .get(fixture.guild_id())
             .await
-            .expect("fixture guild read");
+            .expect("fixture guild read")
+            .expect("fixture guild exists");
         assert_eq!(guild.guild_id, fixture.guild_id());
         assert!(!guild.modules["stock"].enabled);
         assert_eq!(
@@ -2011,7 +2007,7 @@ mod tests {
             serde_json::json!({ "ticker_1": "GUILD-ETF-CANARY" })
         );
         assert_eq!(runtime.repository_reads.load(Ordering::SeqCst), 2);
-        assert_eq!(runtime.repository_mutations.load(Ordering::SeqCst), 1);
+        assert_eq!(runtime.repository_mutations.load(Ordering::SeqCst), 0);
 
         let mutation = state
             .persistence
@@ -2021,7 +2017,7 @@ mod tests {
             .upsert_module_settings("info", DeploymentModuleSettings::default())
             .await;
         assert!(mutation.is_err());
-        assert_eq!(runtime.repository_mutations.load(Ordering::SeqCst), 2);
+        assert_eq!(runtime.repository_mutations.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]

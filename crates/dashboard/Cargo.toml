@@ -45,4 +45,6 @@ url.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+async-trait.workspace = true
+dynamo-repositories = { path = "../repositories" }
 tower = { version = "0.5.3", features = ["util"] }

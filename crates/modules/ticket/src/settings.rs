@@ -3,7 +3,7 @@ use crate::constants::{
 };
 use dynamo_module_kit::{SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection};
 use dynamo_runtime_api::{AppState, Context, Error};
-use dynamo_settings::GuildModuleSettings;
+use dynamo_settings::{GuildModuleSettings, GuildSettings};
 use serde::{Deserialize, Deserializer, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -143,7 +143,10 @@ pub(crate) async fn save_settings(
         ));
     };
 
-    let current = repo.get_or_create(guild_id.get()).await?;
+    let current = repo
+        .get(guild_id.get())
+        .await?
+        .unwrap_or_else(|| GuildSettings::for_guild(guild_id.get()));
     let enabled = current
         .modules
         .get(MODULE_ID)

@@ -739,22 +739,11 @@ fn settings_upsert_update(document_id: &str, settings_path: &str, settings: Bson
 
 #[async_trait]
 impl GuildSettingsRepository for MongoPersistence {
-    async fn get_or_create(&self, guild_id: u64) -> Result<GuildSettings, Error> {
+    async fn get(&self, guild_id: u64) -> Result<Option<GuildSettings>, Error> {
         let id = Self::guild_document_id(guild_id);
-        let document = self
-            .guild_settings
-            .find_one_and_update(
-                doc! { "_id": &id },
-                doc! {
-                    "$setOnInsert": settings_set_on_insert(&id, None),
-                },
-            )
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("guild settings upsert returned no document"))?;
+        let document = self.guild_settings.find_one(doc! { "_id": &id }).await?;
 
-        document.into_domain()
+        document.map(GuildSettingsDocument::into_domain).transpose()
     }
 
     async fn upsert_module_settings(
@@ -1738,11 +1727,11 @@ mod tests {
         let guild_module_id = format!("integration_guild_module_{marker}");
         let guild_command_id = format!("integration::guild::command::{marker}");
 
-        let created =
-            GuildSettingsRepository::get_or_create(&guild_store, created_guild_id).await?;
-        assert_eq!(created.guild_id, created_guild_id);
-        assert!(created.modules.is_empty());
-        assert!(created.commands.is_empty());
+        let count_before_absent_read = guild_store.guild_settings.count_documents(doc! {}).await?;
+        let absent = GuildSettingsRepository::get(&guild_store, created_guild_id).await?;
+        let count_after_absent_read = guild_store.guild_settings.count_documents(doc! {}).await?;
+        assert_eq!(absent, None);
+        assert_eq!(count_after_absent_read, count_before_absent_read);
 
         let guild_module_settings = GuildModuleSettings {
             enabled: false,
@@ -1761,6 +1750,15 @@ mod tests {
             Some(&guild_module_settings)
         );
         assert!(guild_after_module.commands.is_empty());
+
+        let count_before_existing_read =
+            guild_store.guild_settings.count_documents(doc! {}).await?;
+        let existing = GuildSettingsRepository::get(&guild_store, guild_module_guild_id)
+            .await?
+            .expect("upserted guild settings should exist");
+        let count_after_existing_read = guild_store.guild_settings.count_documents(doc! {}).await?;
+        assert_eq!(existing, guild_after_module);
+        assert_eq!(count_after_existing_read, count_before_existing_read);
 
         let guild_module_settings_updated = GuildModuleSettings {
             enabled: true,

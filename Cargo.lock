@@ -1093,6 +1093,7 @@ name = "dynamo-persistence-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dynamo-domain-giveaway",
  "dynamo-domain-invite",
@@ -1102,6 +1103,7 @@ dependencies = [
  "dynamo-repositories",
  "dynamo-settings",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
