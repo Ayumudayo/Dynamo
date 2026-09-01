@@ -1119,6 +1119,7 @@ fn build_fixture_state(
             command_sync_interval_seconds: 15,
         },
         http,
+        discord_api_base: "https://discord.com/api/v10".to_string(),
         app_info: DiscordApplicationInfo {
             id: fixture.application.id.clone(),
             name: fixture.application.name.clone(),

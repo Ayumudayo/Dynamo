@@ -175,6 +175,7 @@ pub async fn run_production() -> anyhow::Result<()> {
     let state = Arc::new(DashboardState {
         config,
         http,
+        discord_api_base: DISCORD_API_BASE.to_string(),
         app_info,
         module_catalog,
         command_catalog,
@@ -539,6 +540,7 @@ fn dashboard_admin_mode_summary(state: &DashboardState) -> String {
 struct DashboardState {
     config: DashboardConfig,
     http: reqwest::Client,
+    discord_api_base: String,
     app_info: DiscordApplicationInfo,
     module_catalog: ModuleCatalog,
     command_catalog: CommandCatalog,
@@ -1465,7 +1467,7 @@ async fn exchange_oauth_code(
     let redirect_uri = format!("{}/auth/discord/callback", state.config.public_base_url);
     let token_request = state
         .http
-        .post(format!("{DISCORD_API_BASE}/oauth2/token"))
+        .post(format!("{}/oauth2/token", state.discord_api_base))
         .header(
             reqwest::header::CONTENT_TYPE,
             "application/x-www-form-urlencoded",
@@ -1486,7 +1488,7 @@ async fn exchange_oauth_code(
 
     let user_request = state
         .http
-        .get(format!("{DISCORD_API_BASE}/users/@me"))
+        .get(format!("{}/users/@me", state.discord_api_base))
         .header(reqwest::header::AUTHORIZATION, &bearer);
     let user_response = send_dashboard_http(state, user_request)
         .await?
@@ -1495,7 +1497,7 @@ async fn exchange_oauth_code(
 
     let guilds_request = state
         .http
-        .get(format!("{DISCORD_API_BASE}/users/@me/guilds"))
+        .get(format!("{}/users/@me/guilds", state.discord_api_base))
         .header(reqwest::header::AUTHORIZATION, &bearer);
     let guilds_response = send_dashboard_http(state, guilds_request)
         .await?
@@ -1564,7 +1566,7 @@ async fn refresh_session_guilds(
     let bearer = format!("Bearer {}", access_token);
     let guilds_request = state
         .http
-        .get(format!("{DISCORD_API_BASE}/users/@me/guilds"))
+        .get(format!("{}/users/@me/guilds", state.discord_api_base))
         .header(reqwest::header::AUTHORIZATION, &bearer);
     let guilds_response = send_dashboard_http(state, guilds_request)
         .await?
@@ -1600,7 +1602,7 @@ async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> BotGuildPrese
 
     let request = state
         .http
-        .get(format!("{DISCORD_API_BASE}/guilds/{guild_id}"))
+        .get(format!("{}/guilds/{guild_id}", state.discord_api_base))
         .header("Authorization", format!("Bot {}", state.config.bot_token));
     match send_dashboard_http(state, request).await {
         Ok(response) => {
@@ -3473,6 +3475,131 @@ async fn require_api_guild_access(
     }
 }
 
+async fn require_current_api_guild_access(
+    state: &DashboardState,
+    jar: &CookieJar,
+    guild_id: u64,
+) -> Result<DashboardSession, Response> {
+    let session_id = session_cookie_value(jar).ok_or_else(|| {
+        (
+            StatusCode::UNAUTHORIZED,
+            Json(error_payload("dashboard login required".to_string())),
+        )
+            .into_response()
+    })?;
+    let session = require_api_session(state, jar).await?;
+    let access_token = session.access_token.clone();
+    let request = state
+        .http
+        .get(format!("{}/users/@me/guilds", state.discord_api_base))
+        .header(
+            reqwest::header::AUTHORIZATION,
+            format!("Bearer {access_token}"),
+        );
+    let response = match send_dashboard_http(state, request).await {
+        Ok(response) => response,
+        Err(error) => {
+            warn!(
+                user_id = session.user.id,
+                guild_id,
+                ?error,
+                "current Discord guild authorization lookup failed"
+            );
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_payload(
+                    "current guild authorization is unavailable".to_string(),
+                )),
+            )
+                .into_response());
+        }
+    };
+
+    if response.status() == StatusCode::UNAUTHORIZED {
+        let mut sessions = state.sessions.write().await;
+        if sessions
+            .get(&session_id)
+            .is_some_and(|current| current.access_token == access_token)
+        {
+            sessions.remove(&session_id);
+        }
+        return Err((
+            StatusCode::UNAUTHORIZED,
+            Json(error_payload(
+                "Discord authorization expired; log in again".to_string(),
+            )),
+        )
+            .into_response());
+    }
+
+    if !response.status().is_success() {
+        warn!(
+            user_id = session.user.id,
+            guild_id,
+            status = %response.status(),
+            "current Discord guild authorization lookup was unavailable"
+        );
+        return Err((
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(error_payload(
+                "current guild authorization is unavailable".to_string(),
+            )),
+        )
+            .into_response());
+    }
+
+    let guilds = match response.json::<Vec<DashboardGuild>>().await {
+        Ok(guilds) => guilds,
+        Err(error) => {
+            warn!(
+                user_id = session.user.id,
+                guild_id,
+                ?error,
+                "current Discord guild authorization response was invalid"
+            );
+            return Err((
+                StatusCode::SERVICE_UNAVAILABLE,
+                Json(error_payload(
+                    "current guild authorization is unavailable".to_string(),
+                )),
+            )
+                .into_response());
+        }
+    };
+
+    let refreshed = {
+        let mut sessions = state.sessions.write().await;
+        let Some(current) = sessions.get_mut(&session_id) else {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(error_payload("dashboard login required".to_string())),
+            )
+                .into_response());
+        };
+        if current.access_token != access_token {
+            return Err((
+                StatusCode::UNAUTHORIZED,
+                Json(error_payload("dashboard login required".to_string())),
+            )
+                .into_response());
+        }
+        current.guilds = guilds;
+        current.clone()
+    };
+
+    if session_can_manage_guild(&refreshed, guild_id) {
+        Ok(refreshed)
+    } else {
+        Err((
+            StatusCode::FORBIDDEN,
+            Json(error_payload(
+                "you no longer have permission to manage that guild".to_string(),
+            )),
+        )
+            .into_response())
+    }
+}
+
 fn dashboard_actor_label(session: &DashboardSession) -> String {
     session
         .user
@@ -3801,10 +3928,9 @@ async fn patch_guild_module_settings(
     Path((guild_id, module_id)): Path<(u64, String)>,
     Json(patch): Json<GuildModuleSettingsPatch>,
 ) -> impl IntoResponse {
-    let session = match require_api_guild_access(&state, &jar, guild_id).await {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
+    if let Err(response) = require_api_session(&state, &jar).await {
+        return response;
+    }
     if !module_exists(&state.module_catalog, &module_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -3854,6 +3980,10 @@ async fn patch_guild_module_settings(
         .get(&module_id)
         .cloned()
         .unwrap_or(GuildModuleSettings::default());
+    let session = match require_current_api_guild_access(&state, &jar, guild_id).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
 
     match repo
         .upsert_module_settings(guild_id, &module_id, next)
@@ -3912,10 +4042,9 @@ async fn patch_guild_command_settings(
     Path((guild_id, command_id)): Path<(u64, String)>,
     Json(patch): Json<GuildCommandSettingsPatch>,
 ) -> impl IntoResponse {
-    let session = match require_api_guild_access(&state, &jar, guild_id).await {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
+    if let Err(response) = require_api_session(&state, &jar).await {
+        return response;
+    }
     if !command_exists(&state.command_catalog, &command_id) {
         return (
             StatusCode::NOT_FOUND,
@@ -3965,6 +4094,10 @@ async fn patch_guild_command_settings(
         .get(&command_id)
         .cloned()
         .unwrap_or_default();
+    let session = match require_current_api_guild_access(&state, &jar, guild_id).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
 
     match repo
         .upsert_command_settings(guild_id, &command_id, next)
@@ -4065,10 +4198,9 @@ async fn post_guild_command_sync(
     State(state): State<Arc<DashboardState>>,
     Path(guild_id): Path<u64>,
 ) -> impl IntoResponse {
-    let session = match require_api_guild_access(&state, &jar, guild_id).await {
-        Ok(session) => session,
-        Err(response) => return response,
-    };
+    if let Err(response) = require_api_session(&state, &jar).await {
+        return response;
+    }
 
     if state.config.register_globally {
         return (
@@ -4082,6 +4214,10 @@ async fn post_guild_command_sync(
     }
 
     let mut sync_state = load_command_sync_store(&state.persistence).await;
+    let session = match require_current_api_guild_access(&state, &jar, guild_id).await {
+        Ok(session) => session,
+        Err(response) => return response,
+    };
     sync_state.guild_mut(guild_id).request_sync(
         chrono::Utc::now(),
         Some(session.user.id),
@@ -4492,20 +4628,20 @@ mod tests {
     use std::time::{Duration as StdDuration, Instant as StdInstant};
 
     use super::{
-        BotGuildPresence, DashboardConfig, DashboardGuild, DashboardSession, DashboardState,
-        DashboardUser, DiscordApplicationInfo, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG,
-        FIRA_CODE_VARIABLE_PATH, FIRA_CODE_VARIABLE_SHA256, FIRA_SANS_BOLD_BYTES,
-        FIRA_SANS_BOLD_ETAG, FIRA_SANS_BOLD_PATH, FIRA_SANS_BOLD_SHA256, FIRA_SANS_LIGHT_BYTES,
-        FIRA_SANS_LIGHT_ETAG, FIRA_SANS_LIGHT_PATH, FIRA_SANS_LIGHT_SHA256, FIRA_SANS_MEDIUM_BYTES,
-        FIRA_SANS_MEDIUM_ETAG, FIRA_SANS_MEDIUM_PATH, FIRA_SANS_MEDIUM_SHA256,
-        FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG, FIRA_SANS_REGULAR_PATH,
-        FIRA_SANS_REGULAR_SHA256, FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG,
-        FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256, FONT_CACHE_CONTROL, GuildCard,
-        GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME, audit_action_label,
-        audit_entity_label, build_dashboard_http_client_with_timeouts, build_dashboard_router,
-        classify_bot_guild_status, dashboard_styles, escape_html, font_asset_router,
-        render_audit_logs_section, render_dashboard_page_shell, render_field, render_guild_card,
-        render_settings_modal, request_id_for_logging, request_path_for_logging,
+        BotGuildPresence, DISCORD_API_BASE, DashboardConfig, DashboardGuild, DashboardSession,
+        DashboardState, DashboardUser, DiscordApplicationInfo, FIRA_CODE_VARIABLE_BYTES,
+        FIRA_CODE_VARIABLE_ETAG, FIRA_CODE_VARIABLE_PATH, FIRA_CODE_VARIABLE_SHA256,
+        FIRA_SANS_BOLD_BYTES, FIRA_SANS_BOLD_ETAG, FIRA_SANS_BOLD_PATH, FIRA_SANS_BOLD_SHA256,
+        FIRA_SANS_LIGHT_BYTES, FIRA_SANS_LIGHT_ETAG, FIRA_SANS_LIGHT_PATH, FIRA_SANS_LIGHT_SHA256,
+        FIRA_SANS_MEDIUM_BYTES, FIRA_SANS_MEDIUM_ETAG, FIRA_SANS_MEDIUM_PATH,
+        FIRA_SANS_MEDIUM_SHA256, FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG,
+        FIRA_SANS_REGULAR_PATH, FIRA_SANS_REGULAR_SHA256, FIRA_SANS_SEMIBOLD_BYTES,
+        FIRA_SANS_SEMIBOLD_ETAG, FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256,
+        FONT_CACHE_CONTROL, GuildCard, GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME,
+        audit_action_label, audit_entity_label, build_dashboard_http_client_with_timeouts,
+        build_dashboard_router, classify_bot_guild_status, dashboard_styles, escape_html,
+        font_asset_router, render_audit_logs_section, render_dashboard_page_shell, render_field,
+        render_guild_card, render_settings_modal, request_id_for_logging, request_path_for_logging,
         request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
     };
     use async_trait::async_trait;
@@ -4517,10 +4653,11 @@ mod tests {
     use dynamo_module_kit::{CommandCatalog, ModuleCatalog, SettingsField, SettingsFieldKind};
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
-        DashboardAuditLogPage, DashboardAuditScope,
+        DashboardAuditLogPage, DashboardAuditLogQuery, DashboardAuditLogRepository,
+        DashboardAuditScope,
     };
     use dynamo_persistence_api::Persistence;
-    use dynamo_repositories::GuildSettingsRepository;
+    use dynamo_repositories::{GuildSettingsRepository, ProviderStateRepository};
     use dynamo_settings::GuildCommandSettings;
     use tower::ServiceExt;
 
@@ -4580,6 +4717,37 @@ mod tests {
             tokio::time::sleep(StdDuration::from_millis(350)).await;
         });
         format!("https://{address}/stalled-connect")
+    }
+
+    async fn spawn_discord_guilds_server(
+        status: StatusCode,
+        body: &'static str,
+        delay: StdDuration,
+        request_count: usize,
+    ) -> (String, Arc<AtomicUsize>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind loopback Discord server");
+        let address = listener.local_addr().expect("loopback Discord address");
+        let requests = Arc::new(AtomicUsize::new(0));
+        let observed_requests = requests.clone();
+        tokio::spawn(async move {
+            for _ in 0..request_count {
+                let (stream, _) = listener.accept().await.expect("accept Discord request");
+                read_raw_request(&stream).await;
+                observed_requests.fetch_add(1, Ordering::SeqCst);
+                tokio::time::sleep(delay).await;
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                    status.as_u16(),
+                    status.canonical_reason().unwrap_or("Response"),
+                    body.len(),
+                    body
+                );
+                write_raw_response(&stream, response.as_bytes()).await;
+            }
+        });
+        (format!("http://{address}"), requests)
     }
 
     #[tokio::test]
@@ -4723,26 +4891,89 @@ mod tests {
 
         async fn upsert_module_settings(
             &self,
-            _guild_id: u64,
-            _module_id: &str,
-            _settings: GuildModuleSettings,
+            guild_id: u64,
+            module_id: &str,
+            settings: GuildModuleSettings,
         ) -> anyhow::Result<GuildSettings> {
             self.writes.fetch_add(1, Ordering::SeqCst);
-            anyhow::bail!("unexpected guild settings module write")
+            let mut stored = GuildSettings::for_guild(guild_id);
+            stored.modules.insert(module_id.to_string(), settings);
+            Ok(stored)
         }
 
         async fn upsert_command_settings(
             &self,
-            _guild_id: u64,
-            _command_id: &str,
-            _settings: GuildCommandSettings,
+            guild_id: u64,
+            command_id: &str,
+            settings: GuildCommandSettings,
         ) -> anyhow::Result<GuildSettings> {
             self.writes.fetch_add(1, Ordering::SeqCst);
-            anyhow::bail!("unexpected guild settings command write")
+            let mut stored = GuildSettings::for_guild(guild_id);
+            stored.commands.insert(command_id.to_string(), settings);
+            Ok(stored)
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingProviderStateRepository {
+        loads: AtomicUsize,
+        saves: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl ProviderStateRepository for CountingProviderStateRepository {
+        async fn load_json(&self, _provider_id: &str) -> anyhow::Result<Option<serde_json::Value>> {
+            self.loads.fetch_add(1, Ordering::SeqCst);
+            Ok(None)
+        }
+
+        async fn save_json(
+            &self,
+            _provider_id: &str,
+            _value: serde_json::Value,
+        ) -> anyhow::Result<()> {
+            self.saves.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct CountingAuditLogRepository {
+        appends: AtomicUsize,
+    }
+
+    #[async_trait]
+    impl DashboardAuditLogRepository for CountingAuditLogRepository {
+        async fn append(
+            &self,
+            entry: DashboardAuditLogEntry,
+        ) -> anyhow::Result<DashboardAuditLogEntry> {
+            self.appends.fetch_add(1, Ordering::SeqCst);
+            Ok(entry)
+        }
+
+        async fn list(
+            &self,
+            query: DashboardAuditLogQuery,
+        ) -> anyhow::Result<DashboardAuditLogPage> {
+            Ok(DashboardAuditLogPage::empty(query.page, query.page_size))
         }
     }
 
     fn test_dashboard_state(persistence: Persistence) -> Arc<DashboardState> {
+        test_dashboard_state_with_discord(
+            persistence,
+            "http://127.0.0.1:9".to_string(),
+            StdDuration::from_millis(100),
+        )
+    }
+
+    fn test_dashboard_state_with_discord(
+        persistence: Persistence,
+        discord_api_base: String,
+        request_timeout: StdDuration,
+    ) -> Arc<DashboardState> {
+        let registry = dynamo_app::module_registry();
         Arc::new(DashboardState {
             config: DashboardConfig {
                 host: "127.0.0.1".parse().expect("loopback address"),
@@ -4755,15 +4986,20 @@ mod tests {
                 register_globally: false,
                 command_sync_interval_seconds: 15,
             },
-            http: reqwest::Client::new(),
+            http: build_dashboard_http_client_with_timeouts(
+                StdDuration::from_millis(100),
+                request_timeout,
+            )
+            .expect("test dashboard HTTP client"),
+            discord_api_base,
             app_info: DiscordApplicationInfo {
                 id: "test-app".to_string(),
                 name: "Test App".to_string(),
                 icon: None,
                 owner_user_id: None,
             },
-            module_catalog: ModuleCatalog::default(),
-            command_catalog: CommandCatalog::default(),
+            module_catalog: registry.catalog().clone(),
+            command_catalog: registry.command_catalog().clone(),
             persistence,
             sessions: Default::default(),
             oauth_states: Default::default(),
@@ -4804,6 +5040,46 @@ mod tests {
             )
             .body(Body::empty())
             .expect("valid authenticated request")
+    }
+
+    fn authenticated_json_request(
+        method: &str,
+        path: &str,
+        session_id: &str,
+        body: serde_json::Value,
+    ) -> Request<Body> {
+        Request::builder()
+            .method(method)
+            .uri(path)
+            .header(
+                header::COOKIE,
+                format!("{SESSION_COOKIE_NAME}={session_id}"),
+            )
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("valid authenticated JSON request")
+    }
+
+    fn first_module_id(state: &DashboardState) -> String {
+        state
+            .module_catalog
+            .entries
+            .first()
+            .expect("test module catalog")
+            .module
+            .id
+            .to_string()
+    }
+
+    fn first_command_id(state: &DashboardState) -> String {
+        state
+            .command_catalog
+            .entries
+            .first()
+            .expect("test command catalog")
+            .command
+            .id
+            .clone()
     }
 
     async fn json_response(response: axum::response::Response) -> serde_json::Value {
@@ -4914,6 +5190,294 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn stale_cached_grant_cannot_patch_guild_module() {
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, "[]", StdDuration::ZERO, 1).await;
+        let settings = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Absent,
+        ));
+        let audit = Arc::new(CountingAuditLogRepository::default());
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                guild_settings: Some(settings.clone()),
+                dashboard_audit_logs: Some(audit.clone()),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "stale-session", 42).await;
+        let module_id = first_module_id(&state);
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_json_request(
+                "PATCH",
+                &format!("/api/guild-settings/42/{module_id}"),
+                "stale-session",
+                serde_json::json!({ "enabled": true }),
+            ))
+            .await
+            .expect("guild module patch response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(settings.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(audit.appends.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_cached_grant_cannot_patch_guild_command() {
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, "[]", StdDuration::ZERO, 1).await;
+        let settings = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Absent,
+        ));
+        let audit = Arc::new(CountingAuditLogRepository::default());
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                guild_settings: Some(settings.clone()),
+                dashboard_audit_logs: Some(audit.clone()),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "stale-session", 42).await;
+        let command_id = first_command_id(&state);
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_json_request(
+                "PATCH",
+                &format!("/api/guild-command-settings/42/{command_id}"),
+                "stale-session",
+                serde_json::json!({ "enabled": true }),
+            ))
+            .await
+            .expect("guild command patch response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(settings.writes.load(Ordering::SeqCst), 0);
+        assert_eq!(audit.appends.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn stale_cached_grant_cannot_request_guild_command_sync() {
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, "[]", StdDuration::ZERO, 1).await;
+        let provider = Arc::new(CountingProviderStateRepository::default());
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                provider_state: Some(provider.clone()),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "stale-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/guild-command-sync/42",
+                "stale-session",
+            ))
+            .await
+            .expect("guild command sync response");
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(requests.load(Ordering::SeqCst), 1);
+        assert_eq!(provider.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn current_authorization_401_removes_session_without_writing() {
+        let (discord_api_base, _) = spawn_discord_guilds_server(
+            StatusCode::UNAUTHORIZED,
+            r#"{"message":"401: Unauthorized"}"#,
+            StdDuration::ZERO,
+            1,
+        )
+        .await;
+        let settings = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Absent,
+        ));
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                guild_settings: Some(settings.clone()),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "expired-upstream", 42).await;
+        let module_id = first_module_id(&state);
+        let app = build_dashboard_router(state.clone());
+
+        let response = app
+            .oneshot(authenticated_json_request(
+                "PATCH",
+                &format!("/api/guild-settings/42/{module_id}"),
+                "expired-upstream",
+                serde_json::json!({ "enabled": true }),
+            ))
+            .await
+            .expect("guild module patch response");
+
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        assert!(!state.sessions.read().await.contains_key("expired-upstream"));
+        assert_eq!(settings.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn current_authorization_unavailable_fails_closed_without_writing() {
+        let (discord_api_base, _) = spawn_discord_guilds_server(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"message":"unavailable"}"#,
+            StdDuration::ZERO,
+            1,
+        )
+        .await;
+        let settings = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Absent,
+        ));
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                guild_settings: Some(settings.clone()),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let command_id = first_command_id(&state);
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_json_request(
+                "PATCH",
+                &format!("/api/guild-command-settings/42/{command_id}"),
+                "test-session",
+                serde_json::json!({ "enabled": true }),
+            ))
+            .await
+            .expect("guild command patch response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(settings.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn current_authorization_timeout_does_not_hold_session_write_lock_or_save() {
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, "[]", StdDuration::from_millis(350), 1)
+                .await;
+        let provider = Arc::new(CountingProviderStateRepository::default());
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                provider_state: Some(provider.clone()),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_millis(150),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state.clone());
+        let request = tokio::spawn(async move {
+            app.oneshot(authenticated_request(
+                "POST",
+                "/api/guild-command-sync/42",
+                "test-session",
+            ))
+            .await
+            .expect("guild command sync response")
+        });
+
+        tokio::time::timeout(StdDuration::from_millis(500), async {
+            while requests.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("authorization request reached Discord fixture");
+        let lock = tokio::time::timeout(StdDuration::from_millis(50), state.sessions.write())
+            .await
+            .expect("session write lock remains available during Discord await");
+        drop(lock);
+
+        let response = request.await.expect("authorization request task");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(provider.saves.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn current_authorization_allows_each_authorized_write_once() {
+        let manageable = r#"[{"id":"42","name":"Guild","icon":null,"permissions":"32"}]"#;
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, manageable, StdDuration::ZERO, 3).await;
+        let settings = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Absent,
+        ));
+        let provider = Arc::new(CountingProviderStateRepository::default());
+        let audit = Arc::new(CountingAuditLogRepository::default());
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                guild_settings: Some(settings.clone()),
+                provider_state: Some(provider.clone()),
+                dashboard_audit_logs: Some(audit),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let module_id = first_module_id(&state);
+        let command_id = first_command_id(&state);
+        let app = build_dashboard_router(state);
+
+        let module_response = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "PATCH",
+                &format!("/api/guild-settings/42/{module_id}"),
+                "test-session",
+                serde_json::json!({ "enabled": true }),
+            ))
+            .await
+            .expect("guild module patch response");
+        assert_eq!(module_response.status(), StatusCode::OK);
+        assert_eq!(settings.writes.load(Ordering::SeqCst), 1);
+
+        let command_response = app
+            .clone()
+            .oneshot(authenticated_json_request(
+                "PATCH",
+                &format!("/api/guild-command-settings/42/{command_id}"),
+                "test-session",
+                serde_json::json!({ "enabled": true }),
+            ))
+            .await
+            .expect("guild command patch response");
+        assert_eq!(command_response.status(), StatusCode::OK);
+        assert_eq!(settings.writes.load(Ordering::SeqCst), 2);
+
+        let sync_response = app
+            .oneshot(authenticated_request(
+                "POST",
+                "/api/guild-command-sync/42",
+                "test-session",
+            ))
+            .await
+            .expect("guild command sync response");
+        assert_eq!(sync_response.status(), StatusCode::OK);
+        assert_eq!(provider.saves.load(Ordering::SeqCst), 1);
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
     async fn production_router_does_not_expose_perf_instance_route() {
         let state = Arc::new(DashboardState {
             config: DashboardConfig {
@@ -4928,6 +5492,7 @@ mod tests {
                 command_sync_interval_seconds: 15,
             },
             http: reqwest::Client::new(),
+            discord_api_base: DISCORD_API_BASE.to_string(),
             app_info: DiscordApplicationInfo {
                 id: "test-app".to_string(),
                 name: "Test App".to_string(),
