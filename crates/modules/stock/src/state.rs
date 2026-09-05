@@ -8,11 +8,16 @@ use dynamo_service_stock::StockQuoteService;
 use poise::serenity_prelude::{ChannelId, CreateEmbed, EditMessage, Http};
 use std::{
     collections::HashMap,
-    sync::{Arc, OnceLock},
+    future::Future,
+    sync::{
+        Arc, OnceLock,
+        atomic::{AtomicBool, Ordering},
+    },
     time::Duration,
 };
 use tokio::{
     sync::{Mutex, RwLock},
+    task::JoinHandle,
     time::sleep,
 };
 
@@ -77,37 +82,186 @@ pub(crate) fn try_begin_manual_restart(session: &mut StockSession) -> ManualRest
     ManualRestartStart::Started
 }
 
-fn stock_sessions() -> &'static RwLock<HashMap<u64, Arc<Mutex<StockSession>>>> {
-    static SESSIONS: OnceLock<RwLock<HashMap<u64, Arc<Mutex<StockSession>>>>> = OnceLock::new();
-    SESSIONS.get_or_init(|| RwLock::new(HashMap::new()))
+pub(crate) struct SessionEntry {
+    message_id: u64,
+    pub(crate) session: Arc<Mutex<StockSession>>,
+    cancelled: AtomicBool,
+    worker: Mutex<Option<JoinHandle<()>>>,
 }
 
-pub(crate) async fn register_session(message_id: u64, session: Arc<Mutex<StockSession>>) {
-    let mut sessions = stock_sessions().write().await;
-    if sessions.len() >= MAX_STORED_SESSIONS
-        && let Some(oldest) = sessions.keys().next().copied()
-    {
-        sessions.remove(&oldest);
+impl SessionEntry {
+    fn new(message_id: u64, session: Arc<Mutex<StockSession>>) -> Self {
+        Self {
+            message_id,
+            session,
+            cancelled: AtomicBool::new(false),
+            worker: Mutex::new(None),
+        }
     }
-    sessions.insert(message_id, session);
 }
 
-pub(crate) async fn session_for_message(message_id: u64) -> Option<Arc<Mutex<StockSession>>> {
-    let sessions = stock_sessions().read().await;
-    sessions.get(&message_id).cloned()
+pub(crate) struct SessionRegistry {
+    sessions: RwLock<HashMap<u64, Arc<SessionEntry>>>,
+    max_sessions: usize,
 }
 
-async fn remove_session(message_id: u64) {
-    stock_sessions().write().await.remove(&message_id);
+impl SessionRegistry {
+    pub(crate) fn new(max_sessions: usize) -> Self {
+        Self {
+            sessions: RwLock::new(HashMap::new()),
+            max_sessions,
+        }
+    }
+
+    pub(crate) async fn register(
+        &self,
+        message_id: u64,
+        session: Arc<Mutex<StockSession>>,
+    ) -> Arc<SessionEntry> {
+        let entry = Arc::new(SessionEntry::new(message_id, session));
+        let obsolete = {
+            let mut sessions = self.sessions.write().await;
+            let mut obsolete = Vec::with_capacity(2);
+
+            if let Some(replaced) = sessions.remove(&message_id) {
+                obsolete.push(replaced);
+            }
+
+            if sessions.len() >= self.max_sessions
+                && let Some(oldest) = sessions.keys().next().copied()
+                && let Some(evicted) = sessions.remove(&oldest)
+            {
+                obsolete.push(evicted);
+            }
+
+            sessions.insert(message_id, entry.clone());
+            obsolete
+        };
+
+        for old_entry in obsolete {
+            Self::cancel_and_join(old_entry).await;
+        }
+
+        entry
+    }
+
+    pub(crate) async fn get(&self, message_id: u64) -> Option<Arc<SessionEntry>> {
+        self.sessions.read().await.get(&message_id).cloned()
+    }
+
+    #[cfg(test)]
+    pub(crate) async fn remove(&self, message_id: u64) {
+        let removed = self.sessions.write().await.remove(&message_id);
+        if let Some(entry) = removed {
+            Self::cancel_and_join(entry).await;
+        }
+    }
+
+    pub(crate) async fn is_current(&self, entry: &Arc<SessionEntry>) -> bool {
+        self.sessions
+            .read()
+            .await
+            .get(&entry.message_id)
+            .is_some_and(|current| Arc::ptr_eq(current, entry))
+    }
+
+    pub(crate) async fn remove_if_current(&self, entry: &Arc<SessionEntry>) {
+        let removed = {
+            let mut sessions = self.sessions.write().await;
+            if sessions
+                .get(&entry.message_id)
+                .is_some_and(|current| Arc::ptr_eq(current, entry))
+            {
+                sessions.remove(&entry.message_id)
+            } else {
+                None
+            }
+        };
+
+        if removed.is_some() {
+            entry.cancelled.store(true, Ordering::Release);
+        }
+    }
+
+    pub(crate) async fn start_worker<F>(&self, entry: &Arc<SessionEntry>, worker: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let previous = {
+            let mut slot = entry.worker.lock().await;
+            if entry.cancelled.load(Ordering::Acquire) {
+                return false;
+            }
+            slot.take()
+        };
+        if let Some(previous) = previous {
+            previous.abort();
+            let _ = previous.await;
+        }
+
+        if entry.cancelled.load(Ordering::Acquire) {
+            return false;
+        }
+
+        let mut pending = Some(tokio::spawn(worker));
+        let displaced = {
+            let mut slot = entry.worker.lock().await;
+            if entry.cancelled.load(Ordering::Acquire) {
+                None
+            } else {
+                slot.replace(pending.take().expect("pending Stock worker handle"))
+            }
+        };
+        if let Some(pending) = pending {
+            pending.abort();
+            let _ = pending.await;
+            return false;
+        }
+        if let Some(displaced) = displaced {
+            displaced.abort();
+            let _ = displaced.await;
+        }
+        true
+    }
+
+    async fn cancel_and_join(entry: Arc<SessionEntry>) {
+        entry.cancelled.store(true, Ordering::Release);
+        let worker = entry.worker.lock().await.take();
+        if let Some(worker) = worker {
+            worker.abort();
+            let _ = worker.await;
+        }
+    }
+}
+
+fn stock_sessions() -> &'static SessionRegistry {
+    static SESSIONS: OnceLock<SessionRegistry> = OnceLock::new();
+    SESSIONS.get_or_init(|| SessionRegistry::new(MAX_STORED_SESSIONS))
+}
+
+pub(crate) async fn register_session(
+    message_id: u64,
+    session: Arc<Mutex<StockSession>>,
+) -> Arc<SessionEntry> {
+    stock_sessions().register(message_id, session).await
+}
+
+pub(crate) async fn session_for_message(message_id: u64) -> Option<Arc<SessionEntry>> {
+    stock_sessions().get(message_id).await
 }
 
 pub(crate) async fn initialize_session_loop(
     http: Arc<Http>,
     channel_id: ChannelId,
     message_id: u64,
-    session: Arc<Mutex<StockSession>>,
+    entry: Arc<SessionEntry>,
     stop_reason: Option<&'static str>,
 ) {
+    if !stock_sessions().is_current(&entry).await {
+        return;
+    }
+
+    let session = entry.session.clone();
     let mut state = session.lock().await;
     state.last_stop_reason = stop_reason;
     state.manual_restart_in_progress = false;
@@ -123,7 +277,8 @@ pub(crate) async fn initialize_session_loop(
     let refresh_schedule = state.refresh_schedule;
     drop(state);
 
-    tokio::spawn(async move {
+    let worker_entry = entry.clone();
+    let worker = async move {
         let max_updates = refresh_schedule.total_updates();
         let interval = Duration::from_secs(refresh_schedule.interval_seconds as u64);
         let mut update_count = 0u32;
@@ -131,6 +286,10 @@ pub(crate) async fn initialize_session_loop(
 
         loop {
             sleep(interval).await;
+
+            if !stock_sessions().is_current(&worker_entry).await {
+                break;
+            }
 
             {
                 let state = session.lock().await;
@@ -152,12 +311,19 @@ pub(crate) async fn initialize_session_loop(
                             state.last_stop_reason = Some("fetch_error_threshold");
                         }
                         drop(state);
-                        let _ = edit_refresh_components(&http, channel_id, message_id, false).await;
+                        if stock_sessions().is_current(&worker_entry).await {
+                            let _ =
+                                edit_refresh_components(&http, channel_id, message_id, false).await;
+                        }
                         break;
                     }
                     continue;
                 }
             };
+
+            if !stock_sessions().is_current(&worker_entry).await {
+                break;
+            }
 
             let Some(response) = response else {
                 consecutive_failures += 1;
@@ -168,7 +334,9 @@ pub(crate) async fn initialize_session_loop(
                         state.last_stop_reason = Some("fetch_error_threshold");
                     }
                     drop(state);
-                    let _ = edit_refresh_components(&http, channel_id, message_id, false).await;
+                    if stock_sessions().is_current(&worker_entry).await {
+                        let _ = edit_refresh_components(&http, channel_id, message_id, false).await;
+                    }
                     break;
                 }
                 continue;
@@ -192,7 +360,8 @@ pub(crate) async fn initialize_session_loop(
                     state.active = false;
                     state.last_stop_reason = Some("interaction_edit_failed");
                 }
-                remove_session(message_id).await;
+                drop(state);
+                stock_sessions().remove_if_current(&worker_entry).await;
                 break;
             }
 
@@ -214,7 +383,14 @@ pub(crate) async fn initialize_session_loop(
                 break;
             }
         }
-    });
+    };
+
+    if !stock_sessions().start_worker(&entry, worker).await {
+        let mut state = entry.session.lock().await;
+        if state.generation == generation {
+            state.active = false;
+        }
+    }
 }
 
 pub(crate) async fn fetch_response_for_session(

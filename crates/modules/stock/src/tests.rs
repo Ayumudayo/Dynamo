@@ -10,7 +10,7 @@ use crate::{
         settings_schema,
     },
     state::{
-        ManualRestartStart, SessionKind, StockSession, fetch_response_for_session,
+        ManualRestartStart, SessionKind, SessionRegistry, StockSession, fetch_response_for_session,
         try_begin_manual_restart,
     },
 };
@@ -19,8 +19,11 @@ use dynamo_service_stock::{Error as StockServiceError, StockQuoteService};
 use dynamo_settings::GuildModuleSettings;
 use poise::serenity_prelude::CreateEmbed;
 use serde_json::Value;
-use std::sync::Arc;
-use tokio::sync::Mutex;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use tokio::sync::{Mutex, Notify};
 
 #[test]
 fn normalizes_symbols_to_uppercase() {
@@ -282,6 +285,130 @@ async fn session_response_uses_session_refresh_schedule_total() {
         .expect("response");
 
     assert_eq!(embed_footer_text(&response.embed), "Toss Invest · 1/30");
+}
+
+#[tokio::test]
+async fn session_registry_remove_and_readd_cancels_old_worker_before_returning() {
+    let registry = SessionRegistry::new(4);
+    let old_effects = Arc::new(AtomicUsize::new(0));
+    let old_session = test_session("OLD");
+    let old_entry = registry.register(7, old_session).await;
+    let old_effects_for_worker = old_effects.clone();
+
+    registry
+        .start_worker(&old_entry, async move {
+            loop {
+                tokio::task::yield_now().await;
+                old_effects_for_worker.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await;
+
+    while old_effects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    registry.remove(7).await;
+    let effects_after_remove = old_effects.load(Ordering::SeqCst);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(old_effects.load(Ordering::SeqCst), effects_after_remove);
+
+    let new_entry = registry.register(7, test_session("NEW")).await;
+    assert!(registry.is_current(&new_entry).await);
+    assert!(!registry.is_current(&old_entry).await);
+
+    let new_effects = Arc::new(AtomicUsize::new(0));
+    let new_effects_for_worker = new_effects.clone();
+    assert!(
+        registry
+            .start_worker(&new_entry, async move {
+                loop {
+                    tokio::task::yield_now().await;
+                    new_effects_for_worker.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .await
+    );
+    while new_effects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(old_effects.load(Ordering::SeqCst), effects_after_remove);
+    registry.remove(7).await;
+}
+
+#[tokio::test]
+async fn session_registry_replacement_cancels_blocked_worker_without_stale_effect() {
+    let registry = SessionRegistry::new(4);
+    let fetch_started = Arc::new(Notify::new());
+    let release_fetch = Arc::new(Notify::new());
+    let stale_effects = Arc::new(AtomicUsize::new(0));
+    let old_entry = registry.register(9, test_session("OLD")).await;
+    let fetch_started_for_worker = fetch_started.clone();
+    let release_fetch_for_worker = release_fetch.clone();
+    let stale_effects_for_worker = stale_effects.clone();
+
+    registry
+        .start_worker(&old_entry, async move {
+            fetch_started_for_worker.notify_one();
+            release_fetch_for_worker.notified().await;
+            stale_effects_for_worker.fetch_add(1, Ordering::SeqCst);
+        })
+        .await;
+
+    fetch_started.notified().await;
+    let new_entry = registry.register(9, test_session("NEW")).await;
+    release_fetch.notify_waiters();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(stale_effects.load(Ordering::SeqCst), 0);
+    assert!(registry.is_current(&new_entry).await);
+    assert!(!registry.is_current(&old_entry).await);
+}
+
+#[tokio::test]
+async fn session_registry_eviction_cancels_worker_before_register_returns() {
+    let registry = SessionRegistry::new(1);
+    let effects = Arc::new(AtomicUsize::new(0));
+    let old_entry = registry.register(11, test_session("OLD")).await;
+    let effects_for_worker = effects.clone();
+    registry
+        .start_worker(&old_entry, async move {
+            loop {
+                tokio::task::yield_now().await;
+                effects_for_worker.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await;
+
+    while effects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    let new_entry = registry.register(12, test_session("NEW")).await;
+    let effects_after_eviction = effects.load(Ordering::SeqCst);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(effects.load(Ordering::SeqCst), effects_after_eviction);
+    assert!(!registry.is_current(&old_entry).await);
+    assert!(registry.is_current(&new_entry).await);
+}
+
+#[tokio::test]
+async fn old_worker_self_removal_does_not_remove_replacement_entry() {
+    let registry = SessionRegistry::new(4);
+    let old_entry = registry.register(13, test_session("OLD")).await;
+    let new_entry = registry.register(13, test_session("NEW")).await;
+
+    registry.remove_if_current(&old_entry).await;
+
+    assert!(!registry.is_current(&old_entry).await);
+    assert!(registry.is_current(&new_entry).await);
 }
 
 #[test]
@@ -621,6 +748,19 @@ fn quote_with_phase(phase: &str) -> StockQuote {
 
 fn default_total_updates() -> u32 {
     StockSettings::default().refresh_schedule().total_updates()
+}
+
+fn test_session(symbol: &str) -> Arc<Mutex<StockSession>> {
+    Arc::new(Mutex::new(StockSession::new(
+        SessionKind::Stock {
+            symbol: symbol.to_string(),
+        },
+        Arc::new(FakeStockQuoteService::active_quote(symbol)),
+        RefreshSchedule {
+            interval_seconds: 3,
+            duration_seconds: 60,
+        },
+    )))
 }
 
 fn assert_integer_bounds(

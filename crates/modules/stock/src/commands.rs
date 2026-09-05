@@ -62,12 +62,12 @@ pub(crate) async fn stock(
         .await?;
     let message = reply.message().await?.into_owned();
 
-    register_session(message.id.get(), session.clone()).await;
+    let entry = register_session(message.id.get(), session).await;
     initialize_session_loop(
         ctx.serenity_context().http.clone(),
         message.channel_id,
         message.id.get(),
-        session,
+        entry,
         response.stop_reason,
     )
     .await;
@@ -132,12 +132,12 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
         .await?;
     let message = reply.message().await?.into_owned();
 
-    register_session(message.id.get(), session.clone()).await;
+    let entry = register_session(message.id.get(), session).await;
     initialize_session_loop(
         ctx.serenity_context().http.clone(),
         message.channel_id,
         message.id.get(),
-        session,
+        entry,
         response.stop_reason,
     )
     .await;

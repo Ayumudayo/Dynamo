@@ -32,9 +32,9 @@ async fn handle_refresh_button(
     component: &ComponentInteraction,
 ) -> Result<(), Error> {
     let message_id = component.message.id.get();
-    let session = session_for_message(message_id).await;
+    let entry = session_for_message(message_id).await;
 
-    let Some(session) = session else {
+    let Some(entry) = entry else {
         component
             .create_response(
                 ctx,
@@ -47,6 +47,7 @@ async fn handle_refresh_button(
             .await?;
         return Ok(());
     };
+    let session = entry.session.clone();
 
     let start = {
         let mut state = session.lock().await;
@@ -170,7 +171,7 @@ async fn handle_refresh_button(
         ctx.http.clone(),
         component.channel_id,
         message_id,
-        session,
+        entry,
         response.stop_reason,
     )
     .await;
