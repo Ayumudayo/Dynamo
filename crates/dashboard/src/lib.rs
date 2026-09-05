@@ -1070,11 +1070,11 @@ async fn deployment_page(
         runtime_notices = render_runtime_notices(&state.module_catalog)
     );
     let modules_section = format!(
-        "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section>",
+        "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment modules\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section>",
         module_cards = module_cards,
     );
     let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment commands\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
         sync_panel = command_sync_panel,
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
@@ -1304,11 +1304,11 @@ async fn guild_page(
         runtime_notices = render_runtime_notices(&state.module_catalog),
     );
     let modules_section = format!(
-        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section>",
+        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild modules\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section>",
         module_cards = module_cards,
     );
     let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild commands\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
         sync_panel = command_sync_panel,
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
@@ -1797,7 +1797,7 @@ fn render_selector_page(
         .join("\n");
 
     let content = format!(
-        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Status Unavailable</dt><dd>{unavailable}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section><section id=\"status-unavailable\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Unavailable</p><h2>Server Status Could Not Be Checked</h2></div><span class=\"pill\">{unavailable}</span></div><div class=\"module-grid\">{unavailable_markup}</div></section>",
+        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Status Unavailable</dt><dd>{unavailable}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" aria-label=\"Search guilds\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section><section id=\"status-unavailable\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Unavailable</p><h2>Server Status Could Not Be Checked</h2></div><span class=\"pill\">{unavailable}</span></div><div class=\"module-grid\">{unavailable_markup}</div></section>",
         manageable_now = manageable_now,
         needs_install = needs_install,
         unavailable = unavailable,
@@ -1915,7 +1915,7 @@ fn render_error_page(
     message: &str,
 ) -> String {
     let content = format!(
-        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Dashboard</p><h1>{}</h1><p class=\"lede\">{}</p><div class=\"actions\"><a class=\"button button-primary\" href=\"\">Retry</a><a class=\"button button-secondary\" href=\"/selector\">Server Selector</a><a class=\"button button-secondary\" href=\"/\">Home</a></div></div></section>",
+        "<section class=\"hero compact\" role=\"alert\"><div><p class=\"eyebrow\">Dashboard</p><h1>{}</h1><p class=\"lede\">{}</p><div class=\"actions\"><a class=\"button button-primary\" href=\"\">Retry</a><a class=\"button button-secondary\" href=\"/selector\">Server Selector</a><a class=\"button button-secondary\" href=\"/\">Home</a></div></div></section>",
         escape_html(title),
         message,
     );
@@ -2280,6 +2280,10 @@ input, textarea, select, button {
 input[type='checkbox'] { width: auto; margin-right: 8px; }
 button { width: auto; cursor: pointer; background: var(--accent-soft); color: #ffd5df; }
 button:hover { background: rgba(221, 46, 83, 0.24); }
+a:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible, textarea:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid #7dd3fc; outline-offset: 3px;
+}
+.toggle-switch input:focus-visible + .toggle-slider { outline: 3px solid #7dd3fc; outline-offset: 3px; }
 fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; padding: 12px; margin-top: 12px; }
 .settings-section > p { margin: 4px 0 0; }
 .settings-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; margin-top: 10px; }
@@ -2335,6 +2339,8 @@ a { color: #ff6b87; }
 }
 @media (max-width: 820px) {
   .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid, .compact-module-grid, .compact-command-grid { grid-template-columns: 1fr; }
+  .content-topbar { display: grid; align-items: stretch; }
+  .content-topbar-right { justify-content: start; }
   .settings-modal { width: min(96vw, 640px); }
   .section-heading { align-items: stretch; }
   .section-heading .toolbar-search, .section-heading .compact-search { max-width: none; width: 100%; }
@@ -2351,6 +2357,9 @@ a { color: #ff6b87; }
   .logs-pagination { flex-wrap: wrap; }
 }
 @media (max-width: 560px) {
+  .sync-panel { flex-direction: column; align-items: stretch; }
+  .sync-panel-actions, .sync-panel-actions .button { width: 100%; }
+  .empty-state { min-height: 120px; }
   .settings-modal-overlay { padding: 12px; align-items: start; overflow-y: auto; }
   .settings-modal-head { align-items: start; }
   .toggle-field { flex-direction: column; }
@@ -2698,7 +2707,7 @@ fn render_module_toggle(
 ) -> String {
     match scope {
         "guild" => format!(
-            "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleGuildModule('{guild_id}', '{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" aria-label=\"Enable module {module_id} for this guild\" {checked} onchange=\"toggleGuildModule('{guild_id}', '{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(module_id),
             checked = if resolved.guild_enabled {
                 "checked"
@@ -2709,7 +2718,7 @@ fn render_module_toggle(
             module_id = escape_html(module_id),
         ),
         _ => format!(
-            "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleDeploymentModule('{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" aria-label=\"Enable module {module_id} deployment-wide\" {checked} onchange=\"toggleDeploymentModule('{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(module_id),
             checked = if resolved.deployment_enabled {
                 "checked"
@@ -2730,7 +2739,7 @@ fn render_command_toggle(
 ) -> String {
     match scope {
         "guild" => format!(
-            "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleGuildCommand('{guild_id}', '{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" aria-label=\"Enable command {command_id} for this guild\" {checked} onchange=\"toggleGuildCommand('{guild_id}', '{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(command_id),
             checked = if resolved.guild_enabled {
                 "checked"
@@ -2741,7 +2750,7 @@ fn render_command_toggle(
             command_id = escape_html(command_id),
         ),
         _ => format!(
-            "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleDeploymentCommand('{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
+            "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" aria-label=\"Enable command {command_id} deployment-wide\" {checked} onchange=\"toggleDeploymentCommand('{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(command_id),
             checked = if resolved.deployment_enabled {
                 "checked"
@@ -3176,11 +3185,19 @@ fn render_command_structured_fields(entry: &CommandCatalogEntry, configuration: 
 }
 
 fn render_field(field: &SettingsField, configuration: &Value) -> String {
+    let testid = status_key(field.key);
+    let control_id = format!("field-{testid}-control");
+    let help_id = format!("field-{testid}-help");
     let help_text = field
         .help_text
         .map(escape_html)
-        .map(|text| format!("<small>{text}</small>"))
+        .map(|text| format!("<small id=\"{help_id}\">{text}</small>"))
         .unwrap_or_default();
+    let described_by = if field.help_text.is_some() {
+        format!(" aria-describedby=\"{help_id}\"")
+    } else {
+        String::new()
+    };
     let required = if field.required { "required" } else { "" };
     let field_key = escape_html(field.key);
     let field_label = escape_html(field.label);
@@ -3206,8 +3223,10 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
                 .map(|value| format!(" max=\"{value}\""))
                 .unwrap_or_default();
             format!(
-                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<input type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\"{min_attr}{max_attr} {required}/></div>",
-                testid = status_key(field.key),
+                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label for=\"{control_id}\">{label}</label>{help_text}<input id=\"{control_id}\" type=\"number\" data-setting-key=\"{key}\" data-setting-kind=\"integer\" value=\"{value}\"{min_attr}{max_attr}{described_by} {required}/></div>",
+                testid = testid,
+                control_id = control_id,
+                described_by = described_by,
                 label = field_label,
                 help_text = help_text,
                 key = field_key,
@@ -3221,8 +3240,10 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
             let value = field_string_value(configuration, field.key).unwrap_or_default();
             if value.len() > 40 || value.starts_with('[') || value.starts_with('{') {
                 format!(
-                    "<div class=\"settings-field settings-field-span-2 settings-field-textarea\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<textarea data-setting-key=\"{key}\" data-setting-kind=\"text\" rows=\"4\" cols=\"80\" {required}>{value}</textarea></div>",
-                    testid = status_key(field.key),
+                    "<div class=\"settings-field settings-field-span-2 settings-field-textarea\" data-testid=\"field-{testid}\"><label for=\"{control_id}\">{label}</label>{help_text}<textarea id=\"{control_id}\" data-setting-key=\"{key}\" data-setting-kind=\"text\" rows=\"4\" cols=\"80\"{described_by} {required}>{value}</textarea></div>",
+                    testid = testid,
+                    control_id = control_id,
+                    described_by = described_by,
                     label = field_label,
                     help_text = help_text,
                     key = field_key,
@@ -3231,8 +3252,10 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
                 )
             } else {
                 format!(
-                    "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<input type=\"text\" data-setting-key=\"{key}\" data-setting-kind=\"text\" value=\"{value}\" {required}/></div>",
-                    testid = status_key(field.key),
+                    "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label for=\"{control_id}\">{label}</label>{help_text}<input id=\"{control_id}\" type=\"text\" data-setting-key=\"{key}\" data-setting-kind=\"text\" value=\"{value}\"{described_by} {required}/></div>",
+                    testid = testid,
+                    control_id = control_id,
+                    described_by = described_by,
                     label = field_label,
                     help_text = help_text,
                     key = field_key,
@@ -3261,8 +3284,10 @@ fn render_field(field: &SettingsField, configuration: &Value) -> String {
                 .join("\n");
 
             format!(
-                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label>{label}</label>{help_text}<select data-setting-key=\"{key}\" data-setting-kind=\"select\" {required}>{options}</select></div>",
-                testid = status_key(field.key),
+                "<div class=\"settings-field\" data-testid=\"field-{testid}\"><label for=\"{control_id}\">{label}</label>{help_text}<select id=\"{control_id}\" data-setting-key=\"{key}\" data-setting-kind=\"select\"{described_by} {required}>{options}</select></div>",
+                testid = testid,
+                control_id = control_id,
+                described_by = described_by,
                 label = field_label,
                 help_text = help_text,
                 key = field_key,
@@ -4361,8 +4386,11 @@ fn dashboard_script() -> &'static str {
 function setInlineStatus(id, message, kind = 'info') {
   const target = document.getElementById(id);
   if (!target) return;
-  target.textContent = message || '';
   target.dataset.kind = kind;
+  target.setAttribute('role', kind === 'error' ? 'alert' : 'status');
+  target.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
+  target.setAttribute('aria-atomic', 'true');
+  target.textContent = message || '';
 }
 
 const MODAL_FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -4737,8 +4765,8 @@ mod tests {
         FIRA_SANS_SEMIBOLD_ETAG, FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256,
         FONT_CACHE_CONTROL, GuildCard, GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME,
         audit_action_label, audit_entity_label, build_dashboard_http_client_with_timeouts,
-        build_dashboard_router, classify_bot_guild_status, dashboard_styles, escape_html,
-        font_asset_router, guild_settings_notice, guild_settings_ui_state,
+        build_dashboard_router, classify_bot_guild_status, dashboard_script, dashboard_styles,
+        escape_html, font_asset_router, guild_settings_notice, guild_settings_ui_state,
         render_audit_logs_section, render_dashboard_page_shell, render_error_page, render_field,
         render_guild_card, render_guild_status, render_module_toggle, render_settings_modal,
         request_id_for_logging, request_path_for_logging, request_path_should_be_logged,
@@ -4995,10 +5023,11 @@ mod tests {
         let toggle = render_module_toggle("guild", module.id, &deployment, Some(&guild), &resolved);
         let status = render_guild_status(&resolved);
 
-        assert!(toggle.contains("type=\"checkbox\" checked"));
+        assert!(toggle.contains(" checked onchange="));
+        assert!(toggle.contains("aria-label=\"Enable"));
         let deployment_toggle =
             render_module_toggle("deployment", module.id, &deployment, None, &resolved);
-        assert!(!deployment_toggle.contains("type=\"checkbox\" checked"));
+        assert!(!deployment_toggle.contains(" checked onchange="));
         assert!(status.contains("Local guild: On"));
         assert!(status.contains("Effective: Off"));
         assert!(status.contains("Blocked by deployment"));
@@ -5038,8 +5067,27 @@ mod tests {
         );
 
         assert!(rendered.contains(">Retry</a>"));
+        assert!(rendered.contains("role=\"alert\""));
         assert!(!rendered.contains("mongodb://"));
         assert!(!rendered.contains("test-secret"));
+    }
+
+    #[test]
+    fn small_ui_pass_has_visible_focus_and_mobile_layout_contracts() {
+        let css = dashboard_styles();
+        assert!(css.contains(":focus-visible"));
+        assert!(css.contains(".toggle-switch input:focus-visible + .toggle-slider"));
+        assert!(css.contains(".content-topbar { display: grid;"));
+        assert!(css.contains(".sync-panel { flex-direction: column;"));
+
+        let script = dashboard_script();
+        let live_semantics = script
+            .find("target.setAttribute('role'")
+            .expect("live role");
+        let content_update = script
+            .find("target.textContent")
+            .expect("status content update");
+        assert!(live_semantics < content_update);
     }
 
     struct UnavailableDeploymentSettingsRepository;
@@ -5963,6 +6011,9 @@ mod tests {
         assert!(rendered.contains("data-setting-key=\"channel_id\""));
         assert!(rendered.contains("data-setting-kind=\"text\""));
         assert!(rendered.contains("value=\"123\""));
+        assert!(rendered.contains("label for=\"field-channel_id-control\""));
+        assert!(rendered.contains("id=\"field-channel_id-control\""));
+        assert!(rendered.contains("aria-describedby=\"field-channel_id-help\""));
     }
 
     #[test]
