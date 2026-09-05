@@ -1722,11 +1722,13 @@ mod tests {
         let guild_html = String::from_utf8(guild_html.to_vec()).expect("UTF-8 guild page");
         assert!(!guild_html.contains("cdn.discordapp.com"));
         assert!(
-            guild_html.contains("installed: yes | deployment: yes | guild: no | effective: no")
+            guild_html.contains(
+                "Installed: On | Deployment: On | Local guild: Off | Effective: Off | Blocked by local guild setting"
+            )
         );
         assert!(
             guild_html.contains(
-                "module: no | installed: yes | deployment: no | guild: yes | effective: no"
+                "Parent module: Off | Installed: On | Deployment: Off | Local guild: On | Effective: Off | Blocked by parent module"
             )
         );
         assert!(guild_html.contains("value=\"PERF-STOCK-CANARY\""));

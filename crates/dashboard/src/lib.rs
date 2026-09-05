@@ -966,11 +966,22 @@ async fn deployment_page(
         .into_response();
     }
 
-    let settings = state
-        .persistence
-        .deployment_settings_or_default()
-        .await
-        .unwrap_or_default();
+    let settings = match state.persistence.deployment_settings_or_default().await {
+        Ok(settings) => settings,
+        Err(_) => {
+            warn!("failed to load deployment settings page");
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_error_page(
+                    &state,
+                    Some(&session),
+                    "Deployment Settings Unavailable",
+                    "Deployment settings could not be loaded. Please try again.",
+                )),
+            )
+                .into_response();
+        }
+    };
     let command_sync_store = load_command_sync_store(&state.persistence).await;
     let active_tab = normalized_tab(query.tab.as_deref());
     let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
@@ -1161,11 +1172,25 @@ async fn guild_page(
         }
     }
 
-    let deployment = state
-        .persistence
-        .deployment_settings_or_default()
-        .await
-        .unwrap_or_default();
+    let deployment = match state.persistence.deployment_settings_or_default().await {
+        Ok(settings) => settings,
+        Err(_) => {
+            warn!(
+                guild_id,
+                "failed to load deployment settings for guild page"
+            );
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_error_page(
+                    &state,
+                    Some(&session),
+                    "Deployment Settings Unavailable",
+                    "The effective guild state could not be determined. Please try again.",
+                )),
+            )
+                .into_response();
+        }
+    };
     let command_sync_store = load_command_sync_store(&state.persistence).await;
     let Some(_) = state.persistence.guild_settings.as_ref() else {
         return (
@@ -1269,19 +1294,13 @@ async fn guild_page(
         &settings,
         &resolved_command_states,
     );
+    let settings_state = guild_settings_ui_state(&settings, settings_persisted);
+    let settings_notice = guild_settings_notice(settings_state);
     let overview_panel = format!(
         "<section id=\"overview\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\" data-settings-state=\"{settings_state}\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div>{settings_notice}<div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
         guild_id = guild_id,
-        settings_state = if settings_persisted {
-            "existing"
-        } else {
-            "absent"
-        },
-        settings_notice = if settings_persisted {
-            ""
-        } else {
-            "<p class=\"notice\" data-testid=\"guild-settings-absent\">No guild settings have been saved yet. Defaults are shown.</p>"
-        },
+        settings_state = settings_state,
+        settings_notice = settings_notice,
         runtime_notices = render_runtime_notices(&state.module_catalog),
     );
     let modules_section = format!(
@@ -1370,6 +1389,30 @@ async fn guild_page(
         &content,
     ))
     .into_response()
+}
+
+fn guild_settings_ui_state(settings: &GuildSettings, persisted: bool) -> &'static str {
+    if !persisted {
+        "absent"
+    } else if settings.modules.is_empty() && settings.commands.is_empty() {
+        "existing-empty"
+    } else {
+        "existing-configured"
+    }
+}
+
+fn guild_settings_notice(state: &str) -> &'static str {
+    match state {
+        "absent" => {
+            "<p class=\"notice\" data-testid=\"guild-settings-absent\">No guild settings have been saved yet. Deployment defaults are shown.</p>"
+        }
+        "existing-empty" => {
+            "<p class=\"notice\" data-testid=\"guild-settings-empty\">Guild settings are saved, but no module or command overrides are configured.</p>"
+        }
+        _ => {
+            "<p class=\"notice\" data-testid=\"guild-settings-configured\">Saved guild overrides are applied below.</p>"
+        }
+    }
 }
 
 async fn fetch_application_info(
@@ -1802,7 +1845,9 @@ fn render_guild_card(card: &GuildCard) -> String {
             "<a class=\"button button-secondary card-action\" href=\"{}\">Invite Bot</a>",
             card.invite_url
         ),
-        BotGuildPresence::Unavailable => String::new(),
+        BotGuildPresence::Unavailable => {
+            "<a class=\"button button-secondary\" href=\"/selector\">Retry Status</a>".to_string()
+        }
     };
     let media = card
         .icon_url
@@ -1870,7 +1915,7 @@ fn render_error_page(
     message: &str,
 ) -> String {
     let content = format!(
-        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Dashboard</p><h1>{}</h1><p class=\"lede\">{}</p><div class=\"actions\"><a class=\"button button-primary\" href=\"/selector\">Server Selector</a><a class=\"button button-secondary\" href=\"/\">Home</a></div></div></section>",
+        "<section class=\"hero compact\"><div><p class=\"eyebrow\">Dashboard</p><h1>{}</h1><p class=\"lede\">{}</p><div class=\"actions\"><a class=\"button button-primary\" href=\"\">Retry</a><a class=\"button button-secondary\" href=\"/selector\">Server Selector</a><a class=\"button button-secondary\" href=\"/\">Home</a></div></div></section>",
         escape_html(title),
         message,
     );
@@ -2655,7 +2700,7 @@ fn render_module_toggle(
         "guild" => format!(
             "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleGuildModule('{guild_id}', '{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(module_id),
-            checked = if resolved.effective_enabled {
+            checked = if resolved.guild_enabled {
                 "checked"
             } else {
                 ""
@@ -2666,7 +2711,7 @@ fn render_module_toggle(
         _ => format!(
             "<label class=\"toggle-switch\"><input data-testid=\"module-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleDeploymentModule('{module_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(module_id),
-            checked = if resolved.effective_enabled {
+            checked = if resolved.deployment_enabled {
                 "checked"
             } else {
                 ""
@@ -2687,7 +2732,7 @@ fn render_command_toggle(
         "guild" => format!(
             "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleGuildCommand('{guild_id}', '{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(command_id),
-            checked = if resolved.effective_enabled {
+            checked = if resolved.guild_enabled {
                 "checked"
             } else {
                 ""
@@ -2698,7 +2743,7 @@ fn render_command_toggle(
         _ => format!(
             "<label class=\"toggle-switch\"><input data-testid=\"command-toggle-{testid}\" type=\"checkbox\" {checked} onchange=\"toggleDeploymentCommand('{command_id}', this.checked, this)\" /><span class=\"toggle-slider\"></span></label>",
             testid = status_key(command_id),
-            checked = if resolved.effective_enabled {
+            checked = if resolved.deployment_enabled {
                 "checked"
             } else {
                 ""
@@ -2953,13 +2998,23 @@ fn render_module_summary_cards(
         .zip(resolved_states.iter())
         .map(|(entry, resolved)| {
             let toggle = render_module_toggle(scope, entry.module.id, deployment, guild, resolved);
+            let state_summary = if scope == "guild" {
+                format!(
+                    "<p class=\"detail-meta state-summary\" data-testid=\"module-state-{testid}\">{}</p>",
+                    escape_html(&render_guild_status(resolved)),
+                    testid = status_key(entry.module.id),
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "<article class=\"panel summary-card module-card\" data-testid=\"module-card-{testid}\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3 title=\"{name}\">{name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"module-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}', this)\">Settings</button><span class=\"card-status\" id=\"card-status-module-{testid}\"></span></div></article>",
+                "<article class=\"panel summary-card module-card\" data-testid=\"module-card-{testid}\" data-module-name=\"{data_name}\"><div class=\"summary-card-head\"><h3 title=\"{name}\">{name}</h3>{toggle}</div><p title=\"{description}\">{description}</p>{state_summary}<div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"module-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}', this)\">Settings</button><span class=\"card-status\" id=\"card-status-module-{testid}\"></span></div></article>",
                 testid = status_key(entry.module.id),
                 data_name = escape_html(&entry.module.display_name.to_ascii_lowercase()),
                 name = escape_html(entry.module.display_name),
                 toggle = toggle,
                 description = escape_html(entry.module.description),
+                state_summary = state_summary,
                 modal_id = modal_id_for_module(scope, entry.module.id),
             )
         })
@@ -2980,8 +3035,17 @@ fn render_command_summary_cards(
         .zip(resolved_states.iter())
         .map(|(entry, resolved)| {
             let toggle = render_command_toggle(scope, &entry.command.id, deployment, guild, resolved);
+            let state_summary = if scope == "guild" {
+                format!(
+                    "<p class=\"detail-meta state-summary\" data-testid=\"command-state-{testid}\">{}</p>",
+                    escape_html(&render_guild_command_status(resolved)),
+                    testid = status_key(&entry.command.id),
+                )
+            } else {
+                String::new()
+            };
             format!(
-                "<article class=\"panel summary-card command-card\" data-testid=\"command-card-{testid}\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3 title=\"{display_name}\">{display_name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"summary-card-subtitle\">{category_label}</div><div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"command-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}', this)\">Settings</button><span class=\"card-status\" id=\"card-status-command-{testid}\"></span></div></article>",
+                "<article class=\"panel summary-card command-card\" data-testid=\"command-card-{testid}\" data-command-name=\"{command_name}\" data-command-category=\"{category_key}\"><div class=\"summary-card-head\"><h3 title=\"{display_name}\">{display_name}</h3>{toggle}</div><p title=\"{description}\">{description}</p><div class=\"summary-card-subtitle\">{category_label}</div>{state_summary}<div class=\"actions compact-actions\"><button class=\"button button-secondary button-compact\" data-testid=\"command-settings-button-{testid}\" type=\"button\" onclick=\"openSettingsModal('{modal_id}', this)\">Settings</button><span class=\"card-status\" id=\"card-status-command-{testid}\"></span></div></article>",
                 testid = status_key(&entry.command.id),
                 command_name = escape_html(&entry.command.display_name.to_ascii_lowercase()),
                 category_key = escape_html(&command_category_key(entry)),
@@ -2989,6 +3053,7 @@ fn render_command_summary_cards(
                 toggle = toggle,
                 description = escape_html(entry.command.description.as_deref().unwrap_or("No description provided.")),
                 category_label = escape_html(&command_category_label(entry)),
+                state_summary = state_summary,
                 modal_id = modal_id_for_command(scope, &entry.command.id),
             )
         })
@@ -3219,11 +3284,12 @@ fn render_deployment_status(state: &ResolvedModuleState) -> String {
 
 fn render_guild_status(state: &ResolvedModuleState) -> String {
     format!(
-        "installed: {} | deployment: {} | guild: {} | effective: {}",
-        yes_no(state.installed),
-        yes_no(state.deployment_enabled),
-        yes_no(state.guild_enabled),
-        yes_no(state.effective_enabled),
+        "Installed: {} | Deployment: {} | Local guild: {} | Effective: {} | {}",
+        on_off(state.installed),
+        on_off(state.deployment_enabled),
+        on_off(state.guild_enabled),
+        on_off(state.effective_enabled),
+        module_blocker(state),
     )
 }
 
@@ -3239,13 +3305,44 @@ fn render_deployment_command_status(state: &ResolvedCommandState) -> String {
 
 fn render_guild_command_status(state: &ResolvedCommandState) -> String {
     format!(
-        "module: {} | installed: {} | deployment: {} | guild: {} | effective: {}",
-        yes_no(state.module_effective_enabled),
-        yes_no(state.installed),
-        yes_no(state.deployment_enabled),
-        yes_no(state.guild_enabled),
-        yes_no(state.effective_enabled),
+        "Parent module: {} | Installed: {} | Deployment: {} | Local guild: {} | Effective: {} | {}",
+        on_off(state.module_effective_enabled),
+        on_off(state.installed),
+        on_off(state.deployment_enabled),
+        on_off(state.guild_enabled),
+        on_off(state.effective_enabled),
+        command_blocker(state),
     )
+}
+
+fn module_blocker(state: &ResolvedModuleState) -> &'static str {
+    if !state.installed {
+        "Blocked by deployment installation"
+    } else if !state.deployment_enabled {
+        "Blocked by deployment"
+    } else if !state.guild_enabled {
+        "Blocked by local guild setting"
+    } else {
+        "No blocker"
+    }
+}
+
+fn command_blocker(state: &ResolvedCommandState) -> &'static str {
+    if !state.module_effective_enabled {
+        "Blocked by parent module"
+    } else if !state.installed {
+        "Blocked by deployment installation"
+    } else if !state.deployment_enabled {
+        "Blocked by deployment"
+    } else if !state.guild_enabled {
+        "Blocked by local guild setting"
+    } else {
+        "No blocker"
+    }
+}
+
+fn on_off(value: bool) -> &'static str {
+    if value { "On" } else { "Off" }
 }
 
 fn yes_no(value: bool) -> &'static str {
@@ -3382,12 +3479,13 @@ async fn list_live_module_states(
     }
     let deployment_settings = match state.persistence.deployment_settings_or_default().await {
         Ok(settings) => settings,
-        Err(error) => {
+        Err(_) => {
+            warn!("failed to load live deployment module states");
             return (
-                StatusCode::INTERNAL_SERVER_ERROR,
+                StatusCode::SERVICE_UNAVAILABLE,
                 Json(serde_json::json!({
                     "status": "error",
-                    "message": format!("failed to load deployment settings: {error}")
+                    "message": "deployment settings are unavailable"
                 })),
             )
                 .into_response();
@@ -4640,9 +4738,11 @@ mod tests {
         FONT_CACHE_CONTROL, GuildCard, GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME,
         audit_action_label, audit_entity_label, build_dashboard_http_client_with_timeouts,
         build_dashboard_router, classify_bot_guild_status, dashboard_styles, escape_html,
-        font_asset_router, render_audit_logs_section, render_dashboard_page_shell, render_field,
-        render_guild_card, render_settings_modal, request_id_for_logging, request_path_for_logging,
-        request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
+        font_asset_router, guild_settings_notice, guild_settings_ui_state,
+        render_audit_logs_section, render_dashboard_page_shell, render_error_page, render_field,
+        render_guild_card, render_guild_status, render_module_toggle, render_settings_modal,
+        request_id_for_logging, request_path_for_logging, request_path_should_be_logged,
+        sanitize_redirect_target, user_can_manage_guild,
     };
     use async_trait::async_trait;
     use axum::{
@@ -4657,8 +4757,13 @@ mod tests {
         DashboardAuditScope,
     };
     use dynamo_persistence_api::Persistence;
-    use dynamo_repositories::{GuildSettingsRepository, ProviderStateRepository};
-    use dynamo_settings::GuildCommandSettings;
+    use dynamo_repositories::{
+        DeploymentSettingsRepository, GuildSettingsRepository, ProviderStateRepository,
+    };
+    use dynamo_settings::{
+        DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings,
+        GuildCommandSettings,
+    };
     use tower::ServiceExt;
 
     async fn write_raw_response(stream: &tokio::net::TcpStream, mut bytes: &[u8]) {
@@ -4852,6 +4957,114 @@ mod tests {
         assert!(!rendered.contains("Install Required"));
         assert!(!rendered.contains("Invite Bot"));
         assert!(!rendered.contains("https://discord.com/invite"));
+        assert!(rendered.contains("Retry"));
+    }
+
+    #[test]
+    fn guild_module_state_keeps_local_gate_visible_when_deployment_blocks_effective_state() {
+        let registry = dynamo_app::module_registry();
+        let module = registry
+            .catalog()
+            .entries
+            .first()
+            .expect("module")
+            .module
+            .clone();
+        let mut deployment = DeploymentSettings::default();
+        deployment.modules.insert(
+            module.id.to_string(),
+            DeploymentModuleSettings {
+                installed: true,
+                enabled: false,
+            },
+        );
+        let mut guild = GuildSettings::for_guild(42);
+        guild.modules.insert(
+            module.id.to_string(),
+            GuildModuleSettings {
+                enabled: true,
+                configuration: serde_json::json!({}),
+            },
+        );
+        let resolved =
+            dynamo_enablement::resolve_module_states(registry.catalog(), &deployment, Some(&guild))
+                .into_iter()
+                .find(|state| state.module.id == module.id)
+                .expect("resolved module");
+
+        let toggle = render_module_toggle("guild", module.id, &deployment, Some(&guild), &resolved);
+        let status = render_guild_status(&resolved);
+
+        assert!(toggle.contains("type=\"checkbox\" checked"));
+        let deployment_toggle =
+            render_module_toggle("deployment", module.id, &deployment, None, &resolved);
+        assert!(!deployment_toggle.contains("type=\"checkbox\" checked"));
+        assert!(status.contains("Local guild: On"));
+        assert!(status.contains("Effective: Off"));
+        assert!(status.contains("Blocked by deployment"));
+    }
+
+    #[test]
+    fn guild_settings_ui_state_distinguishes_absent_empty_and_configured() {
+        let empty = GuildSettings::for_guild(42);
+        assert_eq!(guild_settings_ui_state(&empty, false), "absent");
+        assert_eq!(guild_settings_ui_state(&empty, true), "existing-empty");
+        assert!(guild_settings_notice("absent").contains("guild-settings-absent"));
+        assert!(guild_settings_notice("existing-empty").contains("guild-settings-empty"));
+
+        let mut configured = empty;
+        configured.modules.insert(
+            "stock".to_string(),
+            GuildModuleSettings {
+                enabled: true,
+                configuration: serde_json::json!({}),
+            },
+        );
+        assert_eq!(
+            guild_settings_ui_state(&configured, true),
+            "existing-configured"
+        );
+        assert!(guild_settings_notice("existing-configured").contains("guild-settings-configured"));
+    }
+
+    #[test]
+    fn dashboard_error_page_offers_retry_without_echoing_internal_details() {
+        let state = test_dashboard_state(Persistence::default());
+        let rendered = render_error_page(
+            &state,
+            None,
+            "Settings Unavailable",
+            "Settings could not be loaded.",
+        );
+
+        assert!(rendered.contains(">Retry</a>"));
+        assert!(!rendered.contains("mongodb://"));
+        assert!(!rendered.contains("test-secret"));
+    }
+
+    struct UnavailableDeploymentSettingsRepository;
+
+    #[async_trait]
+    impl DeploymentSettingsRepository for UnavailableDeploymentSettingsRepository {
+        async fn get(&self) -> anyhow::Result<DeploymentSettings> {
+            anyhow::bail!("mongodb://secret@host/dynamo collection=deployment_settings")
+        }
+
+        async fn upsert_module_settings(
+            &self,
+            _module_id: &str,
+            _settings: DeploymentModuleSettings,
+        ) -> anyhow::Result<DeploymentSettings> {
+            unreachable!("read-only fixture")
+        }
+
+        async fn upsert_command_settings(
+            &self,
+            _command_id: &str,
+            _settings: DeploymentCommandSettings,
+        ) -> anyhow::Result<DeploymentSettings> {
+            unreachable!("read-only fixture")
+        }
     }
 
     enum GuildSettingsReadResult {
@@ -4884,7 +5097,9 @@ mod tests {
                 GuildSettingsReadResult::Absent => Ok(None),
                 GuildSettingsReadResult::Existing(settings) => Ok(Some(settings.clone())),
                 GuildSettingsReadResult::Unavailable => {
-                    anyhow::bail!("fake guild settings repository unavailable")
+                    anyhow::bail!(
+                        "mongodb://secret@host/dynamo collection=guild_settings unavailable"
+                    )
                 }
             }
         }
@@ -5090,6 +5305,33 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn live_module_state_failure_is_unavailable_and_redacted() {
+        let state = test_dashboard_state(Persistence {
+            deployment_settings: Some(Arc::new(UnavailableDeploymentSettingsRepository)),
+            ..Persistence::default()
+        });
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/api/module-states/live",
+                "test-session",
+            ))
+            .await
+            .expect("live module states response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_response(response).await;
+        assert_eq!(body["message"], "deployment settings are unavailable");
+        let rendered = body.to_string();
+        assert!(!rendered.contains("mongodb://"));
+        assert!(!rendered.contains("deployment_settings"));
+        assert!(!rendered.contains("secret"));
+    }
+
+    #[tokio::test]
     async fn guild_settings_api_returns_absent_state_without_writing() {
         let repository = Arc::new(FakeGuildSettingsRepository::new(
             GuildSettingsReadResult::Absent,
@@ -5187,6 +5429,41 @@ mod tests {
         assert_eq!(body["message"], "guild settings are unavailable");
         assert_eq!(repository.reads.load(Ordering::SeqCst), 1);
         assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn guild_page_unavailable_settings_is_actionable_and_redacted() {
+        let (discord_api_base, _) =
+            spawn_discord_guilds_server(StatusCode::OK, "{}", StdDuration::ZERO, 1).await;
+        let repository = Arc::new(FakeGuildSettingsRepository::new(
+            GuildSettingsReadResult::Unavailable,
+        ));
+        let state = test_dashboard_state_with_discord(
+            Persistence {
+                guild_settings: Some(repository),
+                ..Persistence::default()
+            },
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request("GET", "/guild/42", "test-session"))
+            .await
+            .expect("guild page response");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("bounded guild page body");
+        let rendered = String::from_utf8(body.to_vec()).expect("UTF-8 guild page");
+        assert!(rendered.contains("Guild Settings Unavailable"));
+        assert!(rendered.contains(">Retry</a>"));
+        assert!(!rendered.contains("mongodb://"));
+        assert!(!rendered.contains("guild_settings"));
+        assert!(!rendered.contains("test-secret"));
     }
 
     #[tokio::test]
