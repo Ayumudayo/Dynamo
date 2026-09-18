@@ -1565,7 +1565,7 @@ async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) ->
         .cloned()
         .collect::<Vec<_>>();
 
-    stream::iter(manageable.into_iter().map(|guild| async move {
+    let mut cards = stream::iter(manageable.into_iter().map(|guild| async move {
         let bot_presence = bot_is_in_guild(state, guild.id).await;
         GuildCard {
             id: guild.id,
@@ -1579,7 +1579,18 @@ async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) ->
     }))
     .buffer_unordered(8)
     .collect::<Vec<_>>()
-    .await
+    .await;
+    sort_guild_cards(&mut cards);
+    cards
+}
+
+fn sort_guild_cards(cards: &mut [GuildCard]) {
+    cards.sort_by(|left, right| {
+        left.name
+            .to_lowercase()
+            .cmp(&right.name.to_lowercase())
+            .then_with(|| left.id.cmp(&right.id))
+    });
 }
 
 fn session_can_manage_guild(session: &DashboardSession, guild_id: u64) -> bool {
@@ -4797,7 +4808,8 @@ mod tests {
         render_audit_logs_section, render_dashboard_page_shell, render_error_page, render_field,
         render_guild_card, render_guild_status, render_landing_page, render_module_toggle,
         render_nav, render_settings_modal, request_id_for_logging, request_path_for_logging,
-        request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
+        request_path_should_be_logged, sanitize_redirect_target, sort_guild_cards,
+        user_can_manage_guild,
     };
     use async_trait::async_trait;
     use axum::{
@@ -5173,6 +5185,46 @@ mod tests {
             dashboard.contains("class=\"button button-primary\" href=\"/selector\">Server Listing")
         );
         assert!(!dashboard.contains("Sign in with Discord"));
+    }
+
+    #[test]
+    fn guild_cards_use_stable_name_then_id_order() {
+        let mut cards = vec![
+            GuildCard {
+                id: 20,
+                name: "beta".to_string(),
+                icon_url: None,
+                manageable: true,
+                bot_presence: BotGuildPresence::Missing,
+                manage_url: "/guild/20".to_string(),
+                invite_url: "https://discord.com/invite/20".to_string(),
+            },
+            GuildCard {
+                id: 3,
+                name: "Alpha".to_string(),
+                icon_url: None,
+                manageable: true,
+                bot_presence: BotGuildPresence::Missing,
+                manage_url: "/guild/3".to_string(),
+                invite_url: "https://discord.com/invite/3".to_string(),
+            },
+            GuildCard {
+                id: 4,
+                name: "alpha".to_string(),
+                icon_url: None,
+                manageable: true,
+                bot_presence: BotGuildPresence::Missing,
+                manage_url: "/guild/4".to_string(),
+                invite_url: "https://discord.com/invite/4".to_string(),
+            },
+        ];
+
+        sort_guild_cards(&mut cards);
+
+        assert_eq!(
+            cards.iter().map(|card| card.id).collect::<Vec<_>>(),
+            vec![3, 4, 20]
+        );
     }
 
     struct UnavailableDeploymentSettingsRepository;
