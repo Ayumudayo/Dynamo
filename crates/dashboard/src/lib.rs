@@ -1981,7 +1981,7 @@ fn render_nav(
     let mut items = vec![nav_link(
         "Dashboard",
         default_dashboard,
-        active_path == Some("/") || active_path == Some("/selector"),
+        active_path == Some("/"),
     )];
     if session.is_some() {
         if show_section_nav {
@@ -2162,7 +2162,8 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
   transition: background-color 180ms ease, color 180ms ease, border-color 180ms ease;
   border: 1px solid transparent; cursor: pointer; font-weight: 600;
 }
-.nav-link:hover, .nav-link.active { color: var(--text); background: rgba(221, 46, 83, 0.14); border-color: rgba(221,46,83,0.2); }
+.nav-link.active { color: var(--text); background: rgba(221, 46, 83, 0.14); border-color: rgba(221,46,83,0.2); }
+.nav-link:hover:not(.active) { color: var(--text); background: rgba(221, 46, 83, 0.06); border-color: rgba(221,46,83,0.10); }
 .sidebar-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
 .sidebar-footnote { color: var(--muted); font-size: 12px; }
 .lede { margin: 8px 0 0; color: var(--muted); max-width: 70ch; line-height: 1.6; }
@@ -4768,9 +4769,9 @@ mod tests {
         build_dashboard_router, classify_bot_guild_status, dashboard_script, dashboard_styles,
         escape_html, font_asset_router, guild_settings_notice, guild_settings_ui_state,
         render_audit_logs_section, render_dashboard_page_shell, render_error_page, render_field,
-        render_guild_card, render_guild_status, render_module_toggle, render_settings_modal,
-        request_id_for_logging, request_path_for_logging, request_path_should_be_logged,
-        sanitize_redirect_target, user_can_manage_guild,
+        render_guild_card, render_guild_status, render_module_toggle, render_nav,
+        render_settings_modal, request_id_for_logging, request_path_for_logging,
+        request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
     };
     use async_trait::async_trait;
     use axum::{
@@ -5079,6 +5080,8 @@ mod tests {
         assert!(css.contains(".toggle-switch input:focus-visible + .toggle-slider"));
         assert!(css.contains(".content-topbar { display: grid;"));
         assert!(css.contains(".sync-panel { flex-direction: column;"));
+        assert!(css.contains(".nav-link:hover:not(.active)"));
+        assert!(!css.contains(".nav-link:hover, .nav-link.active"));
 
         let script = dashboard_script();
         let live_semantics = script
@@ -5088,6 +5091,34 @@ mod tests {
             .find("target.textContent")
             .expect("status content update");
         assert!(live_semantics < content_update);
+    }
+
+    #[test]
+    fn sidebar_has_one_active_destination_for_selector_and_section_pages() {
+        let state = test_dashboard_state(Persistence::default());
+        let session = DashboardSession {
+            user: DashboardUser {
+                id: 7,
+                username: "tester".to_string(),
+                global_name: Some("Tester".to_string()),
+                avatar: None,
+            },
+            guilds: Vec::new(),
+            access_token: "access-token".to_string(),
+            expires_at: Utc::now() + Duration::minutes(5),
+        };
+
+        let selector = render_nav(&state, Some(&session), Some("/selector"), None);
+        assert_eq!(selector.matches("nav-link active").count(), 1);
+        assert!(selector.contains("class=\"nav-link active\" href=\"/selector\">Server Listing"));
+        assert!(selector.contains("class=\"nav-link\" href=\"/selector\">Dashboard"));
+
+        let modules = render_nav(&state, Some(&session), Some("/guild/42"), Some("modules"));
+        assert_eq!(modules.matches("nav-link active").count(), 1);
+        assert!(
+            modules.contains("class=\"nav-link active\" href=\"/guild/42?tab=modules\">Modules")
+        );
+        assert!(modules.contains("class=\"nav-link\" href=\"/selector\">Server Listing"));
     }
 
     struct UnavailableDeploymentSettingsRepository;
