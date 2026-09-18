@@ -820,11 +820,8 @@ struct DiscordCallbackQuery {
 }
 
 async fn index(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
-    if load_session(&state, &jar).await.is_some() {
-        return Redirect::to("/selector").into_response();
-    }
-
-    Html(render_landing_page(&state)).into_response()
+    let session = load_session(&state, &jar).await;
+    Html(render_landing_page(&state, session.as_ref())).into_response()
 }
 
 async fn login(
@@ -1740,9 +1737,19 @@ fn user_is_dashboard_admin(state: &DashboardState, user: &DashboardUser) -> bool
     admin_ids.contains(&user.id)
 }
 
-fn render_landing_page(state: &DashboardState) -> String {
+fn render_landing_page(state: &DashboardState, session: Option<&DashboardSession>) -> String {
     let content = format!(
-        "<section class=\"hero\"><div><p class=\"eyebrow\">Discord OAuth Dashboard</p><h1>Manage Dynamo like a real multi-server control panel.</h1><p class=\"lede\">Sign in with Discord, pick the servers you can manage, and adjust module and command behavior without touching the terminal.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"/login\">Sign in with Discord</a><a class=\"button button-secondary\" href=\"/healthz\">Health Check</a></div></div><div class=\"hero-card\"><dl><div><dt>Modules</dt><dd>{module_count}</dd></div><div><dt>Leaf Commands</dt><dd>{command_count}</dd></div><div><dt>Runtime Notes</dt><dd>{notice_count}</dd></div></dl></div></section><section class=\"grid two\"><article class=\"panel\"><h2>Server Selector</h2><p>Dyno-like server cards split between servers you can manage now and servers that still need the bot installed.</p></article><article class=\"panel\"><h2>Shared Runtime Guard</h2><p>Dashboard state, runtime checks, and command sync all resolve from the same module and command enablement rules.</p></article></section>{runtime_notices}",
+        "<section class=\"hero\"><div><p class=\"eyebrow\">Discord OAuth Dashboard</p><h1>Manage Dynamo like a real multi-server control panel.</h1><p class=\"lede\">{intro}</p><div class=\"actions\">{primary_action}<a class=\"button button-secondary\" href=\"/healthz\">Health Check</a></div></div><div class=\"hero-card\"><dl><div><dt>Modules</dt><dd>{module_count}</dd></div><div><dt>Leaf Commands</dt><dd>{command_count}</dd></div><div><dt>Runtime Notes</dt><dd>{notice_count}</dd></div></dl></div></section><section class=\"grid two\"><article class=\"panel\"><h2>Server Selector</h2><p>Dyno-like server cards split between servers you can manage now and servers that still need the bot installed.</p></article><article class=\"panel\"><h2>Shared Runtime Guard</h2><p>Dashboard state, runtime checks, and command sync all resolve from the same module and command enablement rules.</p></article></section>{runtime_notices}",
+        intro = if session.is_some() {
+            "Open the server listing to choose a guild, or review the shared runtime state from this dashboard."
+        } else {
+            "Sign in with Discord, pick the servers you can manage, and adjust module and command behavior without touching the terminal."
+        },
+        primary_action = if session.is_some() {
+            "<a class=\"button button-primary\" href=\"/selector\">Server Listing</a>"
+        } else {
+            "<a class=\"button button-primary\" href=\"/login\">Sign in with Discord</a>"
+        },
         module_count = state.module_catalog.entries.len(),
         command_count = state.command_catalog.entries.len(),
         notice_count = count_runtime_notices(&state.module_catalog),
@@ -1751,10 +1758,10 @@ fn render_landing_page(state: &DashboardState) -> String {
 
     render_document(
         state,
-        None,
+        session,
         &format!("{} Dashboard", state.app_info.name),
         "OAuth-protected control plane for Dynamo.",
-        None,
+        Some("/"),
         None,
         &content,
     )
@@ -1974,7 +1981,7 @@ fn render_nav(
     active_path: Option<&str>,
     active_tab: Option<&str>,
 ) -> String {
-    let default_dashboard = if session.is_some() { "/selector" } else { "/" };
+    let default_dashboard = "/";
     let show_section_nav = active_path
         .map(|path| path == "/deployment" || path.starts_with("/guild/"))
         .unwrap_or(false);
@@ -4769,8 +4776,8 @@ mod tests {
         build_dashboard_router, classify_bot_guild_status, dashboard_script, dashboard_styles,
         escape_html, font_asset_router, guild_settings_notice, guild_settings_ui_state,
         render_audit_logs_section, render_dashboard_page_shell, render_error_page, render_field,
-        render_guild_card, render_guild_status, render_module_toggle, render_nav,
-        render_settings_modal, request_id_for_logging, request_path_for_logging,
+        render_guild_card, render_guild_status, render_landing_page, render_module_toggle,
+        render_nav, render_settings_modal, request_id_for_logging, request_path_for_logging,
         request_path_should_be_logged, sanitize_redirect_target, user_can_manage_guild,
     };
     use async_trait::async_trait;
@@ -5111,7 +5118,7 @@ mod tests {
         let selector = render_nav(&state, Some(&session), Some("/selector"), None);
         assert_eq!(selector.matches("nav-link active").count(), 1);
         assert!(selector.contains("class=\"nav-link active\" href=\"/selector\">Server Listing"));
-        assert!(selector.contains("class=\"nav-link\" href=\"/selector\">Dashboard"));
+        assert!(selector.contains("class=\"nav-link\" href=\"/\">Dashboard"));
 
         let modules = render_nav(&state, Some(&session), Some("/guild/42"), Some("modules"));
         assert_eq!(modules.matches("nav-link active").count(), 1);
@@ -5119,6 +5126,12 @@ mod tests {
             modules.contains("class=\"nav-link active\" href=\"/guild/42?tab=modules\">Modules")
         );
         assert!(modules.contains("class=\"nav-link\" href=\"/selector\">Server Listing"));
+
+        let dashboard = render_landing_page(&state, Some(&session));
+        assert!(
+            dashboard.contains("class=\"button button-primary\" href=\"/selector\">Server Listing")
+        );
+        assert!(!dashboard.contains("Sign in with Discord"));
     }
 
     struct UnavailableDeploymentSettingsRepository;
