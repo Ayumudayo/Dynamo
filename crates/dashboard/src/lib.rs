@@ -2186,9 +2186,9 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
 }
 .nav-link.active { color: var(--text); background: rgba(221, 46, 83, 0.14); border-color: rgba(221,46,83,0.2); }
 .nav-link:hover:not(.active) { color: var(--text); background: rgba(221, 46, 83, 0.06); border-color: rgba(221,46,83,0.10); }
-.nav-submenu { display: grid; gap: 4px; margin: -16px 0 0 12px; padding: 4px 0 4px 10px; border-left: 1px solid rgba(221,46,83,0.22); }
-.nav-sub-link { color: var(--muted); text-decoration: none; padding: 8px 10px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; font-size: 0.92rem; }
-.nav-sub-link.active { color: var(--accent); border-color: rgba(221,46,83,0.18); background: rgba(221,46,83,0.05); }
+.nav-submenu { display: grid; gap: 2px; margin: 0 0 4px 12px; padding: 0 0 0 8px; }
+.nav-sub-link { color: var(--muted); text-decoration: none; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 0.90rem; }
+.nav-sub-link.active { color: var(--accent); font-weight: 600; }
 .nav-sub-link:hover:not(.active) { color: var(--text); background: rgba(221,46,83,0.04); }
 .sidebar-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
 .sidebar-footnote { color: var(--muted); font-size: 12px; }
@@ -5108,6 +5108,9 @@ mod tests {
         assert!(css.contains(".sync-panel { flex-direction: column;"));
         assert!(css.contains(".nav-link:hover:not(.active)"));
         assert!(!css.contains(".nav-link:hover, .nav-link.active"));
+        assert!(css.contains(".nav-submenu { display: grid; gap: 2px;"));
+        assert!(css.contains(".nav-sub-link.active { color: var(--accent); font-weight: 600; }"));
+        assert!(!css.contains(".nav-submenu { border-left"));
 
         let script = dashboard_script();
         let live_semantics = script
