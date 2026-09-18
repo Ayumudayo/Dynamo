@@ -1985,47 +1985,53 @@ fn render_nav(
     let show_section_nav = active_path
         .map(|path| path == "/deployment" || path.starts_with("/guild/"))
         .unwrap_or(false);
+    let dashboard_admin = session
+        .map(|session| user_is_dashboard_admin(state, &session.user))
+        .unwrap_or(false);
+    let server_listing_active = active_path == Some("/selector")
+        || active_path.is_some_and(|path| path.starts_with("/guild/"));
     let mut items = vec![nav_link(
         "Dashboard",
         default_dashboard,
         active_path == Some("/"),
     )];
     if session.is_some() {
-        if show_section_nav {
-            let base_path = active_path.unwrap_or(default_dashboard);
-            items.push(nav_link(
-                "Modules",
-                &format!("{base_path}{}", page_query_for_tab("modules")),
-                active_tab == Some("modules"),
-            ));
-            items.push(nav_link(
-                "Commands",
-                &format!("{base_path}{}", page_query_for_tab("commands")),
-                active_tab == Some("commands"),
-            ));
-        }
         items.push(nav_link(
             "Server Listing",
             "/selector",
-            active_path == Some("/selector"),
+            server_listing_active,
         ));
-        if show_section_nav {
-            let base_path = active_path.unwrap_or(default_dashboard);
-            items.push(nav_link(
-                "Logs",
-                &format!("{base_path}{}", page_query_for_tab("logs")),
-                active_tab == Some("logs"),
-            ));
-        }
-        if session
-            .map(|session| user_is_dashboard_admin(state, &session.user))
-            .unwrap_or(false)
-        {
+        if dashboard_admin {
             items.push(nav_link(
                 "Deployment",
                 "/deployment",
                 active_path == Some("/deployment"),
             ));
+        }
+        if show_section_nav {
+            let base_path = active_path.unwrap_or(default_dashboard);
+            let subnav = [
+                (
+                    "Modules",
+                    format!("{base_path}{}", page_query_for_tab("modules")),
+                    active_tab == Some("modules"),
+                ),
+                (
+                    "Commands",
+                    format!("{base_path}{}", page_query_for_tab("commands")),
+                    active_tab == Some("commands"),
+                ),
+                (
+                    "Logs",
+                    format!("{base_path}{}", page_query_for_tab("logs")),
+                    active_tab == Some("logs"),
+                ),
+            ]
+            .into_iter()
+            .map(|(label, href, active)| nav_sub_link(label, &href, active))
+            .collect::<Vec<_>>()
+            .join("");
+            items.push(format!("<div class=\"nav-submenu\">{subnav}</div>"));
         }
         items.push(nav_link("Logout", "/logout", false));
     } else {
@@ -2060,6 +2066,15 @@ fn render_section_tabs(base_path: &str, active_tab: &str) -> String {
 fn nav_link(label: &str, href: &str, active: bool) -> String {
     format!(
         "<a class=\"nav-link{}\" href=\"{}\">{}</a>",
+        if active { " active" } else { "" },
+        href,
+        escape_html(label)
+    )
+}
+
+fn nav_sub_link(label: &str, href: &str, active: bool) -> String {
+    format!(
+        "<a class=\"nav-sub-link{}\" href=\"{}\">{}</a>",
         if active { " active" } else { "" },
         href,
         escape_html(label)
@@ -2171,6 +2186,10 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
 }
 .nav-link.active { color: var(--text); background: rgba(221, 46, 83, 0.14); border-color: rgba(221,46,83,0.2); }
 .nav-link:hover:not(.active) { color: var(--text); background: rgba(221, 46, 83, 0.06); border-color: rgba(221,46,83,0.10); }
+.nav-submenu { display: grid; gap: 4px; margin: -16px 0 0 12px; padding: 4px 0 4px 10px; border-left: 1px solid rgba(221,46,83,0.22); }
+.nav-sub-link { color: var(--muted); text-decoration: none; padding: 8px 10px; border-radius: 9px; border: 1px solid transparent; cursor: pointer; font-size: 0.92rem; }
+.nav-sub-link.active { color: var(--accent); border-color: rgba(221,46,83,0.18); background: rgba(221,46,83,0.05); }
+.nav-sub-link:hover:not(.active) { color: var(--text); background: rgba(221,46,83,0.04); }
 .sidebar-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
 .sidebar-footnote { color: var(--muted); font-size: 12px; }
 .lede { margin: 8px 0 0; color: var(--muted); max-width: 70ch; line-height: 1.6; }
@@ -5102,7 +5121,11 @@ mod tests {
 
     #[test]
     fn sidebar_has_one_active_destination_for_selector_and_section_pages() {
-        let state = test_dashboard_state(Persistence::default());
+        let mut state = test_dashboard_state(Persistence::default());
+        Arc::get_mut(&mut state)
+            .expect("test dashboard state is uniquely owned")
+            .app_info
+            .owner_user_id = Some(7);
         let session = DashboardSession {
             user: DashboardUser {
                 id: 7,
@@ -5123,9 +5146,24 @@ mod tests {
         let modules = render_nav(&state, Some(&session), Some("/guild/42"), Some("modules"));
         assert_eq!(modules.matches("nav-link active").count(), 1);
         assert!(
-            modules.contains("class=\"nav-link active\" href=\"/guild/42?tab=modules\">Modules")
+            modules
+                .contains("class=\"nav-sub-link active\" href=\"/guild/42?tab=modules\">Modules")
         );
-        assert!(modules.contains("class=\"nav-link\" href=\"/selector\">Server Listing"));
+        assert!(modules.contains("class=\"nav-link active\" href=\"/selector\">Server Listing"));
+
+        let deployment = render_nav(
+            &state,
+            Some(&session),
+            Some("/deployment"),
+            Some("commands"),
+        );
+        assert_eq!(deployment.matches("nav-link active").count(), 1);
+        assert!(deployment.contains("class=\"nav-link active\" href=\"/deployment\">Deployment"));
+        assert!(
+            deployment.contains(
+                "class=\"nav-sub-link active\" href=\"/deployment?tab=commands\">Commands"
+            )
+        );
 
         let dashboard = render_landing_page(&state, Some(&session));
         assert!(
