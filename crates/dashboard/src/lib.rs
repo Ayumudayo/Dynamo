@@ -1139,12 +1139,7 @@ async fn guild_page(
     let Some(session) = load_session(&state, &jar).await else {
         return Redirect::to(&format!("/login?redirect=%2Fguild%2F{guild_id}")).into_response();
     };
-    let guild_cards = load_guild_cards(&state, &session).await;
-    let Some(card) = guild_cards
-        .iter()
-        .find(|card| card.id == guild_id && card.manageable)
-        .cloned()
-    else {
+    let Some(card) = load_guild_card(&state, &session, guild_id).await else {
         return Html(render_error_page(
             &state,
             Some(&session),
@@ -1582,6 +1577,31 @@ async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) ->
     .await;
     sort_guild_cards(&mut cards);
     cards
+}
+
+/// Builds the one card needed by the guild-detail route without rechecking every
+/// manageable guild merely to locate the requested one. The selector deliberately
+/// continues to use `load_guild_cards`, which keeps its bounded concurrent lookup
+/// and stable ordering contract.
+async fn load_guild_card(
+    state: &DashboardState,
+    session: &DashboardSession,
+    guild_id: u64,
+) -> Option<GuildCard> {
+    let guild = session
+        .guilds
+        .iter()
+        .find(|guild| guild.id == guild_id && user_can_manage_guild(guild))?;
+
+    Some(GuildCard {
+        id: guild.id,
+        name: guild.name.clone(),
+        icon_url: guild_icon_url(guild),
+        manageable: true,
+        bot_presence: bot_is_in_guild(state, guild.id).await,
+        manage_url: format!("/guild/{}", guild.id),
+        invite_url: build_bot_invite_url(state, guild.id),
+    })
 }
 
 fn sort_guild_cards(cards: &mut [GuildCard]) {

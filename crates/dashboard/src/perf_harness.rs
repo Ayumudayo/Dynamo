@@ -1621,7 +1621,7 @@ mod tests {
         .await;
         assert_eq!(guild_counters["repository_reads"], 3);
         assert_eq!(guild_counters["repository_mutations"], 0);
-        assert_eq!(guild_counters["provider_guild_lookups"], 100);
+        assert_eq!(guild_counters["provider_guild_lookups"], 1);
 
         let (readonly_app, readonly_runtime, _shutdown, _) =
             fixture_app_for_mode(FixtureMode::ReadOnly);
