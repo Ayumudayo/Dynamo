@@ -1069,11 +1069,11 @@ async fn deployment_page(
         runtime_notices = render_runtime_notices(&state.module_catalog)
     );
     let modules_section = format!(
-        "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment modules\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid\">{module_cards}</div></section>",
+        "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment modules\" aria-describedby=\"module-filter-status module-filter-empty\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><p id=\"module-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"module-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No modules match this search.</p><div class=\"module-grid compact-grid\">{module_cards}</div></section>",
         module_cards = module_cards,
     );
     let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment commands\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment commands\" aria-describedby=\"command-filter-status command-filter-empty\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><p id=\"command-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"command-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No commands match this search and category.</p>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
         sync_panel = command_sync_panel,
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
@@ -1298,11 +1298,11 @@ async fn guild_page(
         runtime_notices = render_runtime_notices(&state.module_catalog),
     );
     let modules_section = format!(
-        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild modules\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section>",
+        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild modules\" aria-describedby=\"module-filter-status module-filter-empty\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><p id=\"module-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"module-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No modules match this search.</p><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section>",
         module_cards = module_cards,
     );
     let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild commands\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
+        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild commands\" aria-describedby=\"command-filter-status command-filter-empty\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><p id=\"command-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"command-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No commands match this search and category.</p>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
         sync_panel = command_sync_panel,
         command_tabs = render_command_category_tabs(&state.command_catalog),
         command_cards = command_cards,
@@ -1837,7 +1837,7 @@ fn render_selector_page(
         .join("\n");
 
     let content = format!(
-        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Status Unavailable</dt><dd>{unavailable}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" aria-label=\"Search guilds\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section><section id=\"status-unavailable\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Unavailable</p><h2>Server Status Could Not Be Checked</h2></div><span class=\"pill\">{unavailable}</span></div><div class=\"module-grid\">{unavailable_markup}</div></section>",
+        "<section class=\"hero compact dyno-hero\"><div><p class=\"eyebrow\">Server Listing</p><h1>Choose a server to manage.</h1><p class=\"lede\">Only guilds where your account has Manage Server or Administrator are shown. Connected servers can be configured immediately.</p><div class=\"actions\"><a class=\"button button-primary\" href=\"#connected-servers\">Connected Servers</a><a class=\"button button-secondary\" href=\"#install-required\">Needs Install</a></div></div><div class=\"hero-card\"><dl><div><dt>Manage Now</dt><dd>{manageable_now}</dd></div><div><dt>Needs Install</dt><dd>{needs_install}</dd></div><div><dt>Status Unavailable</dt><dd>{unavailable}</dd></div><div><dt>Total Eligible</dt><dd>{total}</dd></div></dl></div></section><section class=\"panel toolbar-panel\"><div class=\"toolbar\"><div><p class=\"eyebrow\">Guild Search</p><h2>Server Listing</h2></div><input class=\"toolbar-search\" id=\"guild-filter\" type=\"search\" aria-label=\"Search guilds\" aria-describedby=\"guild-filter-status guild-filter-empty\" placeholder=\"Search guilds\" oninput=\"filterGuildCards(this.value)\" /></div><p id=\"guild-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"guild-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No servers match this search.</p></section><section id=\"connected-servers\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Connected</p><h2>Manageable Servers</h2></div><span class=\"pill pill-success\">{manageable_now}</span></div><div class=\"module-grid\">{connected_markup}</div></section><section id=\"install-required\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Install Required</p><h2>Servers Missing The Bot</h2></div><span class=\"pill pill-warn\">{needs_install}</span></div><div class=\"module-grid\">{install_markup}</div></section><section id=\"status-unavailable\" class=\"section-block\"><div class=\"section-heading\"><div><p class=\"eyebrow\">Unavailable</p><h2>Server Status Could Not Be Checked</h2></div><span class=\"pill\">{unavailable}</span></div><div class=\"module-grid\">{unavailable_markup}</div></section>",
         manageable_now = manageable_now,
         needs_install = needs_install,
         unavailable = unavailable,
@@ -2085,8 +2085,9 @@ fn render_section_tabs(base_path: &str, active_tab: &str) -> String {
     .map(|(tab, label)| {
         let href = format!("{base_path}{}", page_query_for_tab(tab));
         format!(
-            "<a class=\"tab-button{}\" data-testid=\"page-tab-{tab}\" href=\"{href}\">{label}</a>",
+            "<a class=\"tab-button{}\" data-testid=\"page-tab-{tab}\" href=\"{href}\"{}>{label}</a>",
             if active_tab == tab { " active" } else { "" },
+            if active_tab == tab { " aria-current=\"page\"" } else { "" },
             label = escape_html(label),
         )
     })
@@ -2098,18 +2099,20 @@ fn render_section_tabs(base_path: &str, active_tab: &str) -> String {
 
 fn nav_link(label: &str, href: &str, active: bool) -> String {
     format!(
-        "<a class=\"nav-link{}\" href=\"{}\">{}</a>",
+        "<a class=\"nav-link{}\" href=\"{}\"{}>{}</a>",
         if active { " active" } else { "" },
         href,
+        if active { " aria-current=\"page\"" } else { "" },
         escape_html(label)
     )
 }
 
 fn nav_sub_link(label: &str, href: &str, active: bool) -> String {
     format!(
-        "<a class=\"nav-sub-link{}\" href=\"{}\">{}</a>",
+        "<a class=\"nav-sub-link{}\" href=\"{}\"{}>{}</a>",
         if active { " active" } else { "" },
         href,
+        if active { " aria-current=\"page\"" } else { "" },
         escape_html(label)
     )
 }
@@ -2172,6 +2175,9 @@ const DASHBOARD_BASE_STYLES: &str = r#"
   --text: #f8fafc;
   --muted: #7f8ba3;
   --accent: #dd2e53;
+  --accent-text: #ff9aae;
+  --accent-button: #bc173d;
+  --accent-button-hover: #d61f4b;
   --accent-strong: #ff4d6d;
   --accent-soft: rgba(221, 46, 83, 0.16);
   --success: #48e5b2;
@@ -2209,7 +2215,7 @@ body { position: relative; }
   background: linear-gradient(135deg, rgba(221, 46, 83, 0.22), rgba(61, 84, 143, 0.18));
   border: 1px solid rgba(255,255,255,0.06);
 }
-.eyebrow { margin: 0 0 6px; color: var(--accent); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-family: 'Fira Code', 'Fira Code Fallback', monospace; }
+.eyebrow { margin: 0 0 6px; color: var(--accent-text); font-size: 12px; letter-spacing: 0.16em; text-transform: uppercase; font-family: 'Fira Code', 'Fira Code Fallback', monospace; }
 h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', monospace; }
 .sidebar-nav { display: grid; gap: 8px; }
 .nav-link {
@@ -2221,7 +2227,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
 .nav-link:hover:not(.active) { color: var(--text); background: rgba(221, 46, 83, 0.06); border-color: rgba(221,46,83,0.10); }
 .nav-submenu { display: grid; gap: 2px; margin: 0 0 4px 12px; padding: 0 0 0 8px; }
 .nav-sub-link { color: var(--muted); text-decoration: none; padding: 7px 10px; border-radius: 8px; cursor: pointer; font-size: 0.90rem; }
-.nav-sub-link.active { color: var(--accent); font-weight: 600; }
+.nav-sub-link.active { color: var(--accent-text); font-weight: 600; }
 .nav-sub-link:hover:not(.active) { color: var(--text); background: rgba(221,46,83,0.04); }
 .sidebar-footer { margin-top: auto; padding-top: 12px; border-top: 1px solid rgba(255,255,255,0.06); }
 .sidebar-footnote { color: var(--muted); font-size: 12px; }
@@ -2241,8 +2247,8 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
   transition: transform 180ms ease, background-color 180ms ease, border-color 180ms ease, color 180ms ease;
 }
 .button:hover { transform: translateY(-1px); }
-.button-primary { background: var(--accent); color: #fff6fa; }
-.button-primary:hover { background: var(--accent-strong); }
+.button-primary { background: var(--accent-button); color: #fff6fa; }
+.button-primary:hover { background: var(--accent-button-hover); }
 .button-secondary { background: var(--panel-strong); color: var(--text); border-color: rgba(255,255,255,0.06); }
 .grid { display: grid; gap: 14px; }
 .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-bottom: 16px; }
@@ -2389,7 +2395,7 @@ fieldset { border: 1px solid rgba(255,255,255,0.06); border-radius: 14px; paddin
 .page-count { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.08em; }
 details summary { cursor: pointer; color: var(--text); font-weight: 600; }
 article { margin-top: 16px; }
-a { color: #ff6b87; }
+a { color: var(--accent-text); }
 .runtime-notice { border-color: rgba(249,115,22,0.22); background: rgba(124, 45, 18, 0.22); }
 .content-body > section[id], .content-body > section.section-block { scroll-margin-top: 24px; }
 @media (max-width: 1100px) {
@@ -2401,6 +2407,14 @@ a { color: #ff6b87; }
   .settings-grid { grid-template-columns: 1fr; }
 }
 @media (max-width: 820px) {
+  .sidebar { padding: 14px; gap: 14px; }
+  .sidebar-brand { gap: 10px; }
+  .sidebar-brand .app-avatar, .sidebar-brand .app-avatar-fallback { width: 40px; height: 40px; border-radius: 13px; }
+  .sidebar-brand h1 { font-size: 1.1rem; }
+  .sidebar-nav { gap: 4px; }
+  .nav-link { padding: 9px 10px; }
+  .sidebar-footer { padding-top: 0; border-top: 0; }
+  .sidebar-footnote { display: none; }
   .content-topbar, .hero, .hero.compact, .grid.two, .grid.three, .module-grid, .command-grid, .compact-module-grid, .compact-command-grid { grid-template-columns: 1fr; }
   .content-topbar { display: grid; align-items: stretch; }
   .content-topbar-right { justify-content: start; }
@@ -2440,37 +2454,61 @@ fn dashboard_ui_script() -> &'static str {
 function filterGuildCards(query) {
   const value = (query || '').trim().toLowerCase();
   const cards = document.querySelectorAll('[data-guild-name]');
+  let visibleCount = 0;
   for (const card of cards) {
     const guildName = card.getAttribute('data-guild-name') || '';
-    card.style.display = guildName.includes(value) ? '' : 'none';
+    const visible = guildName.includes(value);
+    card.style.display = visible ? '' : 'none';
+    if (visible) visibleCount += 1;
   }
+  updateFilterFeedback('guild-filter-status', 'guild-filter-empty', visibleCount, 'server');
 }
 
 function filterModuleCards(query) {
   const value = (query || '').trim().toLowerCase();
   const cards = document.querySelectorAll('[data-module-name]');
+  let visibleCount = 0;
   for (const card of cards) {
     const moduleName = card.getAttribute('data-module-name') || '';
-    card.style.display = moduleName.includes(value) ? '' : 'none';
+    const visible = moduleName.includes(value);
+    card.style.display = visible ? '' : 'none';
+    if (visible) visibleCount += 1;
   }
+  updateFilterFeedback('module-filter-status', 'module-filter-empty', visibleCount, 'module');
 }
 
 function filterCommandCards(query) {
   const value = (query || '').trim().toLowerCase();
   const cards = document.querySelectorAll('[data-command-name]');
+  let visibleCount = 0;
   for (const card of cards) {
     const commandName = card.getAttribute('data-command-name') || '';
     const category = window.__activeCommandCategory || 'all';
     const categoryMatch = category === 'all' || card.getAttribute('data-command-category') === category;
-    card.style.display = commandName.includes(value) && categoryMatch ? '' : 'none';
+    const visible = commandName.includes(value) && categoryMatch;
+    card.style.display = visible ? '' : 'none';
+    if (visible) visibleCount += 1;
   }
+  updateFilterFeedback('command-filter-status', 'command-filter-empty', visibleCount, 'command');
+}
+
+function updateFilterFeedback(statusId, emptyId, visibleCount, itemLabel) {
+  const status = document.getElementById(statusId);
+  const empty = document.getElementById(emptyId);
+  const noun = `${itemLabel}${visibleCount === 1 ? '' : 's'}`;
+  if (status) status.textContent = `Showing ${visibleCount} ${noun}.`;
+  if (empty) empty.hidden = visibleCount !== 0;
 }
 
 function setCommandCategory(category, button) {
   window.__activeCommandCategory = category;
-  document.querySelectorAll('.command-category-row .command-tab, .command-category-row .tab-button').forEach((item) => item.classList.remove('active'));
+  document.querySelectorAll('.command-category-row .command-tab, .command-category-row .tab-button').forEach((item) => {
+    item.classList.remove('active');
+    item.setAttribute('aria-pressed', 'false');
+  });
   if (button) {
     button.classList.add('active');
+    button.setAttribute('aria-pressed', 'true');
   }
   const currentSearch = document.getElementById('command-filter');
   filterCommandCards(currentSearch ? currentSearch.value : '');
@@ -2828,7 +2866,7 @@ fn render_command_toggle(
 fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
     let mut seen = HashSet::new();
     let mut tabs = vec![
-        "<button class=\"tab-button active\" data-testid=\"command-tab-all\" type=\"button\" onclick=\"setCommandCategory('all', this)\">All</button>".to_string(),
+        "<button class=\"tab-button active\" data-testid=\"command-tab-all\" type=\"button\" aria-pressed=\"true\" onclick=\"setCommandCategory('all', this)\">All</button>".to_string(),
     ];
 
     for entry in &catalog.entries {
@@ -2836,7 +2874,7 @@ fn render_command_category_tabs(catalog: &CommandCatalog) -> String {
         let label = command_category_label(entry);
         if seen.insert(key.clone()) {
             tabs.push(format!(
-                "<button class=\"tab-button command-tab\" data-testid=\"command-tab-{key}\" type=\"button\" onclick=\"setCommandCategory('{key}', this)\">{label}</button>",
+                "<button class=\"tab-button command-tab\" data-testid=\"command-tab-{key}\" type=\"button\" aria-pressed=\"false\" onclick=\"setCommandCategory('{key}', this)\">{label}</button>",
                 key = escape_html(&key),
                 label = escape_html(&label),
             ));
@@ -5240,6 +5278,22 @@ mod tests {
         let state_summary = "<p class=\"detail-meta state-summary\">Effective: Disabled. Blocked by: parent module.</p>";
         assert!(state_summary.contains("state-summary"));
         assert!(!state_summary.contains("-webkit-line-clamp"));
+    }
+
+    #[test]
+    fn filters_and_navigation_expose_current_semantic_state() {
+        let script = dashboard_ui_script();
+        assert!(script.contains("updateFilterFeedback('command-filter-status'"));
+        assert!(script.contains("item.setAttribute('aria-pressed', 'false')"));
+        assert!(script.contains("button.setAttribute('aria-pressed', 'true')"));
+
+        let tabs = render_section_tabs("/guild/42", "modules");
+        assert!(tabs.contains("data-testid=\"page-tab-modules\" href=\"/guild/42?tab=modules\" aria-current=\"page\""));
+
+        let css = dashboard_styles();
+        assert!(css.contains("--accent-text: #ff9aae;"));
+        assert!(css.contains("--accent-button: #bc173d;"));
+        assert!(css.contains(".sidebar-footnote { display: none; }"));
     }
 
     #[test]
