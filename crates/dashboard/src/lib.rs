@@ -1440,9 +1440,21 @@ async fn fetch_application_info(
 
 async fn load_session(state: &DashboardState, jar: &CookieJar) -> Option<DashboardSession> {
     let session_id = jar.get(SESSION_COOKIE_NAME)?.value().to_string();
+    let session = state.sessions.read().await.get(&session_id).cloned()?;
+    if !is_session_expired(&session) {
+        return Some(session);
+    }
+
+    // Only remove the expired entry observed by this request. Re-check its identity
+    // after acquiring the exclusive lock so an OAuth replacement is never removed.
     let mut sessions = state.sessions.write().await;
-    sessions.retain(|_, value| !is_session_expired(value));
-    sessions.get(&session_id).cloned()
+    if sessions
+        .get(&session_id)
+        .is_some_and(|current| current.access_token == session.access_token && is_session_expired(current))
+    {
+        sessions.remove(&session_id);
+    }
+    None
 }
 
 fn session_cookie_value(jar: &CookieJar) -> Option<String> {
