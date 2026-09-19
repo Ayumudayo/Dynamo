@@ -725,8 +725,10 @@ fn build_command_sync_panel(
         SyncScopeKind::Guild(_) => Some("Sync Commands".to_string()),
     };
     let button_action = match scope {
-        SyncScopeKind::Global => Some("requestDeploymentCommandSync()".to_string()),
-        SyncScopeKind::Guild(guild_id) => Some(format!("requestGuildCommandSync({guild_id})")),
+        SyncScopeKind::Global => Some("requestDeploymentCommandSync(this)".to_string()),
+        SyncScopeKind::Guild(guild_id) => {
+            Some(format!("requestGuildCommandSync({guild_id}, this)"))
+        }
     };
 
     if scope_state.has_pending_request() {
@@ -2283,6 +2285,7 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
 }
 .summary-card h3, .detail-panel h2, .command-detail-card h3 { font-size: 0.95rem; line-height: 1.15; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
 .summary-card p, .detail-panel p, .command-detail-card p { font-size: 0.88rem; margin: 8px 0 0; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.summary-card .state-summary { display: block; -webkit-line-clamp: unset; overflow: visible; overflow-wrap: anywhere; }
 .summary-card-subtitle { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin-top: 8px; }
 .detail-panel p, .summary-card p, .info-panel p { color: var(--muted); }
 .detail-meta { margin: 8px 0 0; }
@@ -4439,8 +4442,12 @@ fn error_payload(message: String) -> serde_json::Value {
     })
 }
 
-fn dashboard_script() -> &'static str {
-    r#"
+const DASHBOARD_MUTATION_TRANSPORT: &str = include_str!("../assets/dashboard-mutations.js");
+
+fn dashboard_script() -> String {
+    format!(
+        "{DASHBOARD_MUTATION_TRANSPORT}\n{}",
+        r#"
 function setInlineStatus(id, message, kind = 'info') {
   const target = document.getElementById(id);
   if (!target) return;
@@ -4449,6 +4456,104 @@ function setInlineStatus(id, message, kind = 'info') {
   target.setAttribute('aria-live', kind === 'error' ? 'assertive' : 'polite');
   target.setAttribute('aria-atomic', 'true');
   target.textContent = message || '';
+}
+
+function setUnknownStatus(id, message) {
+  setInlineStatus(id, message, 'error');
+  const target = document.getElementById(id);
+  if (!target) return;
+  const reload = document.createElement('button');
+  reload.type = 'button';
+  reload.className = 'button button-secondary button-compact';
+  reload.textContent = 'Reload';
+  reload.addEventListener('click', () => window.location.reload());
+  target.append(' ', reload);
+}
+
+function snapshotForm(form) {
+  return Array.from(form.elements).map((element) => ({
+    element,
+    disabled: element.disabled,
+    checked: element.type === 'checkbox' ? element.checked : undefined,
+    value: element.type === 'checkbox' ? undefined : element.value,
+  }));
+}
+
+function restoreForm(snapshot) {
+  for (const item of snapshot) {
+    if (item.checked !== undefined) item.element.checked = item.checked;
+    if (item.value !== undefined) item.element.value = item.value;
+  }
+}
+
+async function runFormMutation(form, request, statusId, reconcile) {
+  if (form.dataset.dynamoMutationPending === 'true') return { kind: 'pending' };
+  form.dataset.dynamoMutationPending = 'true';
+  const snapshot = snapshotForm(form);
+  for (const item of snapshot) item.element.disabled = true;
+  try {
+    const outcome = await request();
+    if (outcome.kind === 'success') return outcome;
+    if (outcome.kind === 'definite-failure') {
+      setInlineStatus(statusId, `Error: ${outcome.message}`, 'error');
+      return outcome;
+    }
+    setUnknownStatus(statusId, outcome.message);
+    const refreshed = await reconcile();
+    if (refreshed.kind === 'success') {
+      setInlineStatus(statusId, 'Current values were reloaded after an uncertain save.', 'info');
+    } else {
+      restoreForm(snapshot);
+      setUnknownStatus(statusId, 'The save outcome is unknown and current values could not be reloaded.');
+    }
+    return outcome;
+  } finally {
+    for (const item of snapshot) item.element.disabled = item.disabled;
+    delete form.dataset.dynamoMutationPending;
+  }
+}
+
+async function reconcileSettings(url, apply) {
+  const outcome = await DynamoMutationTransport.request(fetch, url, { method: 'GET' });
+  if (outcome.kind === 'success') apply(outcome.body);
+  return outcome;
+}
+
+function setToggleConfirmed(input, value) {
+  if (!input) return;
+  input.checked = value;
+  input.defaultChecked = value;
+  input.dataset.dynamoConfirmed = String(value);
+}
+
+function toggleConfirmedValue(input) {
+  if (!input) return false;
+  if (input.dataset.dynamoConfirmed === undefined) input.dataset.dynamoConfirmed = String(input.defaultChecked);
+  return input.dataset.dynamoConfirmed === 'true';
+}
+
+async function runToggleMutation(input, request, statusId) {
+  if (!input || input.dataset.dynamoMutationPending === 'true') return false;
+  const confirmed = toggleConfirmedValue(input);
+  input.dataset.dynamoMutationPending = 'true';
+  input.disabled = true;
+  try {
+    const outcome = await request();
+    if (outcome.kind === 'success') {
+      setToggleConfirmed(input, input.checked);
+      setInlineStatus(statusId, 'Saved', 'success');
+    } else if (outcome.kind === 'definite-failure') {
+      setToggleConfirmed(input, confirmed);
+      setInlineStatus(statusId, `Error: ${outcome.message}`, 'error');
+    } else {
+      setToggleConfirmed(input, confirmed);
+      setUnknownStatus(statusId, outcome.message);
+    }
+  } finally {
+    input.disabled = false;
+    delete input.dataset.dynamoMutationPending;
+  }
+  return false;
 }
 
 const MODAL_FOCUSABLE_SELECTOR = 'button:not([disabled]), [href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
@@ -4564,17 +4669,9 @@ document.addEventListener('keydown', (event) => {
 });
 
 async function toggleDeploymentModule(moduleId, enabled, input) {
-  const response = await fetch(`/api/deployment-settings/${moduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!response.ok) {
-    if (input) input.checked = !enabled;
-    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Update failed', 'error');
-  } else {
-    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Saved', 'success');
-  }
+  return runToggleMutation(input, () => DynamoMutationTransport.request(fetch, `/api/deployment-settings/${moduleId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  }), `card-status-module-${statusKey(moduleId)}`);
 }
 
 async function patchDeploymentModule(event, moduleId) {
@@ -4584,31 +4681,23 @@ async function patchDeploymentModule(event, moduleId) {
     installed: form.installed.checked,
     enabled: form.enabled.checked,
   };
-  const response = await fetch(`/api/deployment-settings/${moduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const output = await response.json();
-  setInlineStatus(`deployment-status-${moduleId}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
-  if (response.ok) {
+  const outcome = await runFormMutation(form, () => DynamoMutationTransport.request(fetch, `/api/deployment-settings/${moduleId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }), `deployment-status-${moduleId}`, () => reconcileSettings('/api/deployment-settings', (settings) => {
+    const current = settings.modules?.[moduleId];
+    if (current) { form.installed.checked = !!current.installed; form.enabled.checked = !!current.enabled; }
+  }));
+  if (outcome.kind === 'success') {
+    setInlineStatus(`deployment-status-${moduleId}`, 'Saved', 'success');
     closeSettingsModal(`modal-deployment-module-${statusKey(moduleId)}`);
   }
   return false;
 }
 
 async function toggleDeploymentCommand(commandId, enabled, input) {
-  const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!response.ok) {
-    if (input) input.checked = !enabled;
-    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Update failed', 'error');
-  } else {
-    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Saved', 'success');
-  }
+  return runToggleMutation(input, () => DynamoMutationTransport.request(fetch, `/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  }), `card-status-command-${statusKey(commandId)}`);
 }
 
 async function patchDeploymentCommand(event, commandId) {
@@ -4622,18 +4711,18 @@ async function patchDeploymentCommand(event, commandId) {
     return false;
   }
 
-  const response = await fetch(`/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const outcome = await runFormMutation(form, () => DynamoMutationTransport.request(fetch, `/api/deployment-command-settings/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       installed: form.installed.checked,
       enabled: form.enabled.checked,
       configuration,
     }),
-  });
-  const output = await response.json();
-  setInlineStatus(`deployment-command-status-${statusKey(commandId)}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
-  if (response.ok) {
+  }), `deployment-command-status-${statusKey(commandId)}`, () => reconcileSettings('/api/deployment-settings', (settings) => {
+    const current = settings.commands?.[commandId];
+    if (current) { form.installed.checked = !!current.installed; form.enabled.checked = !!current.enabled; }
+  }));
+  if (outcome.kind === 'success') {
+    setInlineStatus(`deployment-command-status-${statusKey(commandId)}`, 'Saved', 'success');
     closeSettingsModal(`modal-deployment-command-${statusKey(commandId)}`);
   }
   return false;
@@ -4707,31 +4796,23 @@ async function patchGuildModule(event, guildId, moduleId) {
     enabled: form.enabled.checked,
     configuration,
   };
-  const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const output = await response.json();
-  setInlineStatus(`guild-status-${moduleId}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
-  if (response.ok) {
+  const outcome = await runFormMutation(form, () => DynamoMutationTransport.request(fetch, `/api/guild-settings/${guildId}/${moduleId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
+  }), `guild-status-${moduleId}`, () => reconcileSettings(`/api/guild-settings/${guildId}`, (settings) => {
+    const current = settings.modules?.[moduleId];
+    if (current) form.enabled.checked = !!current.enabled;
+  }));
+  if (outcome.kind === 'success') {
+    setInlineStatus(`guild-status-${moduleId}`, 'Saved', 'success');
     closeSettingsModal(`modal-guild-module-${statusKey(moduleId)}`);
   }
   return false;
 }
 
 async function toggleGuildModule(guildId, moduleId, enabled, input) {
-  const response = await fetch(`/api/guild-settings/${guildId}/${moduleId}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!response.ok) {
-    if (input) input.checked = !enabled;
-    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Update failed', 'error');
-  } else {
-    setInlineStatus(`card-status-module-${statusKey(moduleId)}`, 'Saved', 'success');
-  }
+  return runToggleMutation(input, () => DynamoMutationTransport.request(fetch, `/api/guild-settings/${guildId}/${moduleId}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  }), `card-status-module-${statusKey(moduleId)}`);
 }
 
 async function patchGuildCommand(event, guildId, commandId) {
@@ -4745,61 +4826,54 @@ async function patchGuildCommand(event, guildId, commandId) {
     return false;
   }
 
-  const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
+  const outcome = await runFormMutation(form, () => DynamoMutationTransport.request(fetch, `/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
       enabled: form.enabled.checked,
       configuration,
     }),
-  });
-  const output = await response.json();
-  setInlineStatus(`guild-command-status-${statusKey(commandId)}`, response.ok ? 'Saved' : `Error: ${output.message ?? response.status}`, response.ok ? 'success' : 'error');
-  if (response.ok) {
+  }), `guild-command-status-${statusKey(commandId)}`, () => reconcileSettings(`/api/guild-settings/${guildId}`, (settings) => {
+    const current = settings.commands?.[commandId];
+    if (current) form.enabled.checked = !!current.enabled;
+  }));
+  if (outcome.kind === 'success') {
+    setInlineStatus(`guild-command-status-${statusKey(commandId)}`, 'Saved', 'success');
     closeSettingsModal(`modal-guild-command-${statusKey(commandId)}`);
   }
   return false;
 }
 
 async function toggleGuildCommand(guildId, commandId, enabled, input) {
-  const response = await fetch(`/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ enabled }),
-  });
-  if (!response.ok) {
-    if (input) input.checked = !enabled;
-    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Update failed', 'error');
-  } else {
-    setInlineStatus(`card-status-command-${statusKey(commandId)}`, 'Saved', 'success');
-  }
+  return runToggleMutation(input, () => DynamoMutationTransport.request(fetch, `/api/guild-command-settings/${guildId}/${encodeURIComponent(commandId)}`, {
+    method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ enabled }),
+  }), `card-status-command-${statusKey(commandId)}`);
 }
 
-async function requestDeploymentCommandSync() {
-  const response = await fetch('/api/deployment-command-sync', { method: 'POST' });
-  const output = await response.json();
-  if (!response.ok) {
-    setInlineStatus('command-sync-inline-status', `Error: ${output.message ?? response.status}`, 'error');
-    return false;
-  }
-  setInlineStatus('command-sync-inline-status', 'Sync requested', 'success');
-  window.location.reload();
+async function requestDeploymentCommandSync(button) {
+  if (button?.disabled) return false;
+  if (button) button.disabled = true;
+  try {
+    const outcome = await DynamoMutationTransport.request(fetch, '/api/deployment-command-sync', { method: 'POST' });
+    if (outcome.kind === 'success') { setInlineStatus('command-sync-inline-status', 'Sync requested', 'success'); window.location.reload(); }
+    else if (outcome.kind === 'definite-failure') setInlineStatus('command-sync-inline-status', `Error: ${outcome.message}`, 'error');
+    else { setUnknownStatus('command-sync-inline-status', outcome.message); window.location.reload(); }
+  } finally { if (button) button.disabled = false; }
   return false;
 }
 
-async function requestGuildCommandSync(guildId) {
-  const response = await fetch(`/api/guild-command-sync/${guildId}`, { method: 'POST' });
-  const output = await response.json();
-  if (!response.ok) {
-    setInlineStatus('command-sync-inline-status', `Error: ${output.message ?? response.status}`, 'error');
-    return false;
-  }
-  setInlineStatus('command-sync-inline-status', 'Sync requested', 'success');
-  window.location.reload();
+async function requestGuildCommandSync(guildId, button) {
+  if (button?.disabled) return false;
+  if (button) button.disabled = true;
+  try {
+    const outcome = await DynamoMutationTransport.request(fetch, `/api/guild-command-sync/${guildId}`, { method: 'POST' });
+    if (outcome.kind === 'success') { setInlineStatus('command-sync-inline-status', 'Sync requested', 'success'); window.location.reload(); }
+    else if (outcome.kind === 'definite-failure') setInlineStatus('command-sync-inline-status', `Error: ${outcome.message}`, 'error');
+    else { setUnknownStatus('command-sync-inline-status', outcome.message); window.location.reload(); }
+  } finally { if (button) button.disabled = false; }
   return false;
 }
 
 "#
+    )
 }
 
 #[cfg(test)]
@@ -5152,6 +5226,18 @@ mod tests {
             .find("target.textContent")
             .expect("status content update");
         assert!(live_semantics < content_update);
+    }
+
+    #[test]
+    fn effective_state_summary_is_not_line_clamped() {
+        let css = dashboard_styles();
+        assert!(css.contains(
+            ".summary-card .state-summary { display: block; -webkit-line-clamp: unset; overflow: visible; overflow-wrap: anywhere; }"
+        ));
+
+        let state_summary = "<p class=\"detail-meta state-summary\">Effective: Disabled. Blocked by: parent module.</p>";
+        assert!(state_summary.contains("state-summary"));
+        assert!(!state_summary.contains("-webkit-line-clamp"));
     }
 
     #[test]
