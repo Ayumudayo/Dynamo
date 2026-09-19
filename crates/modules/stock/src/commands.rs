@@ -35,7 +35,14 @@ pub(crate) async fn stock(
     let refresh_schedule = settings.refresh_schedule();
     let symbol = normalize_symbol(symbol.unwrap_or(settings.default_symbol));
     let total_updates = refresh_schedule.total_updates();
-    let response = build_stock_response(service.as_ref(), &symbol, 0, total_updates).await?;
+    let response = match build_stock_response(service.as_ref(), &symbol, 0, total_updates).await {
+        Ok(response) => response,
+        Err(error) if is_toss_maintenance_error(&error) => {
+            ctx.say("Toss Invest is under maintenance. Please try again later.").await?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     let Some(response) = response else {
         ctx.say("Failed to fetch stock data. Please try again later.")
             .await?;
@@ -105,7 +112,14 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
     }
 
     let total_updates = refresh_schedule.total_updates();
-    let response = build_etf_response(service.as_ref(), &tickers, 0, total_updates).await?;
+    let response = match build_etf_response(service.as_ref(), &tickers, 0, total_updates).await {
+        Ok(response) => response,
+        Err(error) if is_toss_maintenance_error(&error) => {
+            ctx.say("Toss Invest is under maintenance. Please try again later.").await?;
+            return Ok(());
+        }
+        Err(error) => return Err(error),
+    };
     let Some(response) = response else {
         ctx.say("Failed to fetch ETF data. Please try again later.")
             .await?;
@@ -142,4 +156,8 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
     )
     .await;
     Ok(())
+}
+
+fn is_toss_maintenance_error(error: &Error) -> bool {
+    error.to_string().contains("code: maintenance")
 }
