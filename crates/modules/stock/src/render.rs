@@ -188,6 +188,17 @@ pub(crate) fn build_etf_embed(
             false,
         );
 
+    // A provider-wide outage is not ticker-specific. Showing the same upstream
+    // failure for every configured ticker hides the useful fact that the whole
+    // request should simply be retried later.
+    if let Some(message) = shared_provider_failure(snapshots) {
+        return embed.field(
+            "Data temporarily unavailable",
+            provider_failure_message(message),
+            false,
+        );
+    }
+
     for (index, snapshot) in snapshots.iter().enumerate() {
         match snapshot {
             Ok(snapshot) => {
@@ -215,6 +226,23 @@ pub(crate) fn build_etf_embed(
     }
 
     embed
+}
+
+pub(crate) fn shared_provider_failure(snapshots: &[Result<StockQuote, String>]) -> Option<&str> {
+    let errors = snapshots
+        .iter()
+        .map(|snapshot| snapshot.as_ref().err().map(String::as_str))
+        .collect::<Option<Vec<_>>>()?;
+    let first = *errors.first()?;
+    errors.iter().all(|error| *error == first).then_some(first)
+}
+
+pub(crate) fn provider_failure_message(error: &str) -> &str {
+    if error.contains("code: maintenance") {
+        "Toss Invest is under maintenance. Please try again later."
+    } else {
+        "The market-data provider is temporarily unavailable. Please try again later."
+    }
 }
 
 pub(crate) fn primary_stock_market_data(snapshot: &StockQuote) -> CurrentMarketData {
