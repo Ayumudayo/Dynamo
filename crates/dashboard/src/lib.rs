@@ -2296,6 +2296,8 @@ h1, h2, h3, legend { margin: 0; font-family: 'Fira Code', 'Fira Code Fallback', 
 .guild-card-meta { display: flex; align-items: center; gap: 10px; margin: 14px 0 16px; color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
 .guild-card-meta code { color: var(--text); background: rgba(255,255,255,0.04); padding: 4px 8px; border-radius: 8px; }
 .empty-state { min-height: 220px; display: flex; flex-direction: column; justify-content: center; }
+.filter-feedback { margin: 0 0 12px; color: var(--muted); font-size: 0.88rem; }
+.filter-empty { margin: 0 0 12px; color: var(--muted); }
 .card-action { margin-top: 10px; }
 .tab-row { display: flex; flex-wrap: wrap; gap: 8px; margin: 0 0 12px; }
 .page-tab-row { margin-bottom: 14px; }
