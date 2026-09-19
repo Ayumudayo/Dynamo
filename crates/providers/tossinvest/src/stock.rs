@@ -17,10 +17,7 @@ use tracing::warn;
 use crate::{
     TossInvestClient, TossInvestMarketCalendarService, TossInvestResponse, TossMarketSessionPhase,
     TossRateLimitGroup,
-    models::{
-        ApiEnvelope, CandlePageResponse, TossCandleRaw, TossErrorEnvelope, TossPriceRaw,
-        TossStockRaw,
-    },
+    models::{ApiEnvelope, CandlePageResponse, TossCandleRaw, TossPriceRaw, TossStockRaw},
 };
 
 const PRICE_GROUP: TossRateLimitGroup = TossRateLimitGroup::MarketData;
@@ -671,20 +668,7 @@ fn build_candles(response: TossInvestResponse) -> Result<Vec<TossCandleRaw>, Err
 }
 
 fn build_stock_request_error(endpoint: &str, response: &TossInvestResponse) -> Error {
-    if let Ok(error) = response.json::<TossErrorEnvelope>() {
-        return anyhow!(
-            "Toss Invest {endpoint} request failed with status {} (request_id: {}, code: {}, message: {})",
-            response.status(),
-            error.error.request_id.as_deref().unwrap_or("unknown"),
-            error.error.code,
-            error.error.message,
-        );
-    }
-
-    anyhow!(
-        "Toss Invest {endpoint} request failed with status {}",
-        response.status()
-    )
+    response.request_error(endpoint).into()
 }
 
 fn build_stock_quote(
