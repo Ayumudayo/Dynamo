@@ -20,6 +20,8 @@ const DEFAULT_EXCHANGE_AMOUNT: f64 = 1.0;
 const TOSS_EXCHANGE_PROVIDER_FOOTER: &str = "Toss Invest";
 const TOSS_EXCHANGE_SUPPORT_ERROR: &str =
     "Only KRW and USD are supported by the current Toss Invest exchange-rate provider.";
+const TOSS_MAINTENANCE_MESSAGE: &str =
+    "Toss Invest is under maintenance. Please try again later.";
 
 pub struct CurrencyModule;
 
@@ -183,7 +185,9 @@ async fn exchange(
     let quote = match service.fetch_pair(&from, &to).await {
         Ok(quote) => quote,
         Err(error) => {
-            let message = if error.to_string().contains("KRW") && error.to_string().contains("USD")
+            let message = if is_toss_maintenance_error(&error) {
+                TOSS_MAINTENANCE_MESSAGE
+            } else if error.to_string().contains("KRW") && error.to_string().contains("USD")
             {
                 TOSS_EXCHANGE_SUPPORT_ERROR
             } else {
@@ -245,14 +249,21 @@ async fn rate(
         let target = target.clone();
         let service = service.clone();
         async move {
-            let value = service.fetch_pair(&from, &target).await.ok();
-            (target, value)
+            let result = service.fetch_pair(&from, &target).await;
+            (target, result)
         }
     });
 
     let responses = join_all(requests).await;
-    if responses.iter().all(|(_, quote)| quote.is_none()) {
-        ctx.say("Failed to fetch the latest Toss Invest exchange rates.")
+    if responses.iter().all(|(_, quote)| quote.is_err()) {
+        let message = if responses.iter().all(|(_, quote)| {
+            quote.as_ref().err().is_some_and(is_toss_maintenance_error)
+        }) {
+            TOSS_MAINTENANCE_MESSAGE
+        } else {
+            "Failed to fetch the latest Toss Invest exchange rates."
+        };
+        ctx.say(message)
             .await?;
         return Ok(());
     }
@@ -272,13 +283,17 @@ async fn rate(
         embed = embed.field(
             name,
             rate.map(|quote| format_rate_board_value(&quote, amount))
-                .unwrap_or_else(|| "Failed to fetch".to_string()),
+                .unwrap_or_else(|_| "Failed to fetch".to_string()),
             true,
         );
     }
 
     ctx.send(poise::CreateReply::default().embed(embed)).await?;
     Ok(())
+}
+
+fn is_toss_maintenance_error(error: &Error) -> bool {
+    error.to_string().contains("code: maintenance")
 }
 
 async fn load_exchange_defaults(ctx: Context<'_>) -> Result<ResolvedExchangeDefaults, Error> {
