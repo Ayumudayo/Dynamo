@@ -5427,7 +5427,9 @@ mod tests {
         assert!(css.contains(".nav-link:hover:not(.active)"));
         assert!(!css.contains(".nav-link:hover, .nav-link.active"));
         assert!(css.contains(".nav-submenu { display: grid; gap: 2px;"));
-        assert!(css.contains(".nav-sub-link.active { color: var(--accent-text); font-weight: 600; }"));
+        assert!(
+            css.contains(".nav-sub-link.active { color: var(--accent-text); font-weight: 600; }")
+        );
         assert!(!css.contains(".nav-submenu { border-left"));
 
         let script = dashboard_script();
@@ -5491,7 +5493,9 @@ mod tests {
 
         let selector = render_nav(&state, Some(&session), Some("/selector"), None);
         assert_eq!(selector.matches("nav-link active").count(), 1);
-        assert!(selector.contains("class=\"nav-link active\" href=\"/selector\" aria-current=\"page\">Server Listing"));
+        assert!(selector.contains(
+            "class=\"nav-link active\" href=\"/selector\" aria-current=\"page\">Server Listing"
+        ));
         assert!(selector.contains("class=\"nav-link\" href=\"/\">Dashboard"));
 
         let modules = render_nav(&state, Some(&session), Some("/guild/42"), Some("modules"));
@@ -5500,7 +5504,9 @@ mod tests {
             modules
                 .contains("class=\"nav-sub-link active\" href=\"/guild/42?tab=modules\" aria-current=\"page\">Modules")
         );
-        assert!(modules.contains("class=\"nav-link active\" href=\"/selector\" aria-current=\"page\">Server Listing"));
+        assert!(modules.contains(
+            "class=\"nav-link active\" href=\"/selector\" aria-current=\"page\">Server Listing"
+        ));
 
         let deployment = render_nav(
             &state,
@@ -5509,7 +5515,9 @@ mod tests {
             Some("commands"),
         );
         assert_eq!(deployment.matches("nav-link active").count(), 1);
-        assert!(deployment.contains("class=\"nav-link active\" href=\"/deployment\" aria-current=\"page\">Deployment"));
+        assert!(deployment.contains(
+            "class=\"nav-link active\" href=\"/deployment\" aria-current=\"page\">Deployment"
+        ));
         assert!(
             deployment.contains(
                 "class=\"nav-sub-link active\" href=\"/deployment?tab=commands\" aria-current=\"page\">Commands"

@@ -20,8 +20,7 @@ const DEFAULT_EXCHANGE_AMOUNT: f64 = 1.0;
 const TOSS_EXCHANGE_PROVIDER_FOOTER: &str = "Toss Invest";
 const TOSS_EXCHANGE_SUPPORT_ERROR: &str =
     "Only KRW and USD are supported by the current Toss Invest exchange-rate provider.";
-const TOSS_MAINTENANCE_MESSAGE: &str =
-    "Toss Invest is under maintenance. Please try again later.";
+const TOSS_MAINTENANCE_MESSAGE: &str = "Toss Invest is under maintenance. Please try again later.";
 
 pub struct CurrencyModule;
 
@@ -187,8 +186,7 @@ async fn exchange(
         Err(error) => {
             let message = if is_toss_maintenance_error(&error) {
                 TOSS_MAINTENANCE_MESSAGE
-            } else if error.to_string().contains("KRW") && error.to_string().contains("USD")
-            {
+            } else if error.to_string().contains("KRW") && error.to_string().contains("USD") {
                 TOSS_EXCHANGE_SUPPORT_ERROR
             } else {
                 "Failed to fetch the latest Toss Invest exchange rate."
@@ -256,15 +254,15 @@ async fn rate(
 
     let responses = join_all(requests).await;
     if responses.iter().all(|(_, quote)| quote.is_err()) {
-        let message = if responses.iter().all(|(_, quote)| {
-            quote.as_ref().err().is_some_and(is_toss_maintenance_error)
-        }) {
+        let message = if responses
+            .iter()
+            .all(|(_, quote)| quote.as_ref().err().is_some_and(is_toss_maintenance_error))
+        {
             TOSS_MAINTENANCE_MESSAGE
         } else {
             "Failed to fetch the latest Toss Invest exchange rates."
         };
-        ctx.say(message)
-            .await?;
+        ctx.say(message).await?;
         return Ok(());
     }
     let mut embed = CreateEmbed::new()

@@ -2,8 +2,9 @@ use crate::{
     constants::{DOWN_EMOJI, STOCK_REFRESH_BUTTON_ID, UP_EMOJI},
     render::{
         build_etf_embed, build_stock_embed, current_market_data, format_money,
-        primary_stock_market_data, refresh_components, refresh_footer_text, representative_phase,
-        provider_failure_message, shared_provider_failure, stock_embed_color_change, stop_reason_for_phase,
+        primary_stock_market_data, provider_failure_message, refresh_components,
+        refresh_footer_text, representative_phase, shared_provider_failure,
+        stock_embed_color_change, stop_reason_for_phase,
     },
     settings::{
         RefreshSchedule, StockSettings, normalize_symbol, normalize_symbols, parse_stock_settings,
@@ -49,7 +50,9 @@ fn groups_a_repeated_provider_maintenance_error_once() {
 
     assert_eq!(
         shared_provider_failure(&snapshots),
-        Some("Toss Invest exchange-rate request failed with status 500 Internal Server Error (code: maintenance, message: 점검 중입니다. 잠시 후 다시 시도해 주세요.)")
+        Some(
+            "Toss Invest exchange-rate request failed with status 500 Internal Server Error (code: maintenance, message: 점검 중입니다. 잠시 후 다시 시도해 주세요.)"
+        )
     );
     assert_eq!(
         provider_failure_message(snapshots[0].as_ref().expect_err("fixture error")),

@@ -38,7 +38,8 @@ pub(crate) async fn stock(
     let response = match build_stock_response(service.as_ref(), &symbol, 0, total_updates).await {
         Ok(response) => response,
         Err(error) if is_toss_maintenance_error(&error) => {
-            ctx.say("Toss Invest is under maintenance. Please try again later.").await?;
+            ctx.say("Toss Invest is under maintenance. Please try again later.")
+                .await?;
             return Ok(());
         }
         Err(error) => return Err(error),
@@ -115,7 +116,8 @@ pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
     let response = match build_etf_response(service.as_ref(), &tickers, 0, total_updates).await {
         Ok(response) => response,
         Err(error) if is_toss_maintenance_error(&error) => {
-            ctx.say("Toss Invest is under maintenance. Please try again later.").await?;
+            ctx.say("Toss Invest is under maintenance. Please try again later.")
+                .await?;
             return Ok(());
         }
         Err(error) => return Err(error),
