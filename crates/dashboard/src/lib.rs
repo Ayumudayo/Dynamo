@@ -1155,7 +1155,7 @@ async fn deployment_page(
         }
     };
     let script = include_mutation_script
-        .then(dashboard_script)
+        .then(|| format!("<script>{}</script>", dashboard_script()))
         .unwrap_or_default();
     let content = format!(
         "{}{modals}{script}",
@@ -1455,7 +1455,7 @@ async fn guild_page(
         }
     };
     let script = include_mutation_script
-        .then(dashboard_script)
+        .then(|| format!("<script>{}</script>", dashboard_script()))
         .unwrap_or_default();
     let content = format!(
         "{}{modals}{script}",
