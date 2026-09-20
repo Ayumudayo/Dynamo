@@ -939,8 +939,26 @@ async fn logout(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Res
 }
 
 async fn selector(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
-    let Some(session) = load_session(&state, &jar).await else {
+    let Some(existing_session) = load_session(&state, &jar).await else {
         return Redirect::to("/login?redirect=%2Fselector").into_response();
+    };
+    let session = match refresh_read_session(&state, &jar).await {
+        Ok(session) => session,
+        Err(ReadGuildAuthorizationError::LoginRequired) => {
+            return Redirect::to("/login?redirect=%2Fselector").into_response();
+        }
+        Err(ReadGuildAuthorizationError::Unavailable) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_error_page(
+                    &state,
+                    Some(&existing_session),
+                    "Guild Access Unavailable",
+                    "Discord could not verify your current server access. Please try again.",
+                )),
+            )
+                .into_response();
+        }
     };
 
     let guild_cards = load_guild_cards(&state, &session).await;
@@ -956,168 +974,197 @@ async fn deployment_page(
         return Redirect::to("/login?redirect=%2Fdeployment").into_response();
     };
     if !user_is_dashboard_admin(&state, &session.user) {
-        return Html(render_error_page(
-            &state,
-            Some(&session),
-            "Dashboard Access Restricted",
-            "Deployment-wide settings are reserved for the bot owner or configured dashboard administrators.",
-        ))
-        .into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Html(render_error_page(
+                &state,
+                Some(&session),
+                "Dashboard Access Restricted",
+                "Deployment-wide settings are reserved for the bot owner or configured dashboard administrators.",
+            )),
+        )
+            .into_response();
     }
 
-    let settings = match state.persistence.deployment_settings_or_default().await {
-        Ok(settings) => settings,
-        Err(_) => {
-            warn!("failed to load deployment settings page");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Html(render_error_page(
-                    &state,
-                    Some(&session),
-                    "Deployment Settings Unavailable",
-                    "Deployment settings could not be loaded. Please try again.",
-                )),
-            )
-                .into_response();
-        }
-    };
-    let command_sync_store = load_command_sync_store(&state.persistence).await;
     let active_tab = normalized_tab(query.tab.as_deref());
     let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
     let log_action = parse_audit_action_filter(query.log_action.as_deref());
     let log_page = query.log_page.unwrap_or(1).max(1);
-    let resolved_states = resolve_module_states(&state.module_catalog, &settings, None);
-    let resolved_command_states = resolve_command_states(
-        &state.module_catalog,
-        &state.command_catalog,
-        &settings,
-        None,
-    );
-
-    let module_modals = state
-        .module_catalog
-        .entries
-        .iter()
-        .zip(resolved_states.iter())
-        .map(|(entry, resolved)| {
-            let current = settings.modules.get(entry.module.id).cloned().unwrap_or(
-                DeploymentModuleSettings {
-                    installed: true,
-                    enabled: entry.module.enabled_by_default,
-                },
-            );
-            let runtime_notice = render_module_runtime_notice(entry.module.id);
-
-            render_deployment_module_modal(entry, resolved, &runtime_notice, &current)
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let module_cards = render_module_summary_cards(
-        "deployment",
-        &state.module_catalog,
-        &settings,
-        None,
-        &resolved_states,
-    );
-    let command_cards = render_command_summary_cards(
-        "deployment",
-        &state.command_catalog,
-        &settings,
-        None,
-        &resolved_command_states,
-    );
-    let (deployment_fingerprint, _) =
-        dynamo_app::application_command_fingerprint_for_scope(&settings, None);
-    let command_sync_panel = if state.config.register_globally {
-        render_command_sync_panel(&build_command_sync_panel(
-            SyncScopeKind::Global,
-            &deployment_fingerprint,
-            Some(&command_sync_store.global),
-            &state.config,
-        ))
-    } else {
-        render_command_sync_panel(&build_unsupported_sync_panel(
-            "Deployment command sync is disabled in guild-scoped mode. Open a guild page and run Sync Commands there.",
-        ))
-    };
-    let command_modals = render_deployment_command_modals(
-        &state.command_catalog,
-        &settings,
-        &resolved_command_states,
-    );
-    let overview = render_overview_section(
-        "Deployment Control",
-        "Global install state and command availability across every guild.",
-        &[
+    let (overview, active_section, modals, include_mutation_script) = match active_tab {
+        "logs" => {
+            let logs_page = match state
+                .persistence
+                .list_dashboard_audit_logs(DashboardAuditLogQuery {
+                    scope: DashboardAuditScope::Deployment,
+                    guild_id: None,
+                    entity_type: log_entity,
+                    action: log_action,
+                    page: log_page,
+                    page_size: 20,
+                })
+                .await
+            {
+                Ok(page) => page,
+                Err(error) => {
+                    warn!(?error, "failed to load deployment dashboard audit logs");
+                    DashboardAuditLogPage::empty(log_page, 20)
+                }
+            };
             (
-                "Modules Enabled",
-                count_enabled_modules(&resolved_states).to_string(),
-            ),
-            (
-                "Commands Enabled",
-                count_enabled_commands(&resolved_command_states).to_string(),
-            ),
-            (
-                "Runtime Notes",
-                count_runtime_notices(&state.module_catalog).to_string(),
-            ),
-        ],
-    );
-    let overview_panel = format!(
-        "<section class=\"section-block\" data-testid=\"deployment-overview-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Deployment Summary</h2></div></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Scope</h3><p>Deployment settings define the default module installation and command availability used across every guild.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
-        runtime_notices = render_runtime_notices(&state.module_catalog)
-    );
-    let modules_section = format!(
-        "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment modules\" aria-describedby=\"module-filter-status module-filter-empty\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><p id=\"module-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"module-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No modules match this search.</p><div class=\"module-grid compact-grid\">{module_cards}</div></section>",
-        module_cards = module_cards,
-    );
-    let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment commands\" aria-describedby=\"command-filter-status command-filter-empty\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><p id=\"command-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"command-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No commands match this search and category.</p>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
-        sync_panel = command_sync_panel,
-        command_tabs = render_command_category_tabs(&state.command_catalog),
-        command_cards = command_cards,
-    );
-    let logs_page = if active_tab == "logs" {
-        match state
-            .persistence
-            .list_dashboard_audit_logs(DashboardAuditLogQuery {
-                scope: DashboardAuditScope::Deployment,
-                guild_id: None,
-                entity_type: log_entity,
-                action: log_action,
-                page: log_page,
-                page_size: 20,
-            })
-            .await
-        {
-            Ok(page) => page,
-            Err(error) => {
-                warn!(?error, "failed to load deployment dashboard audit logs");
-                DashboardAuditLogPage::empty(log_page, 20)
+                String::new(),
+                render_audit_logs_section("/deployment", &logs_page, log_entity, log_action),
+                String::new(),
+                false,
+            )
+        }
+        tab => {
+            let settings = match state.persistence.deployment_settings_or_default().await {
+                Ok(settings) => settings,
+                Err(_) => {
+                    warn!("failed to load deployment settings page");
+                    return (
+                        StatusCode::SERVICE_UNAVAILABLE,
+                        Html(render_error_page(
+                            &state,
+                            Some(&session),
+                            "Deployment Settings Unavailable",
+                            "Deployment settings could not be loaded. Please try again.",
+                        )),
+                    )
+                        .into_response();
+                }
+            };
+            match tab {
+                "modules" => {
+                    let resolved_states =
+                        resolve_module_states(&state.module_catalog, &settings, None);
+                    let modals = state
+                        .module_catalog
+                        .entries
+                        .iter()
+                        .zip(&resolved_states)
+                        .map(|(entry, resolved)| {
+                            let current = settings.modules.get(entry.module.id).cloned().unwrap_or(
+                                DeploymentModuleSettings {
+                                    installed: true,
+                                    enabled: entry.module.enabled_by_default,
+                                },
+                            );
+                            render_deployment_module_modal(
+                                entry,
+                                resolved,
+                                &render_module_runtime_notice(entry.module.id),
+                                &current,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                        .join("\n");
+                    let cards = render_module_summary_cards(
+                        "deployment",
+                        &state.module_catalog,
+                        &settings,
+                        None,
+                        &resolved_states,
+                    );
+                    (
+                        String::new(),
+                        format!(
+                            "<section id=\"modules\" class=\"section-block\" data-testid=\"deployment-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Deployment Modules</h2></div><input id=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment modules\" aria-describedby=\"module-filter-status module-filter-empty\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><p id=\"module-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"module-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No modules match this search.</p><div class=\"module-grid compact-grid\">{cards}</div></section>"
+                        ),
+                        modals,
+                        true,
+                    )
+                }
+                "commands" => {
+                    let resolved_states = resolve_command_states(
+                        &state.module_catalog,
+                        &state.command_catalog,
+                        &settings,
+                        None,
+                    );
+                    let cards = render_command_summary_cards(
+                        "deployment",
+                        &state.command_catalog,
+                        &settings,
+                        None,
+                        &resolved_states,
+                    );
+                    let sync_panel = if state.config.register_globally {
+                        let store = load_command_sync_store(&state.persistence).await;
+                        let (fingerprint, _) =
+                            dynamo_app::application_command_fingerprint_for_scope(&settings, None);
+                        render_command_sync_panel(&build_command_sync_panel(
+                            SyncScopeKind::Global,
+                            &fingerprint,
+                            Some(&store.global),
+                            &state.config,
+                        ))
+                    } else {
+                        render_command_sync_panel(&build_unsupported_sync_panel(
+                            "Deployment command sync is disabled in guild-scoped mode. Open a guild page and run Sync Commands there.",
+                        ))
+                    };
+                    let modals = render_deployment_command_modals(
+                        &state.command_catalog,
+                        &settings,
+                        &resolved_states,
+                    );
+                    (
+                        String::new(),
+                        format!(
+                            "<section id=\"commands\" class=\"section-block\" data-testid=\"deployment-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Deployment Commands</h2></div><input id=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search deployment commands\" aria-describedby=\"command-filter-status command-filter-empty\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><p id=\"command-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"command-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No commands match this search and category.</p>{sync_panel}{tabs}<div class=\"module-grid command-grid compact-grid\" data-testid=\"command-card-grid\">{cards}</div></section>",
+                            tabs = render_command_category_tabs(&state.command_catalog)
+                        ),
+                        modals,
+                        true,
+                    )
+                }
+                _ => {
+                    let modules = resolve_module_states(&state.module_catalog, &settings, None);
+                    let commands = resolve_command_states(
+                        &state.module_catalog,
+                        &state.command_catalog,
+                        &settings,
+                        None,
+                    );
+                    let overview = render_overview_section(
+                        "Deployment Control",
+                        "Global install state and command availability across every guild.",
+                        &[
+                            (
+                                "Modules Enabled",
+                                count_enabled_modules(&modules).to_string(),
+                            ),
+                            (
+                                "Commands Enabled",
+                                count_enabled_commands(&commands).to_string(),
+                            ),
+                            (
+                                "Runtime Notes",
+                                count_runtime_notices(&state.module_catalog).to_string(),
+                            ),
+                        ],
+                    );
+                    let panel = format!(
+                        "<section class=\"section-block\" data-testid=\"deployment-overview-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Deployment Summary</h2></div></div><div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Scope</h3><p>Deployment settings define the default module installation and command availability used across every guild.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{}</article></div></section>",
+                        render_runtime_notices(&state.module_catalog)
+                    );
+                    (overview, panel, String::new(), false)
+                }
             }
         }
-    } else {
-        DashboardAuditLogPage::empty(log_page, 20)
     };
-    let logs_section = render_audit_logs_section("/deployment", &logs_page, log_entity, log_action);
-    let active_section = match active_tab {
-        "modules" => modules_section.as_str(),
-        "commands" => commands_section.as_str(),
-        "logs" => logs_section.as_str(),
-        _ => overview_panel.as_str(),
-    };
+    let script = include_mutation_script
+        .then(dashboard_script)
+        .unwrap_or_default();
     let content = format!(
-        "{}{module_modals}{command_modals}<script>{script}</script>",
+        "{}{modals}{script}",
         render_dashboard_page_shell(
             &overview,
             &render_section_tabs("/deployment", active_tab),
-            active_section,
-            active_tab,
-        ),
-        module_modals = module_modals,
-        command_modals = command_modals,
-        script = dashboard_script(),
+            &active_section,
+            active_tab
+        )
     );
 
     Html(render_document(
@@ -1138,17 +1185,50 @@ async fn guild_page(
     Path(guild_id): Path<u64>,
     Query(query): Query<DashboardPageQuery>,
 ) -> Response {
-    let Some(session) = load_session(&state, &jar).await else {
+    let Some(existing_session) = load_session(&state, &jar).await else {
         return Redirect::to(&format!("/login?redirect=%2Fguild%2F{guild_id}")).into_response();
     };
+    let session = match refresh_read_session(&state, &jar).await {
+        Ok(session) => session,
+        Err(ReadGuildAuthorizationError::LoginRequired) => {
+            return Redirect::to(&format!("/login?redirect=%2Fguild%2F{guild_id}")).into_response();
+        }
+        Err(ReadGuildAuthorizationError::Unavailable) => {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_error_page(
+                    &state,
+                    Some(&existing_session),
+                    "Guild Access Unavailable",
+                    "Discord could not verify your current server access. Please try again.",
+                )),
+            )
+                .into_response();
+        }
+    };
+    if !session_can_manage_guild(&session, guild_id) {
+        return (
+            StatusCode::FORBIDDEN,
+            Html(render_error_page(
+                &state,
+                Some(&session),
+                "Guild Access Restricted",
+                "You do not have dashboard access to that server.",
+            )),
+        )
+            .into_response();
+    }
     let Some(card) = load_guild_card(&state, &session, guild_id).await else {
-        return Html(render_error_page(
-            &state,
-            Some(&session),
-            "Guild Access Restricted",
-            "You do not have dashboard access to that server.",
-        ))
-        .into_response();
+        return (
+            StatusCode::FORBIDDEN,
+            Html(render_error_page(
+                &state,
+                Some(&session),
+                "Guild Access Restricted",
+                "You do not have dashboard access to that server.",
+            )),
+        )
+            .into_response();
     };
     match card.bot_presence {
         BotGuildPresence::Present => {}
@@ -1166,149 +1246,12 @@ async fn guild_page(
         }
     }
 
-    let deployment = match state.persistence.deployment_settings_or_default().await {
-        Ok(settings) => settings,
-        Err(_) => {
-            warn!(
-                guild_id,
-                "failed to load deployment settings for guild page"
-            );
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Html(render_error_page(
-                    &state,
-                    Some(&session),
-                    "Deployment Settings Unavailable",
-                    "The effective guild state could not be determined. Please try again.",
-                )),
-            )
-                .into_response();
-        }
-    };
-    let command_sync_store = load_command_sync_store(&state.persistence).await;
-    let Some(_) = state.persistence.guild_settings.as_ref() else {
-        return (
-            StatusCode::SERVICE_UNAVAILABLE,
-            Html(render_error_page(
-                &state,
-                Some(&session),
-                "Guild Settings Unavailable",
-                "Guild settings could not be loaded. Please try again.",
-            )),
-        )
-            .into_response();
-    };
-    let (settings, settings_persisted) = match state.persistence.guild_settings(guild_id).await {
-        Ok(Some(settings)) => (settings, true),
-        Ok(None) => (GuildSettings::for_guild(guild_id), false),
-        Err(error) => {
-            warn!(?error, guild_id, "failed to load guild settings page");
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Html(render_error_page(
-                    &state,
-                    Some(&session),
-                    "Guild Settings Unavailable",
-                    "Guild settings could not be loaded. Please try again.",
-                )),
-            )
-                .into_response();
-        }
-    };
     let active_tab = normalized_tab(query.tab.as_deref());
     let log_entity = parse_audit_entity_filter(query.log_entity.as_deref());
     let log_action = parse_audit_action_filter(query.log_action.as_deref());
     let log_page = query.log_page.unwrap_or(1).max(1);
-    let resolved_states =
-        resolve_module_states(&state.module_catalog, &deployment, Some(&settings));
-    let resolved_command_states = resolve_command_states(
-        &state.module_catalog,
-        &state.command_catalog,
-        &deployment,
-        Some(&settings),
-    );
-
-    let module_modals = state
-        .module_catalog
-        .entries
-        .iter()
-        .zip(resolved_states.iter())
-        .map(|(entry, resolved)| {
-            let current = settings
-                .modules
-                .get(entry.module.id)
-                .cloned()
-                .unwrap_or_default();
-            let structured_fields = render_structured_fields(entry, &current.configuration);
-            let runtime_notice = render_module_runtime_notice(entry.module.id);
-
-            render_guild_module_modal(
-                guild_id,
-                entry,
-                resolved,
-                &runtime_notice,
-                &current,
-                &structured_fields,
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
-
-    let module_cards = render_module_summary_cards(
-        "guild",
-        &state.module_catalog,
-        &deployment,
-        Some(&settings),
-        &resolved_states,
-    );
-    let command_cards = render_command_summary_cards(
-        "guild",
-        &state.command_catalog,
-        &deployment,
-        Some(&settings),
-        &resolved_command_states,
-    );
-    let (guild_fingerprint, _) =
-        dynamo_app::application_command_fingerprint_for_scope(&deployment, Some(&settings));
-    let command_sync_panel = if state.config.register_globally {
-        render_command_sync_panel(&build_unsupported_sync_panel(
-            "This bot is using global command registration. Run Sync Global Commands from the deployment page to refresh Discord.",
-        ))
-    } else {
-        render_command_sync_panel(&build_command_sync_panel(
-            SyncScopeKind::Guild(guild_id),
-            &guild_fingerprint,
-            command_sync_store.guild(guild_id),
-            &state.config,
-        ))
-    };
-    let command_modals = render_guild_command_modals(
-        guild_id,
-        &state.command_catalog,
-        &settings,
-        &resolved_command_states,
-    );
-    let settings_state = guild_settings_ui_state(&settings, settings_persisted);
-    let settings_notice = guild_settings_notice(settings_state);
-    let overview_panel = format!(
-        "<section id=\"overview\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\" data-settings-state=\"{settings_state}\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div>{settings_notice}<div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{runtime_notices}</article></div></section>",
-        guild_id = guild_id,
-        settings_state = settings_state,
-        settings_notice = settings_notice,
-        runtime_notices = render_runtime_notices(&state.module_catalog),
-    );
-    let modules_section = format!(
-        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild modules\" aria-describedby=\"module-filter-status module-filter-empty\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><p id=\"module-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"module-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No modules match this search.</p><div class=\"module-grid compact-grid compact-module-grid\">{module_cards}</div></section>",
-        module_cards = module_cards,
-    );
-    let commands_section = format!(
-        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild commands\" aria-describedby=\"command-filter-status command-filter-empty\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><p id=\"command-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"command-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No commands match this search and category.</p>{sync_panel}{command_tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{command_cards}</div></section>",
-        sync_panel = command_sync_panel,
-        command_tabs = render_command_category_tabs(&state.command_catalog),
-        command_cards = command_cards,
-    );
-    let logs_page = if active_tab == "logs" {
-        match state
+    let (overview, active_section, modals, include_mutation_script) = if active_tab == "logs" {
+        let logs_page = match state
             .persistence
             .list_dashboard_audit_logs(DashboardAuditLogQuery {
                 scope: DashboardAuditScope::Guild,
@@ -1329,48 +1272,199 @@ async fn guild_page(
                 );
                 DashboardAuditLogPage::empty(log_page, 20)
             }
-        }
+        };
+        (
+            String::new(),
+            render_audit_logs_section(
+                &format!("/guild/{guild_id}"),
+                &logs_page,
+                log_entity,
+                log_action,
+            ),
+            String::new(),
+            false,
+        )
     } else {
-        DashboardAuditLogPage::empty(log_page, 20)
+        let deployment = match state.persistence.deployment_settings_or_default().await {
+            Ok(settings) => settings,
+            Err(_) => {
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Html(render_error_page(
+                        &state,
+                        Some(&session),
+                        "Deployment Settings Unavailable",
+                        "The effective guild state could not be determined. Please try again.",
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        let Some(_) = state.persistence.guild_settings.as_ref() else {
+            return (
+                StatusCode::SERVICE_UNAVAILABLE,
+                Html(render_error_page(
+                    &state,
+                    Some(&session),
+                    "Guild Settings Unavailable",
+                    "Guild settings could not be loaded. Please try again.",
+                )),
+            )
+                .into_response();
+        };
+        let (settings, settings_persisted) = match state.persistence.guild_settings(guild_id).await
+        {
+            Ok(Some(settings)) => (settings, true),
+            Ok(None) => (GuildSettings::for_guild(guild_id), false),
+            Err(error) => {
+                warn!(?error, guild_id, "failed to load guild settings page");
+                return (
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Html(render_error_page(
+                        &state,
+                        Some(&session),
+                        "Guild Settings Unavailable",
+                        "Guild settings could not be loaded. Please try again.",
+                    )),
+                )
+                    .into_response();
+            }
+        };
+        match active_tab {
+            "modules" => {
+                let states =
+                    resolve_module_states(&state.module_catalog, &deployment, Some(&settings));
+                let modals = state
+                    .module_catalog
+                    .entries
+                    .iter()
+                    .zip(&states)
+                    .map(|(entry, resolved)| {
+                        let current = settings
+                            .modules
+                            .get(entry.module.id)
+                            .cloned()
+                            .unwrap_or_default();
+                        let fields = render_structured_fields(entry, &current.configuration);
+                        render_guild_module_modal(
+                            guild_id,
+                            entry,
+                            resolved,
+                            &render_module_runtime_notice(entry.module.id),
+                            &current,
+                            &fields,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+                let cards = render_module_summary_cards(
+                    "guild",
+                    &state.module_catalog,
+                    &deployment,
+                    Some(&settings),
+                    &states,
+                );
+                (
+                    String::new(),
+                    format!(
+                        "<section id=\"modules\" class=\"section-block\" data-testid=\"guild-modules-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Modules</p><h2>Guild Modules</h2></div><input id=\"module-filter\" data-testid=\"module-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild modules\" aria-describedby=\"module-filter-status module-filter-empty\" placeholder=\"Search modules\" oninput=\"filterModuleCards(this.value)\" /></div><p id=\"module-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"module-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No modules match this search.</p><div class=\"module-grid compact-grid compact-module-grid\">{cards}</div></section>"
+                    ),
+                    modals,
+                    true,
+                )
+            }
+            "commands" => {
+                let states = resolve_command_states(
+                    &state.module_catalog,
+                    &state.command_catalog,
+                    &deployment,
+                    Some(&settings),
+                );
+                let cards = render_command_summary_cards(
+                    "guild",
+                    &state.command_catalog,
+                    &deployment,
+                    Some(&settings),
+                    &states,
+                );
+                let sync_panel = if state.config.register_globally {
+                    render_command_sync_panel(&build_unsupported_sync_panel(
+                        "This bot is using global command registration. Run Sync Global Commands from the deployment page to refresh Discord.",
+                    ))
+                } else {
+                    let store = load_command_sync_store(&state.persistence).await;
+                    let (fingerprint, _) = dynamo_app::application_command_fingerprint_for_scope(
+                        &deployment,
+                        Some(&settings),
+                    );
+                    render_command_sync_panel(&build_command_sync_panel(
+                        SyncScopeKind::Guild(guild_id),
+                        &fingerprint,
+                        store.guild(guild_id),
+                        &state.config,
+                    ))
+                };
+                let modals = render_guild_command_modals(
+                    guild_id,
+                    &state.command_catalog,
+                    &settings,
+                    &states,
+                );
+                (
+                    String::new(),
+                    format!(
+                        "<section id=\"commands\" class=\"section-block\" data-testid=\"guild-commands-section\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Commands</p><h2>Guild Commands</h2></div><input id=\"command-filter\" data-testid=\"command-filter\" class=\"toolbar-search compact-search\" type=\"search\" aria-label=\"Search guild commands\" aria-describedby=\"command-filter-status command-filter-empty\" placeholder=\"Search commands\" oninput=\"filterCommandCards(this.value)\" /></div><p id=\"command-filter-status\" class=\"filter-feedback\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\"></p><p id=\"command-filter-empty\" class=\"filter-empty\" role=\"status\" aria-live=\"polite\" aria-atomic=\"true\" hidden>No commands match this search and category.</p>{sync_panel}{tabs}<div class=\"module-grid command-grid compact-grid compact-command-grid\" data-testid=\"command-card-grid\">{cards}</div></section>",
+                        tabs = render_command_category_tabs(&state.command_catalog)
+                    ),
+                    modals,
+                    true,
+                )
+            }
+            _ => {
+                let modules =
+                    resolve_module_states(&state.module_catalog, &deployment, Some(&settings));
+                let commands = resolve_command_states(
+                    &state.module_catalog,
+                    &state.command_catalog,
+                    &deployment,
+                    Some(&settings),
+                );
+                let overview = render_overview_section(
+                    &card.name,
+                    "Guild-scoped module and command controls for this server.",
+                    &[
+                        (
+                            "Modules Enabled",
+                            count_enabled_modules(&modules).to_string(),
+                        ),
+                        (
+                            "Commands Enabled",
+                            count_enabled_commands(&commands).to_string(),
+                        ),
+                        ("Guild ID", guild_id.to_string()),
+                    ],
+                );
+                let state_name = guild_settings_ui_state(&settings, settings_persisted);
+                let panel = format!(
+                    "<section id=\"overview\" class=\"panel section-block\" data-testid=\"guild-runtime-summary\" data-settings-state=\"{state_name}\"><div class=\"section-heading compact-heading\"><div><p class=\"eyebrow\">Overview</p><h2>Guild Summary</h2></div><span class=\"pill pill-success\">Bot Connected</span></div>{}<div class=\"grid two compact-grid-two\"><article class=\"panel info-panel compact-info-panel\"><h3>Server Info</h3><p>Guild ID <code>{guild_id}</code></p><p>Guild-specific settings override deployment defaults where enabled.</p></article><article class=\"panel info-panel compact-info-panel\"><h3>Runtime Notes</h3>{}</article></div></section>",
+                    guild_settings_notice(state_name),
+                    render_runtime_notices(&state.module_catalog)
+                );
+                (overview, panel, String::new(), false)
+            }
+        }
     };
-    let logs_section = render_audit_logs_section(
-        &format!("/guild/{guild_id}"),
-        &logs_page,
-        log_entity,
-        log_action,
-    );
-    let active_section = match active_tab {
-        "modules" => modules_section.as_str(),
-        "commands" => commands_section.as_str(),
-        "logs" => logs_section.as_str(),
-        _ => overview_panel.as_str(),
-    };
-    let overview = render_overview_section(
-        &card.name,
-        "Guild-scoped module and command controls for this server.",
-        &[
-            (
-                "Modules Enabled",
-                count_enabled_modules(&resolved_states).to_string(),
-            ),
-            (
-                "Commands Enabled",
-                count_enabled_commands(&resolved_command_states).to_string(),
-            ),
-            ("Guild ID", guild_id.to_string()),
-        ],
-    );
+    let script = include_mutation_script
+        .then(dashboard_script)
+        .unwrap_or_default();
     let content = format!(
-        "{}{module_modals}{command_modals}<script>{script}</script>",
+        "{}{modals}{script}",
         render_dashboard_page_shell(
             &overview,
             &render_section_tabs(&format!("/guild/{guild_id}"), active_tab),
-            active_section,
-            active_tab,
-        ),
-        module_modals = module_modals,
-        command_modals = command_modals,
-        script = dashboard_script(),
+            &active_section,
+            active_tab
+        )
     );
 
     Html(render_document(
@@ -1448,10 +1542,9 @@ async fn load_session(state: &DashboardState, jar: &CookieJar) -> Option<Dashboa
     // Only remove the expired entry observed by this request. Re-check its identity
     // after acquiring the exclusive lock so an OAuth replacement is never removed.
     let mut sessions = state.sessions.write().await;
-    if sessions
-        .get(&session_id)
-        .is_some_and(|current| current.access_token == session.access_token && is_session_expired(current))
-    {
+    if sessions.get(&session_id).is_some_and(|current| {
+        current.access_token == session.access_token && is_session_expired(current)
+    }) {
         sessions.remove(&session_id);
     }
     None
@@ -1634,10 +1727,30 @@ fn session_can_manage_guild(session: &DashboardSession, guild_id: u64) -> bool {
         .any(|guild| guild.id == guild_id && user_can_manage_guild(guild))
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RefreshSessionGuildsError {
+    Unauthorized,
+    Unavailable,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ReadGuildAuthorizationError {
+    LoginRequired,
+    Unavailable,
+}
+
+/// Refreshes the Discord guild grant without holding the session lock during I/O.
+/// The token identity guard prevents an in-flight refresh from writing into a
+/// replacement session that reused the same cookie key.
 async fn refresh_session_guilds(
     state: &DashboardState,
     session_id: &str,
-) -> Result<Option<DashboardSession>, anyhow::Error> {
+) -> Result<Option<DashboardSession>, RefreshSessionGuildsError> {
+    #[cfg(feature = "perf-harness")]
+    if state.perf_runtime.is_some() {
+        return Ok(state.sessions.read().await.get(session_id).cloned());
+    }
+
     let access_token = {
         let sessions = state.sessions.read().await;
         sessions
@@ -1654,16 +1767,58 @@ async fn refresh_session_guilds(
         .get(format!("{}/users/@me/guilds", state.discord_api_base))
         .header(reqwest::header::AUTHORIZATION, &bearer);
     let guilds_response = send_dashboard_http(state, guilds_request)
-        .await?
-        .error_for_status()?;
-    let guilds: Vec<DashboardGuild> = guilds_response.json().await?;
+        .await
+        .map_err(|error| {
+            warn!(?error, "Discord guild authorization refresh request failed");
+            RefreshSessionGuildsError::Unavailable
+        })?;
+    if guilds_response.status() == StatusCode::UNAUTHORIZED {
+        let mut sessions = state.sessions.write().await;
+        if sessions
+            .get(session_id)
+            .is_some_and(|current| current.access_token == access_token)
+        {
+            sessions.remove(session_id);
+        }
+        return Err(RefreshSessionGuildsError::Unauthorized);
+    }
+    if !guilds_response.status().is_success() {
+        warn!(status = %guilds_response.status(), "Discord guild authorization refresh was unavailable");
+        return Err(RefreshSessionGuildsError::Unavailable);
+    }
+    let guilds: Vec<DashboardGuild> = guilds_response.json().await.map_err(|error| {
+        warn!(
+            ?error,
+            "Discord guild authorization refresh response was invalid"
+        );
+        RefreshSessionGuildsError::Unavailable
+    })?;
 
     let mut sessions = state.sessions.write().await;
     let Some(session) = sessions.get_mut(session_id) else {
         return Ok(None);
     };
+    if session.access_token != access_token {
+        return Ok(None);
+    }
     session.guilds = guilds;
     Ok(Some(session.clone()))
+}
+
+async fn refresh_read_session(
+    state: &DashboardState,
+    jar: &CookieJar,
+) -> Result<DashboardSession, ReadGuildAuthorizationError> {
+    let session_id = session_cookie_value(jar).ok_or(ReadGuildAuthorizationError::LoginRequired)?;
+    match refresh_session_guilds(state, &session_id).await {
+        Ok(Some(session)) => Ok(session),
+        Ok(None) | Err(RefreshSessionGuildsError::Unauthorized) => {
+            Err(ReadGuildAuthorizationError::LoginRequired)
+        }
+        Err(RefreshSessionGuildsError::Unavailable) => {
+            Err(ReadGuildAuthorizationError::Unavailable)
+        }
+    }
 }
 
 fn user_can_manage_guild(guild: &DashboardGuild) -> bool {
@@ -2721,6 +2876,10 @@ fn render_deployment_command_modals(
     settings: &DeploymentSettings,
     resolved_states: &[ResolvedCommandState],
 ) -> String {
+    let resolved_by_id = resolved_states
+        .iter()
+        .map(|state| (state.command.id.as_str(), state))
+        .collect::<HashMap<_, _>>();
     command_catalog
         .entries
         .iter()
@@ -2730,9 +2889,7 @@ fn render_deployment_command_modals(
                 .get(&entry.command.id)
                 .cloned()
                 .unwrap_or_default();
-            let resolved = resolved_states
-                .iter()
-                .find(|state| state.command.id == entry.command.id);
+            let resolved = resolved_by_id.get(entry.command.id.as_str()).copied();
             let structured_fields = render_command_structured_fields(entry, &current.configuration);
             render_settings_modal(
                 &modal_id_for_command("deployment", &entry.command.id),
@@ -2764,6 +2921,10 @@ fn render_guild_command_modals(
     settings: &GuildSettings,
     resolved_states: &[ResolvedCommandState],
 ) -> String {
+    let resolved_by_id = resolved_states
+        .iter()
+        .map(|state| (state.command.id.as_str(), state))
+        .collect::<HashMap<_, _>>();
     command_catalog
         .entries
         .iter()
@@ -2773,9 +2934,7 @@ fn render_guild_command_modals(
                 .get(&entry.command.id)
                 .cloned()
                 .unwrap_or_default();
-            let resolved = resolved_states
-                .iter()
-                .find(|state| state.command.id == entry.command.id);
+            let resolved = resolved_by_id.get(entry.command.id.as_str()).copied();
             let structured_fields = render_command_structured_fields(entry, &current.configuration);
             render_settings_modal(
                 &modal_id_for_command("guild", &entry.command.id),
@@ -3065,10 +3224,9 @@ fn render_dashboard_page_shell(
     }
 
     format!(
-        "<div class=\"dashboard-page-shell dashboard-page-shell-task-first\"><div class=\"dashboard-page-tabs\" data-testid=\"dashboard-page-tabs\">{page_tabs}</div><div class=\"dashboard-page-active\" data-testid=\"dashboard-page-active\">{active_section}</div><div class=\"dashboard-page-overview\" data-testid=\"dashboard-page-overview\">{overview}</div></div>",
+        "<div class=\"dashboard-page-shell dashboard-page-shell-task-first\"><div class=\"dashboard-page-tabs\" data-testid=\"dashboard-page-tabs\">{page_tabs}</div><div class=\"dashboard-page-active\" data-testid=\"dashboard-page-active\">{active_section}</div></div>",
         page_tabs = page_tabs,
         active_section = active_section,
-        overview = overview,
     )
 }
 
@@ -4947,17 +5105,17 @@ mod tests {
         FIRA_SANS_MEDIUM_SHA256, FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG,
         FIRA_SANS_REGULAR_PATH, FIRA_SANS_REGULAR_SHA256, FIRA_SANS_SEMIBOLD_BYTES,
         FIRA_SANS_SEMIBOLD_ETAG, FIRA_SANS_SEMIBOLD_PATH, FIRA_SANS_SEMIBOLD_SHA256,
-        FONT_CACHE_CONTROL, GuildCard, GuildModuleSettings, GuildSettings, SESSION_COOKIE_NAME,
-        audit_action_label, audit_entity_label, build_dashboard_http_client_with_timeouts,
-        build_dashboard_router, classify_bot_guild_status, dashboard_script, dashboard_styles,
-        dashboard_ui_script,
+        FONT_CACHE_CONTROL, GuildCard, GuildModuleSettings, GuildSettings,
+        RefreshSessionGuildsError, SESSION_COOKIE_NAME, audit_action_label, audit_entity_label,
+        build_dashboard_http_client_with_timeouts, build_dashboard_router,
+        classify_bot_guild_status, dashboard_script, dashboard_styles, dashboard_ui_script,
         escape_html, font_asset_router, guild_settings_notice, guild_settings_ui_state,
-        render_audit_logs_section, render_dashboard_page_shell, render_error_page, render_field,
-        render_section_tabs,
-        render_guild_card, render_guild_status, render_landing_page, render_module_toggle,
-        render_nav, render_settings_modal, request_id_for_logging, request_path_for_logging,
-        request_path_should_be_logged, sanitize_redirect_target, sort_guild_cards,
-        user_can_manage_guild,
+        refresh_session_guilds, render_audit_logs_section, render_dashboard_page_shell,
+        render_error_page, render_field, render_guild_card, render_guild_status,
+        render_landing_page, render_module_toggle, render_nav, render_section_tabs,
+        render_settings_modal, request_id_for_logging, request_path_for_logging,
+        request_path_should_be_logged, sanitize_redirect_target, session_can_manage_guild,
+        sort_guild_cards, user_can_manage_guild,
     };
     use async_trait::async_trait;
     use axum::{
@@ -5269,7 +5427,7 @@ mod tests {
         assert!(css.contains(".nav-link:hover:not(.active)"));
         assert!(!css.contains(".nav-link:hover, .nav-link.active"));
         assert!(css.contains(".nav-submenu { display: grid; gap: 2px;"));
-        assert!(css.contains(".nav-sub-link.active { color: var(--accent); font-weight: 600; }"));
+        assert!(css.contains(".nav-sub-link.active { color: var(--accent-text); font-weight: 600; }"));
         assert!(!css.contains(".nav-submenu { border-left"));
 
         let script = dashboard_script();
@@ -5302,7 +5460,9 @@ mod tests {
         assert!(script.contains("button.setAttribute('aria-pressed', 'true')"));
 
         let tabs = render_section_tabs("/guild/42", "modules");
-        assert!(tabs.contains("data-testid=\"page-tab-modules\" href=\"/guild/42?tab=modules\" aria-current=\"page\""));
+        assert!(tabs.contains(
+            "data-testid=\"page-tab-modules\" href=\"/guild/42?tab=modules\" aria-current=\"page\""
+        ));
 
         let css = dashboard_styles();
         assert!(css.contains("--accent-text: #ff9aae;"));
@@ -5331,16 +5491,16 @@ mod tests {
 
         let selector = render_nav(&state, Some(&session), Some("/selector"), None);
         assert_eq!(selector.matches("nav-link active").count(), 1);
-        assert!(selector.contains("class=\"nav-link active\" href=\"/selector\">Server Listing"));
+        assert!(selector.contains("class=\"nav-link active\" href=\"/selector\" aria-current=\"page\">Server Listing"));
         assert!(selector.contains("class=\"nav-link\" href=\"/\">Dashboard"));
 
         let modules = render_nav(&state, Some(&session), Some("/guild/42"), Some("modules"));
         assert_eq!(modules.matches("nav-link active").count(), 1);
         assert!(
             modules
-                .contains("class=\"nav-sub-link active\" href=\"/guild/42?tab=modules\">Modules")
+                .contains("class=\"nav-sub-link active\" href=\"/guild/42?tab=modules\" aria-current=\"page\">Modules")
         );
-        assert!(modules.contains("class=\"nav-link active\" href=\"/selector\">Server Listing"));
+        assert!(modules.contains("class=\"nav-link active\" href=\"/selector\" aria-current=\"page\">Server Listing"));
 
         let deployment = render_nav(
             &state,
@@ -5349,10 +5509,10 @@ mod tests {
             Some("commands"),
         );
         assert_eq!(deployment.matches("nav-link active").count(), 1);
-        assert!(deployment.contains("class=\"nav-link active\" href=\"/deployment\">Deployment"));
+        assert!(deployment.contains("class=\"nav-link active\" href=\"/deployment\" aria-current=\"page\">Deployment"));
         assert!(
             deployment.contains(
-                "class=\"nav-sub-link active\" href=\"/deployment?tab=commands\">Commands"
+                "class=\"nav-sub-link active\" href=\"/deployment?tab=commands\" aria-current=\"page\">Commands"
             )
         );
 
@@ -5794,8 +5954,13 @@ mod tests {
 
     #[tokio::test]
     async fn guild_page_unavailable_settings_is_actionable_and_redacted() {
-        let (discord_api_base, _) =
-            spawn_discord_guilds_server(StatusCode::OK, "{}", StdDuration::ZERO, 1).await;
+        let (discord_api_base, _) = spawn_discord_guilds_server(
+            StatusCode::OK,
+            r#"[{"id":"42","name":"Guild","icon":null,"permissions":"32"}]"#,
+            StdDuration::ZERO,
+            2,
+        )
+        .await;
         let repository = Arc::new(FakeGuildSettingsRepository::new(
             GuildSettingsReadResult::Unavailable,
         ));
@@ -5825,6 +5990,281 @@ mod tests {
         assert!(!rendered.contains("mongodb://"));
         assert!(!rendered.contains("guild_settings"));
         assert!(!rendered.contains("test-secret"));
+    }
+
+    #[tokio::test]
+    async fn selector_refreshes_revoked_and_new_guild_access() {
+        let guilds = r#"[{"id":"99","name":"New Guild","icon":null,"permissions":"32"}]"#;
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, guilds, StdDuration::ZERO, 3).await;
+        let state = test_dashboard_state_with_discord(
+            Persistence::default(),
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state.clone());
+
+        let selector = app
+            .clone()
+            .oneshot(authenticated_request("GET", "/selector", "test-session"))
+            .await
+            .expect("selector response");
+        assert_eq!(selector.status(), StatusCode::OK);
+        let selector_body = to_bytes(selector.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("bounded selector body");
+        let rendered = String::from_utf8(selector_body.to_vec()).expect("UTF-8 selector page");
+        assert!(rendered.contains("New Guild"));
+        assert!(!rendered.contains("Guild ID <code>42</code>"));
+
+        let denied = app
+            .oneshot(authenticated_request("GET", "/guild/42", "test-session"))
+            .await
+            .expect("guild denial response");
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert!(session_can_manage_guild(
+            &state.sessions.read().await["test-session"],
+            99
+        ));
+    }
+
+    #[tokio::test]
+    async fn read_guild_authorization_unavailable_fails_closed() {
+        let (discord_api_base, _) = spawn_discord_guilds_server(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{"message":"unavailable"}"#,
+            StdDuration::ZERO,
+            2,
+        )
+        .await;
+        let state = test_dashboard_state_with_discord(
+            Persistence::default(),
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let selector = app
+            .clone()
+            .oneshot(authenticated_request("GET", "/selector", "test-session"))
+            .await
+            .expect("selector unavailable response");
+        assert_eq!(selector.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let guild = app
+            .oneshot(authenticated_request("GET", "/guild/42", "test-session"))
+            .await
+            .expect("guild unavailable response");
+        assert_eq!(guild.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn invalid_read_guild_authorization_fails_closed() {
+        let (discord_api_base, _) = spawn_discord_guilds_server(
+            StatusCode::OK,
+            r#"{"unexpected":"response"}"#,
+            StdDuration::ZERO,
+            1,
+        )
+        .await;
+        let state = test_dashboard_state_with_discord(
+            Persistence::default(),
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request("GET", "/selector", "test-session"))
+            .await
+            .expect("selector invalid authorization response");
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn refresh_does_not_overwrite_replaced_session_token() {
+        let guilds = r#"[{"id":"99","name":"New Guild","icon":null,"permissions":"32"}]"#;
+        let (discord_api_base, requests) =
+            spawn_discord_guilds_server(StatusCode::OK, guilds, StdDuration::from_millis(150), 1)
+                .await;
+        let state = test_dashboard_state_with_discord(
+            Persistence::default(),
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let refresh_state = state.clone();
+        let refresh =
+            tokio::spawn(
+                async move { refresh_session_guilds(&refresh_state, "test-session").await },
+            );
+        tokio::time::timeout(StdDuration::from_millis(500), async {
+            while requests.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("refresh request reached Discord fixture");
+        {
+            let mut sessions = state.sessions.write().await;
+            let replacement = sessions
+                .get_mut("test-session")
+                .expect("existing test session");
+            replacement.access_token = "replacement-access-token".to_string();
+        }
+
+        assert!(
+            refresh
+                .await
+                .expect("refresh task")
+                .expect("refresh result")
+                .is_none()
+        );
+        let current = state.sessions.read().await["test-session"].clone();
+        assert_eq!(current.access_token, "replacement-access-token");
+        assert!(session_can_manage_guild(&current, 42));
+        assert!(!session_can_manage_guild(&current, 99));
+    }
+
+    #[tokio::test]
+    async fn refresh_401_does_not_remove_replaced_session_token() {
+        let (discord_api_base, requests) = spawn_discord_guilds_server(
+            StatusCode::UNAUTHORIZED,
+            r#"{"message":"401: Unauthorized"}"#,
+            StdDuration::from_millis(150),
+            1,
+        )
+        .await;
+        let state = test_dashboard_state_with_discord(
+            Persistence::default(),
+            discord_api_base,
+            StdDuration::from_secs(1),
+        );
+        insert_session(&state, "test-session", 42).await;
+        let refresh_state = state.clone();
+        let refresh =
+            tokio::spawn(
+                async move { refresh_session_guilds(&refresh_state, "test-session").await },
+            );
+        tokio::time::timeout(StdDuration::from_millis(500), async {
+            while requests.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("refresh request reached Discord fixture");
+        state
+            .sessions
+            .write()
+            .await
+            .get_mut("test-session")
+            .expect("test session")
+            .access_token = "replacement-access-token".to_string();
+
+        assert!(matches!(
+            refresh.await.expect("refresh task"),
+            Err(RefreshSessionGuildsError::Unauthorized)
+        ));
+        assert_eq!(
+            state.sessions.read().await["test-session"].access_token,
+            "replacement-access-token"
+        );
+    }
+
+    #[tokio::test]
+    async fn deployment_page_non_admin_is_forbidden() {
+        let state = test_dashboard_state(Persistence::default());
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        let response = app
+            .oneshot(authenticated_request("GET", "/deployment", "test-session"))
+            .await
+            .expect("deployment response");
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+
+    #[tokio::test]
+    async fn deployment_tabs_render_only_active_controls_and_read_command_sync_on_commands() {
+        let provider = Arc::new(CountingProviderStateRepository::default());
+        let mut state = test_dashboard_state(Persistence {
+            provider_state: Some(provider.clone()),
+            ..Persistence::default()
+        });
+        Arc::get_mut(&mut state)
+            .expect("test dashboard state is uniquely owned")
+            .app_info
+            .owner_user_id = Some(7);
+        Arc::get_mut(&mut state)
+            .expect("test dashboard state is uniquely owned")
+            .config
+            .register_globally = true;
+        insert_session(&state, "test-session", 42).await;
+        let app = build_dashboard_router(state);
+
+        for tab in ["overview", "logs"] {
+            let response = app
+                .clone()
+                .oneshot(authenticated_request(
+                    "GET",
+                    &format!("/deployment?tab={tab}"),
+                    "test-session",
+                ))
+                .await
+                .expect("deployment tab response");
+            assert_eq!(response.status(), StatusCode::OK);
+            let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+                .await
+                .expect("bounded deployment tab body");
+            let rendered = String::from_utf8(body.to_vec()).expect("UTF-8 deployment tab");
+            assert!(!rendered.contains("DynamoMutationTransport"));
+            assert!(!rendered.contains("data-testid=\"settings-modal-"));
+            assert!(!rendered.contains("data-testid=\"deployment-commands-section\""));
+        }
+        assert_eq!(provider.loads.load(Ordering::SeqCst), 0);
+
+        let response = app
+            .clone()
+            .oneshot(authenticated_request(
+                "GET",
+                "/deployment?tab=modules",
+                "test-session",
+            ))
+            .await
+            .expect("deployment modules response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("bounded deployment modules body");
+        let rendered = String::from_utf8(body.to_vec()).expect("UTF-8 deployment modules");
+        assert!(rendered.contains("DynamoMutationTransport"));
+        assert!(rendered.contains("data-testid=\"deployment-modules-section\""));
+        assert!(rendered.contains("data-testid=\"settings-modal-"));
+        assert!(!rendered.contains("data-testid=\"deployment-commands-section\""));
+        assert!(!rendered.contains("settings-modal-modal-deployment-command-"));
+        assert_eq!(provider.loads.load(Ordering::SeqCst), 0);
+
+        let response = app
+            .oneshot(authenticated_request(
+                "GET",
+                "/deployment?tab=commands",
+                "test-session",
+            ))
+            .await
+            .expect("deployment commands response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = to_bytes(response.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("bounded deployment commands body");
+        let rendered = String::from_utf8(body.to_vec()).expect("UTF-8 deployment commands");
+        assert!(rendered.contains("DynamoMutationTransport"));
+        assert!(rendered.contains("data-testid=\"deployment-commands-section\""));
+        assert!(rendered.contains("data-testid=\"settings-modal-"));
+        assert!(!rendered.contains("data-testid=\"deployment-modules-section\""));
+        assert_eq!(provider.loads.load(Ordering::SeqCst), 1);
     }
 
     #[tokio::test]
@@ -6548,12 +6988,10 @@ mod tests {
         let active_index = rendered
             .find("data-testid=\"dashboard-page-active\"")
             .expect("active section in task-first shell");
-        let overview_index = rendered
-            .find("data-testid=\"dashboard-page-overview\"")
-            .expect("overview in task-first shell");
 
         assert!(tabs_index < active_index);
-        assert!(active_index < overview_index);
+        assert!(!rendered.contains("data-testid=\"dashboard-page-overview\""));
+        assert!(!rendered.contains("data-testid=\"page-overview\""));
     }
 
     #[test]
