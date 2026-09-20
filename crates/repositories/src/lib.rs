@@ -14,7 +14,7 @@ pub type Error = anyhow::Error;
 
 #[async_trait]
 pub trait GuildSettingsRepository: Send + Sync {
-    async fn get_or_create(&self, guild_id: u64) -> Result<GuildSettings, Error>;
+    async fn get(&self, guild_id: u64) -> Result<Option<GuildSettings>, Error>;
     async fn upsert_module_settings(
         &self,
         guild_id: u64,

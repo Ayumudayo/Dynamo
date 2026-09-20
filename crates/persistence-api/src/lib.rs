@@ -67,13 +67,16 @@ impl Persistence {
     }
 
     pub async fn guild_settings_or_default(&self, guild_id: u64) -> Result<GuildSettings, Error> {
+        Ok(self
+            .guild_settings(guild_id)
+            .await?
+            .unwrap_or_else(|| GuildSettings::for_guild(guild_id)))
+    }
+
+    pub async fn guild_settings(&self, guild_id: u64) -> Result<Option<GuildSettings>, Error> {
         match &self.guild_settings {
-            Some(repo) => repo.get_or_create(guild_id).await,
-            None => Ok(GuildSettings {
-                guild_id,
-                modules: Default::default(),
-                commands: Default::default(),
-            }),
+            Some(repo) => repo.get(guild_id).await,
+            None => Ok(None),
         }
     }
 
@@ -177,5 +180,121 @@ impl Persistence {
             Some(repo) => repo.list(query).await,
             None => Ok(DashboardAuditLogPage::empty(query.page, query.page_size)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    use async_trait::async_trait;
+    use dynamo_repositories::GuildSettingsRepository;
+    use dynamo_settings::{GuildCommandSettings, GuildModuleSettings, GuildSettings};
+
+    use super::Persistence;
+
+    enum ReadResult {
+        Absent,
+        Existing(GuildSettings),
+        Unavailable,
+    }
+
+    struct FakeGuildSettingsRepository {
+        result: ReadResult,
+        reads: AtomicUsize,
+        writes: AtomicUsize,
+    }
+
+    impl FakeGuildSettingsRepository {
+        fn new(result: ReadResult) -> Self {
+            Self {
+                result,
+                reads: AtomicUsize::new(0),
+                writes: AtomicUsize::new(0),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl GuildSettingsRepository for FakeGuildSettingsRepository {
+        async fn get(&self, _guild_id: u64) -> anyhow::Result<Option<GuildSettings>> {
+            self.reads.fetch_add(1, Ordering::SeqCst);
+            match &self.result {
+                ReadResult::Absent => Ok(None),
+                ReadResult::Existing(settings) => Ok(Some(settings.clone())),
+                ReadResult::Unavailable => anyhow::bail!("fake repository unavailable"),
+            }
+        }
+
+        async fn upsert_module_settings(
+            &self,
+            _guild_id: u64,
+            _module_id: &str,
+            _settings: GuildModuleSettings,
+        ) -> anyhow::Result<GuildSettings> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("unexpected fake repository write")
+        }
+
+        async fn upsert_command_settings(
+            &self,
+            _guild_id: u64,
+            _command_id: &str,
+            _settings: GuildCommandSettings,
+        ) -> anyhow::Result<GuildSettings> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("unexpected fake repository write")
+        }
+    }
+
+    fn persistence_with(repository: Arc<FakeGuildSettingsRepository>) -> Persistence {
+        Persistence {
+            guild_settings: Some(repository),
+            ..Persistence::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn absent_guild_read_returns_none_and_compatibility_default_without_writing() {
+        let repository = Arc::new(FakeGuildSettingsRepository::new(ReadResult::Absent));
+        let persistence = persistence_with(repository.clone());
+
+        assert_eq!(persistence.guild_settings(42).await.unwrap(), None);
+        assert_eq!(
+            persistence.guild_settings_or_default(42).await.unwrap(),
+            GuildSettings::for_guild(42)
+        );
+        assert_eq!(repository.reads.load(Ordering::SeqCst), 2);
+        assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn existing_guild_read_returns_stored_settings_without_writing() {
+        let expected = GuildSettings::for_guild(42);
+        let repository = Arc::new(FakeGuildSettingsRepository::new(ReadResult::Existing(
+            expected.clone(),
+        )));
+        let persistence = persistence_with(repository.clone());
+
+        assert_eq!(
+            persistence.guild_settings(42).await.unwrap(),
+            Some(expected)
+        );
+        assert_eq!(repository.reads.load(Ordering::SeqCst), 1);
+        assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn unavailable_guild_read_is_not_converted_to_absent_or_default() {
+        let repository = Arc::new(FakeGuildSettingsRepository::new(ReadResult::Unavailable));
+        let persistence = persistence_with(repository.clone());
+
+        assert!(persistence.guild_settings(42).await.is_err());
+        assert!(persistence.guild_settings_or_default(42).await.is_err());
+        assert_eq!(repository.reads.load(Ordering::SeqCst), 2);
+        assert_eq!(repository.writes.load(Ordering::SeqCst), 0);
     }
 }

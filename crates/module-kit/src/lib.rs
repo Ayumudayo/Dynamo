@@ -154,8 +154,15 @@ pub struct SettingsField {
 pub enum SettingsFieldKind {
     Toggle,
     Text,
-    Integer,
-    Select { options: Vec<SettingOption> },
+    Integer {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        min: Option<i64>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        max: Option<i64>,
+    },
+    Select {
+        options: Vec<SettingOption>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize)]

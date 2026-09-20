@@ -6,7 +6,7 @@ pub mod models;
 pub mod rate_limit;
 mod stock;
 
-pub use client::{TossInvestClient, TossInvestResponse};
+pub use client::{TossInvestClient, TossInvestRequestError, TossInvestResponse};
 pub use config::TossInvestConfig;
 pub use exchange::{TossInvestMarketDataService, exchange_refresh_interval_seconds};
 pub use market_calendar::{TossInvestMarketCalendarService, TossMarketSessionPhase};

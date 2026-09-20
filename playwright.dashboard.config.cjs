@@ -1,3 +1,5 @@
+require('./scripts/perf/refuse-unsafe-dashboard-smoke.cjs');
+
 const path = require('path');
 
 const storageState = process.env.PLAYWRIGHT_STORAGE_STATE

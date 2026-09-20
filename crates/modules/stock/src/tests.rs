@@ -1,16 +1,30 @@
 use crate::{
-    constants::{DOWN_EMOJI, UP_EMOJI},
+    constants::{DOWN_EMOJI, STOCK_REFRESH_BUTTON_ID, UP_EMOJI},
     render::{
         build_etf_embed, build_stock_embed, current_market_data, format_money,
-        primary_stock_market_data, refresh_footer_text, representative_phase,
+        primary_stock_market_data, provider_failure_message, refresh_components,
+        refresh_footer_text, representative_phase, shared_provider_failure,
         stock_embed_color_change, stop_reason_for_phase,
     },
-    settings::{normalize_symbol, normalize_symbols},
-    state::total_updates,
+    settings::{
+        RefreshSchedule, StockSettings, normalize_symbol, normalize_symbols, parse_stock_settings,
+        settings_schema,
+    },
+    state::{
+        ManualRestartStart, SessionKind, SessionRegistry, StockSession, fetch_response_for_session,
+        try_begin_manual_restart,
+    },
 };
 use dynamo_domain_stock::StockQuote;
+use dynamo_service_stock::{Error as StockServiceError, StockQuoteService};
+use dynamo_settings::GuildModuleSettings;
 use poise::serenity_prelude::CreateEmbed;
 use serde_json::Value;
+use std::sync::{
+    Arc,
+    atomic::{AtomicUsize, Ordering},
+};
+use tokio::sync::{Mutex, Notify};
 
 #[test]
 fn normalizes_symbols_to_uppercase() {
@@ -28,6 +42,25 @@ fn removes_duplicate_tickers() {
 }
 
 #[test]
+fn groups_a_repeated_provider_maintenance_error_once() {
+    let snapshots: Vec<Result<StockQuote, String>> = vec![
+        Err("Toss Invest exchange-rate request failed with status 500 Internal Server Error (code: maintenance, message: 점검 중입니다. 잠시 후 다시 시도해 주세요.)".to_string()),
+        Err("Toss Invest exchange-rate request failed with status 500 Internal Server Error (code: maintenance, message: 점검 중입니다. 잠시 후 다시 시도해 주세요.)".to_string()),
+    ];
+
+    assert_eq!(
+        shared_provider_failure(&snapshots),
+        Some(
+            "Toss Invest exchange-rate request failed with status 500 Internal Server Error (code: maintenance, message: 점검 중입니다. 잠시 후 다시 시도해 주세요.)"
+        )
+    );
+    assert_eq!(
+        provider_failure_message(snapshots[0].as_ref().expect_err("fixture error")),
+        "Toss Invest is under maintenance. Please try again later."
+    );
+}
+
+#[test]
 fn skips_blank_tickers_in_symbol_lists() {
     let normalized = normalize_symbols(vec![
         "soxl".to_string(),
@@ -39,31 +72,421 @@ fn skips_blank_tickers_in_symbol_lists() {
 }
 
 #[test]
-fn computes_total_updates_from_refresh_window() {
-    assert_eq!(total_updates(), 24);
+fn computes_total_updates_from_default_refresh_schedule() {
+    assert_eq!(default_total_updates(), 40);
+}
+
+#[test]
+fn default_refresh_schedule_is_three_seconds_for_two_minutes() {
+    let settings = StockSettings::default();
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.duration_seconds, 120);
+    assert_eq!(schedule.total_updates(), 40);
+}
+
+#[test]
+fn refresh_schedule_clamps_interval_below_minimum() {
+    let settings = StockSettings {
+        refresh_interval_seconds: 1,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.duration_seconds, 120);
+    assert_eq!(schedule.total_updates(), 40);
+}
+
+#[test]
+fn refresh_schedule_allows_slower_intervals() {
+    let settings = StockSettings {
+        refresh_interval_seconds: 5,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.interval_seconds, 5);
+    assert_eq!(schedule.duration_seconds, 120);
+    assert_eq!(schedule.total_updates(), 24);
+}
+
+#[test]
+fn refresh_schedule_clamps_duration_to_minimum() {
+    let settings = StockSettings {
+        refresh_duration_seconds: 30,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.duration_seconds, 60);
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.total_updates(), 20);
+}
+
+#[test]
+fn refresh_schedule_clamps_duration_to_maximum() {
+    let settings = StockSettings {
+        refresh_duration_seconds: 300,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.duration_seconds, 180);
+    assert_eq!(schedule.interval_seconds, 3);
+    assert_eq!(schedule.total_updates(), 60);
+}
+
+#[test]
+fn refresh_schedule_caps_interval_to_effective_duration() {
+    let settings = StockSettings {
+        refresh_interval_seconds: 999,
+        refresh_duration_seconds: 60,
+        ..StockSettings::default()
+    };
+
+    let schedule = settings.refresh_schedule();
+
+    assert_eq!(schedule.duration_seconds, 60);
+    assert_eq!(schedule.interval_seconds, 60);
+    assert_eq!(schedule.total_updates(), 1);
+}
+
+#[test]
+fn refresh_interval_deserialization_defaults_malformed_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_interval_seconds": "not-a-number"
+    }))
+    .expect("stock settings should tolerate malformed refresh interval only");
+
+    assert_eq!(settings.refresh_schedule().interval_seconds, 3);
+}
+
+#[test]
+fn refresh_duration_deserialization_defaults_malformed_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_duration_seconds": "not-a-number"
+    }))
+    .expect("stock settings should tolerate malformed refresh duration only");
+
+    assert_eq!(settings.refresh_schedule().duration_seconds, 120);
+}
+
+#[test]
+fn refresh_interval_deserialization_accepts_numeric_strings() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_interval_seconds": "5"
+    }))
+    .expect("numeric string refresh interval should parse");
+
+    assert_eq!(settings.refresh_schedule().interval_seconds, 5);
+}
+
+#[test]
+fn refresh_duration_deserialization_accepts_numeric_strings() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_duration_seconds": "180"
+    }))
+    .expect("numeric string refresh duration should parse");
+
+    assert_eq!(settings.refresh_schedule().duration_seconds, 180);
+}
+
+#[test]
+fn refresh_interval_deserialization_defaults_null_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_interval_seconds": null
+    }))
+    .expect("null refresh interval should default");
+
+    assert_eq!(settings.refresh_schedule().interval_seconds, 3);
+}
+
+#[test]
+fn refresh_duration_deserialization_defaults_null_values() {
+    let settings = serde_json::from_value::<StockSettings>(serde_json::json!({
+        "default_symbol": "NVDA",
+        "etf_tickers": ["SOXL"],
+        "refresh_duration_seconds": null
+    }))
+    .expect("null refresh duration should default");
+
+    assert_eq!(settings.refresh_schedule().duration_seconds, 120);
+}
+
+#[test]
+fn null_stock_module_configuration_loads_defaults() {
+    let module = GuildModuleSettings {
+        enabled: true,
+        configuration: serde_json::Value::Null,
+    };
+
+    let settings =
+        parse_stock_settings(&module).expect("null stock module configuration should use defaults");
+
+    assert_eq!(settings.default_symbol, "NVDA");
+    assert_eq!(settings.refresh_schedule().interval_seconds, 3);
+    assert_eq!(settings.refresh_schedule().duration_seconds, 120);
+}
+
+#[test]
+fn stock_settings_reject_unrelated_invalid_configuration() {
+    let module = GuildModuleSettings {
+        enabled: true,
+        configuration: serde_json::json!({
+            "default_symbol": 123,
+            "etf_tickers": ["SOXL"],
+            "refresh_interval_seconds": 3,
+            "refresh_duration_seconds": 120
+        }),
+    };
+
+    assert!(parse_stock_settings(&module).is_err());
+}
+
+#[test]
+fn stock_settings_schema_exposes_refresh_bounds() {
+    let schema = settings_schema();
+    let fields = schema
+        .sections
+        .iter()
+        .flat_map(|section| section.fields.iter())
+        .map(|field| (field.key, &field.kind))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert_integer_bounds(
+        fields
+            .get("refresh_interval_seconds")
+            .expect("refresh interval field"),
+        Some(3),
+        None,
+    );
+    assert_integer_bounds(
+        fields
+            .get("refresh_duration_seconds")
+            .expect("refresh duration field"),
+        Some(60),
+        Some(180),
+    );
+}
+
+#[tokio::test]
+async fn session_response_uses_session_refresh_schedule_total() {
+    let schedule = RefreshSchedule {
+        interval_seconds: 4,
+        duration_seconds: 120,
+    };
+    let session = Arc::new(Mutex::new(StockSession::new(
+        SessionKind::Stock {
+            symbol: "SOXL".to_string(),
+        },
+        Arc::new(FakeStockQuoteService::active_quote("SOXL")),
+        schedule,
+    )));
+
+    let response = fetch_response_for_session(&session, 1)
+        .await
+        .expect("fetch response")
+        .expect("response");
+
+    assert_eq!(embed_footer_text(&response.embed), "Toss Invest · 1/30");
+}
+
+#[tokio::test]
+async fn session_registry_remove_and_readd_cancels_old_worker_before_returning() {
+    let registry = SessionRegistry::new(4);
+    let old_effects = Arc::new(AtomicUsize::new(0));
+    let old_session = test_session("OLD");
+    let old_entry = registry.register(7, old_session).await;
+    let old_effects_for_worker = old_effects.clone();
+
+    registry
+        .start_worker(&old_entry, async move {
+            loop {
+                tokio::task::yield_now().await;
+                old_effects_for_worker.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await;
+
+    while old_effects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    registry.remove(7).await;
+    let effects_after_remove = old_effects.load(Ordering::SeqCst);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(old_effects.load(Ordering::SeqCst), effects_after_remove);
+
+    let new_entry = registry.register(7, test_session("NEW")).await;
+    assert!(registry.is_current(&new_entry).await);
+    assert!(!registry.is_current(&old_entry).await);
+
+    let new_effects = Arc::new(AtomicUsize::new(0));
+    let new_effects_for_worker = new_effects.clone();
+    assert!(
+        registry
+            .start_worker(&new_entry, async move {
+                loop {
+                    tokio::task::yield_now().await;
+                    new_effects_for_worker.fetch_add(1, Ordering::SeqCst);
+                }
+            })
+            .await
+    );
+    while new_effects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+    assert_eq!(old_effects.load(Ordering::SeqCst), effects_after_remove);
+    registry.remove(7).await;
+}
+
+#[tokio::test]
+async fn session_registry_replacement_cancels_blocked_worker_without_stale_effect() {
+    let registry = SessionRegistry::new(4);
+    let fetch_started = Arc::new(Notify::new());
+    let release_fetch = Arc::new(Notify::new());
+    let stale_effects = Arc::new(AtomicUsize::new(0));
+    let old_entry = registry.register(9, test_session("OLD")).await;
+    let fetch_started_for_worker = fetch_started.clone();
+    let release_fetch_for_worker = release_fetch.clone();
+    let stale_effects_for_worker = stale_effects.clone();
+
+    registry
+        .start_worker(&old_entry, async move {
+            fetch_started_for_worker.notify_one();
+            release_fetch_for_worker.notified().await;
+            stale_effects_for_worker.fetch_add(1, Ordering::SeqCst);
+        })
+        .await;
+
+    fetch_started.notified().await;
+    let new_entry = registry.register(9, test_session("NEW")).await;
+    release_fetch.notify_waiters();
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(stale_effects.load(Ordering::SeqCst), 0);
+    assert!(registry.is_current(&new_entry).await);
+    assert!(!registry.is_current(&old_entry).await);
+}
+
+#[tokio::test]
+async fn session_registry_eviction_cancels_worker_before_register_returns() {
+    let registry = SessionRegistry::new(1);
+    let effects = Arc::new(AtomicUsize::new(0));
+    let old_entry = registry.register(11, test_session("OLD")).await;
+    let effects_for_worker = effects.clone();
+    registry
+        .start_worker(&old_entry, async move {
+            loop {
+                tokio::task::yield_now().await;
+                effects_for_worker.fetch_add(1, Ordering::SeqCst);
+            }
+        })
+        .await;
+
+    while effects.load(Ordering::SeqCst) == 0 {
+        tokio::task::yield_now().await;
+    }
+
+    let new_entry = registry.register(12, test_session("NEW")).await;
+    let effects_after_eviction = effects.load(Ordering::SeqCst);
+    for _ in 0..20 {
+        tokio::task::yield_now().await;
+    }
+
+    assert_eq!(effects.load(Ordering::SeqCst), effects_after_eviction);
+    assert!(!registry.is_current(&old_entry).await);
+    assert!(registry.is_current(&new_entry).await);
+}
+
+#[tokio::test]
+async fn old_worker_self_removal_does_not_remove_replacement_entry() {
+    let registry = SessionRegistry::new(4);
+    let old_entry = registry.register(13, test_session("OLD")).await;
+    let new_entry = registry.register(13, test_session("NEW")).await;
+
+    registry.remove_if_current(&old_entry).await;
+
+    assert!(!registry.is_current(&old_entry).await);
+    assert!(registry.is_current(&new_entry).await);
+}
+
+#[test]
+fn refresh_button_renders_disabled_when_requested() {
+    let components = refresh_components(STOCK_REFRESH_BUTTON_ID, true);
+    let value = serde_json::to_value(&components).expect("serialize components");
+
+    assert!(
+        value.to_string().contains("\"disabled\":true"),
+        "serialized components should mark refresh button disabled: {value}"
+    );
+}
+
+#[test]
+fn manual_restart_gate_rejects_second_concurrent_start() {
+    let schedule = RefreshSchedule {
+        interval_seconds: 3,
+        duration_seconds: 120,
+    };
+    let mut session = StockSession::new(
+        SessionKind::Stock {
+            symbol: "SOXL".to_string(),
+        },
+        Arc::new(FakeStockQuoteService::active_quote("SOXL")),
+        schedule,
+    );
+
+    assert_eq!(
+        try_begin_manual_restart(&mut session),
+        ManualRestartStart::Started
+    );
+    assert_eq!(
+        try_begin_manual_restart(&mut session),
+        ManualRestartStart::AlreadyInProgress
+    );
 }
 
 #[test]
 fn footer_marks_initial_refresh_as_started() {
     assert_eq!(
-        refresh_footer_text(0, total_updates(), None),
+        refresh_footer_text(0, default_total_updates(), None),
         "Toss Invest · Active"
     );
 }
 
 #[test]
 fn footer_marks_final_refresh_as_complete() {
-    let total = total_updates();
+    let total = default_total_updates();
     assert_eq!(
         refresh_footer_text(total, total, None),
-        "Toss Invest · Done 24/24"
+        "Toss Invest · Done 40/40"
     );
 }
 
 #[test]
 fn footer_explains_market_closed_stop_reason() {
     assert_eq!(
-        refresh_footer_text(0, total_updates(), Some("market_closed")),
+        refresh_footer_text(0, default_total_updates(), Some("market_closed")),
         "Toss Invest · Stopped"
     );
 }
@@ -343,6 +766,84 @@ fn quote_with_phase(phase: &str) -> StockQuote {
     }
 }
 
+fn default_total_updates() -> u32 {
+    StockSettings::default().refresh_schedule().total_updates()
+}
+
+fn test_session(symbol: &str) -> Arc<Mutex<StockSession>> {
+    Arc::new(Mutex::new(StockSession::new(
+        SessionKind::Stock {
+            symbol: symbol.to_string(),
+        },
+        Arc::new(FakeStockQuoteService::active_quote(symbol)),
+        RefreshSchedule {
+            interval_seconds: 3,
+            duration_seconds: 60,
+        },
+    )))
+}
+
+fn assert_integer_bounds(
+    kind: &dynamo_module_kit::SettingsFieldKind,
+    expected_min: Option<i64>,
+    expected_max: Option<i64>,
+) {
+    match kind {
+        dynamo_module_kit::SettingsFieldKind::Integer { min, max } => {
+            assert_eq!(*min, expected_min);
+            assert_eq!(*max, expected_max);
+        }
+        other => panic!("expected integer field kind, got {other:?}"),
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FakeStockQuoteService {
+    quote: StockQuote,
+}
+
+impl FakeStockQuoteService {
+    fn active_quote(symbol: &str) -> Self {
+        Self {
+            quote: StockQuote {
+                symbol: symbol.to_string(),
+                phase: "Regular Market".to_string(),
+                regular_market_price: Some(100.0),
+                regular_market_change: Some(1.0),
+                regular_market_change_percent: Some(0.01),
+                ..StockQuote::default()
+            },
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl StockQuoteService for FakeStockQuoteService {
+    async fn fetch_quote(&self, symbol: &str) -> Result<Option<StockQuote>, StockServiceError> {
+        if symbol.eq_ignore_ascii_case(&self.quote.symbol) {
+            Ok(Some(self.quote.clone()))
+        } else {
+            Ok(None)
+        }
+    }
+
+    async fn fetch_quotes(
+        &self,
+        symbols: &[String],
+    ) -> Result<Vec<Result<StockQuote, String>>, StockServiceError> {
+        Ok(symbols
+            .iter()
+            .map(|symbol| {
+                if symbol.eq_ignore_ascii_case(&self.quote.symbol) {
+                    Ok(self.quote.clone())
+                } else {
+                    Err("not found".to_string())
+                }
+            })
+            .collect())
+    }
+}
+
 fn embed_fields(embed: &CreateEmbed) -> Vec<(String, String)> {
     let value = serde_json::to_value(embed).expect("serialize embed");
     value
@@ -364,6 +865,16 @@ fn embed_fields(embed: &CreateEmbed) -> Vec<(String, String)> {
             (name, value)
         })
         .collect()
+}
+
+fn embed_footer_text(embed: &CreateEmbed) -> String {
+    let value = serde_json::to_value(embed).expect("serialize embed");
+    value
+        .get("footer")
+        .and_then(|footer| footer.get("text"))
+        .and_then(Value::as_str)
+        .expect("embed footer text")
+        .to_string()
 }
 
 fn field_value<'a>(fields: &'a [(String, String)], name: &str) -> Option<&'a str> {

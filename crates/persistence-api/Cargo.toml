@@ -16,3 +16,7 @@ dynamo-ops = { path = "../ops" }
 dynamo-repositories = { path = "../repositories" }
 dynamo-settings = { path = "../settings" }
 serde_json.workspace = true
+
+[dev-dependencies]
+async-trait.workspace = true
+tokio.workspace = true

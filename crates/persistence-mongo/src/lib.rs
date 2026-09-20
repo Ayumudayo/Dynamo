@@ -688,12 +688,20 @@ fn parse_snowflake(value: &str, field_name: &str) -> Result<u64, Error> {
         .map_err(|error| anyhow::anyhow!("Stored {field_name} is not a valid u64: {error}"))
 }
 
-fn settings_set_on_insert(document_id: &str) -> Document {
-    doc! {
+fn settings_set_on_insert(document_id: &str, excluded_parent_path: Option<&str>) -> Document {
+    let mut set_on_insert = doc! {
         "_id": document_id,
-        "modules": {},
-        "commands": {},
+    };
+
+    if excluded_parent_path != Some("modules") {
+        set_on_insert.insert("modules", Document::new());
     }
+
+    if excluded_parent_path != Some("commands") {
+        set_on_insert.insert("commands", Document::new());
+    }
+
+    set_on_insert
 }
 
 fn settings_field_path(section: &str, id_kind: &str, id: &str) -> Result<String, Error> {
@@ -719,8 +727,10 @@ fn settings_field_path(section: &str, id_kind: &str, id: &str) -> Result<String,
 }
 
 fn settings_upsert_update(document_id: &str, settings_path: &str, settings: Bson) -> Document {
+    let excluded_parent_path = settings_path.split_once('.').map(|(parent, _)| parent);
+
     doc! {
-        "$setOnInsert": settings_set_on_insert(document_id),
+        "$setOnInsert": settings_set_on_insert(document_id, excluded_parent_path),
         "$set": {
             settings_path: settings,
         },
@@ -729,22 +739,11 @@ fn settings_upsert_update(document_id: &str, settings_path: &str, settings: Bson
 
 #[async_trait]
 impl GuildSettingsRepository for MongoPersistence {
-    async fn get_or_create(&self, guild_id: u64) -> Result<GuildSettings, Error> {
+    async fn get(&self, guild_id: u64) -> Result<Option<GuildSettings>, Error> {
         let id = Self::guild_document_id(guild_id);
-        let document = self
-            .guild_settings
-            .find_one_and_update(
-                doc! { "_id": &id },
-                doc! {
-                    "$setOnInsert": settings_set_on_insert(&id),
-                },
-            )
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("guild settings upsert returned no document"))?;
+        let document = self.guild_settings.find_one(doc! { "_id": &id }).await?;
 
-        document.into_domain()
+        document.map(GuildSettingsDocument::into_domain).transpose()
     }
 
     async fn upsert_module_settings(
@@ -1221,7 +1220,6 @@ impl DashboardAuditLogRepository for MongoPersistence {
 mod tests {
     use super::{
         DEFAULT_DATABASE_NAME, DeploymentSettingsDocument, GuildSettingsDocument, MongoPersistence,
-        MongoPersistenceConfig,
     };
     use crate::MongoInitializationReport;
     use dynamo_ops::DashboardAuditLogRepository;
@@ -1234,38 +1232,141 @@ mod tests {
         DeploymentCommandSettings, DeploymentModuleSettings, GuildCommandSettings,
         GuildModuleSettings,
     };
-    use mongodb::bson::{Bson, doc, to_bson};
+    use futures_util::FutureExt;
+    use mongodb::{
+        Client, Database,
+        bson::{Bson, doc, oid::ObjectId, to_bson},
+    };
     use serde_json::json;
+    use std::{
+        any::Any,
+        env,
+        future::Future,
+        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
+    };
 
-    fn require_mongo_test_config(test_name: &str) -> anyhow::Result<MongoPersistenceConfig> {
-        let _ = dotenvy::dotenv();
-        MongoPersistenceConfig::try_from_env()?.ok_or_else(|| {
-            anyhow::anyhow!(
-                "{test_name} requires MongoDB test configuration; set MONGODB_URI or MONGO_CONNECTION"
-            )
-        })
+    type PanicPayload = Box<dyn Any + Send + 'static>;
+
+    enum IsolatedTestOutcome {
+        Completed(anyhow::Result<()>),
+        Panicked(PanicPayload),
     }
 
-    fn isolated_mongo_test_config(
-        base: &MongoPersistenceConfig,
-        test_name: &str,
-    ) -> MongoPersistenceConfig {
-        let label: String = test_name
-            .chars()
-            .map(|ch| {
-                if ch.is_ascii_alphanumeric() {
-                    ch.to_ascii_lowercase()
-                } else {
-                    '_'
-                }
-            })
-            .collect();
-        let database_name = format!(
-            "dynamo_persistence_mongo_{label}_{}",
-            chrono::Utc::now().timestamp_millis().unsigned_abs()
-        );
+    struct IsolatedMongoTest {
+        client: Client,
+        database_name: String,
+    }
 
-        MongoPersistenceConfig::new(base.connection_string.clone(), database_name)
+    impl IsolatedMongoTest {
+        async fn create() -> anyhow::Result<Self> {
+            let connection_string = env::var("MONGODB_URI_FOR_ISOLATED_TEST").map_err(|_| {
+                anyhow::anyhow!("isolated Mongo tests require the dedicated PowerShell runner")
+            })?;
+            let client = Client::with_uri_str(connection_string)
+                .await
+                .map_err(|_| anyhow::anyhow!("isolated Mongo client initialization failed"))?;
+
+            Ok(Self {
+                client,
+                database_name: isolated_database_name(),
+            })
+        }
+
+        fn store(&self) -> MongoPersistence {
+            mongo_persistence_for_database(self.client.database(&self.database_name))
+        }
+
+        async fn cleanup(self) -> anyhow::Result<()> {
+            self.client
+                .database(&self.database_name)
+                .drop()
+                .await
+                .map_err(|_| anyhow::anyhow!("isolated Mongo database drop failed"))?;
+
+            let remaining_databases = self
+                .client
+                .list_database_names()
+                .await
+                .map_err(|_| anyhow::anyhow!("isolated Mongo cleanup verification failed"))?;
+            anyhow::ensure!(
+                !remaining_databases
+                    .iter()
+                    .any(|name| name == &self.database_name),
+                "isolated Mongo database still exists after cleanup"
+            );
+            Ok(())
+        }
+    }
+
+    fn isolated_database_name() -> String {
+        format!(
+            "dynmongo_{}_{}",
+            std::process::id(),
+            ObjectId::new().to_hex()
+        )
+    }
+
+    fn mongo_persistence_for_database(database: Database) -> MongoPersistence {
+        MongoPersistence {
+            guild_settings: database.collection::<GuildSettingsDocument>("guild_settings"),
+            deployment_settings: database
+                .collection::<DeploymentSettingsDocument>("deployment_settings"),
+            provider_state: database.collection("provider_state"),
+            suggestions: database.collection("suggestions"),
+            giveaways: database.collection("giveaways"),
+            invite_members: database.collection("members"),
+            member_stats: database.collection("member-stats"),
+            warning_logs: database.collection("mod-logs"),
+            dashboard_audit_logs: database.collection("dashboard-audit-logs"),
+            database,
+        }
+    }
+
+    fn resolve_isolated_test_outcome(
+        test_outcome: IsolatedTestOutcome,
+        cleanup_result: anyhow::Result<()>,
+    ) -> anyhow::Result<()> {
+        if let Err(error) = cleanup_result {
+            return Err(anyhow::anyhow!("isolated Mongo cleanup failed: {error}"));
+        }
+
+        match test_outcome {
+            IsolatedTestOutcome::Completed(result) => result,
+            IsolatedTestOutcome::Panicked(payload) => resume_unwind(payload),
+        }
+    }
+
+    async fn run_isolated_test_lifecycle<F, Fut, C, CleanupFut>(
+        test: F,
+        cleanup: C,
+    ) -> anyhow::Result<()>
+    where
+        F: FnOnce() -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+        C: FnOnce() -> CleanupFut,
+        CleanupFut: Future<Output = anyhow::Result<()>>,
+    {
+        let test_outcome = match catch_unwind(AssertUnwindSafe(test)) {
+            Ok(future) => match AssertUnwindSafe(future).catch_unwind().await {
+                Ok(result) => IsolatedTestOutcome::Completed(result),
+                Err(payload) => IsolatedTestOutcome::Panicked(payload),
+            },
+            Err(payload) => IsolatedTestOutcome::Panicked(payload),
+        };
+        let cleanup_result = cleanup().await;
+
+        resolve_isolated_test_outcome(test_outcome, cleanup_result)
+    }
+
+    async fn run_isolated_mongo_test<F, Fut>(test: F) -> anyhow::Result<()>
+    where
+        F: FnOnce(MongoPersistence) -> Fut,
+        Fut: Future<Output = anyhow::Result<()>>,
+    {
+        let isolated = IsolatedMongoTest::create().await?;
+        let store = isolated.store();
+
+        run_isolated_test_lifecycle(|| test(store), || isolated.cleanup()).await
     }
 
     #[test]
@@ -1299,7 +1400,7 @@ mod tests {
     }
 
     #[test]
-    fn guild_upsert_update_seeds_required_fields_on_insert() {
+    fn guild_upsert_update_skips_conflicting_module_parent_on_insert() {
         let settings = GuildModuleSettings {
             enabled: false,
             configuration: json!({ "threshold": 7 }),
@@ -1316,7 +1417,6 @@ mod tests {
             doc! {
                 "$setOnInsert": {
                     "_id": "42",
-                    "modules": {},
                     "commands": {},
                 },
                 "$set": {
@@ -1330,7 +1430,37 @@ mod tests {
     }
 
     #[test]
-    fn deployment_upsert_update_seeds_required_fields_on_insert() {
+    fn guild_upsert_update_skips_conflicting_command_parent_on_insert() {
+        let settings = GuildCommandSettings {
+            enabled: false,
+            configuration: json!({ "precision": 2 }),
+        };
+
+        let update = super::settings_upsert_update(
+            "42",
+            "commands.exchange::rate",
+            to_bson(&settings).expect("guild command settings serialize"),
+        );
+
+        assert_eq!(
+            update,
+            doc! {
+                "$setOnInsert": {
+                    "_id": "42",
+                    "modules": {},
+                },
+                "$set": {
+                    "commands.exchange::rate": {
+                        "enabled": false,
+                        "configuration": { "precision": 2i64 },
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn deployment_upsert_update_skips_conflicting_module_parent_on_insert() {
         let settings = DeploymentModuleSettings {
             installed: false,
             enabled: true,
@@ -1347,13 +1477,44 @@ mod tests {
             doc! {
                 "$setOnInsert": {
                     "_id": "global",
-                    "modules": {},
                     "commands": {},
                 },
                 "$set": {
                     "modules.stock": {
                         "installed": false,
                         "enabled": true,
+                    },
+                },
+            }
+        );
+    }
+
+    #[test]
+    fn deployment_upsert_update_skips_conflicting_command_parent_on_insert() {
+        let settings = DeploymentCommandSettings {
+            installed: true,
+            enabled: false,
+            configuration: json!({ "visible": true }),
+        };
+
+        let update = super::settings_upsert_update(
+            "global",
+            "commands.exchange::rate",
+            to_bson(&settings).expect("deployment command settings serialize"),
+        );
+
+        assert_eq!(
+            update,
+            doc! {
+                "$setOnInsert": {
+                    "_id": "global",
+                    "modules": {},
+                },
+                "$set": {
+                    "commands.exchange::rate": {
+                        "installed": true,
+                        "enabled": false,
+                        "configuration": { "visible": true },
                     },
                 },
             }
@@ -1373,6 +1534,153 @@ mod tests {
             to_bson(&document.commands).ok(),
             Some(Bson::Document(doc! {}))
         );
+    }
+
+    #[test]
+    fn isolated_mongo_test_generates_exact_database_name_shape() {
+        let database_name = isolated_database_name();
+        let parts = database_name.split('_').collect::<Vec<_>>();
+
+        assert_eq!(parts.len(), 3, "{database_name}");
+        assert_eq!(parts[0], "dynmongo");
+        assert_eq!(parts[1], std::process::id().to_string());
+        assert_eq!(parts[2].len(), 24, "{database_name}");
+        assert!(
+            parts[2]
+                .bytes()
+                .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "{database_name}"
+        );
+    }
+
+    #[test]
+    fn cleanup_failure_outranks_test_error() {
+        let outcome = IsolatedTestOutcome::Completed(Err(anyhow::anyhow!("test failed")));
+        let result =
+            resolve_isolated_test_outcome(outcome, Err(anyhow::anyhow!("cleanup sentinel")));
+
+        let error = result.expect_err("cleanup failure must win").to_string();
+        assert!(error.contains("isolated Mongo cleanup failed"));
+        assert!(error.contains("cleanup sentinel"));
+        assert!(!error.contains("test failed"));
+    }
+
+    #[test]
+    fn cleanup_failure_outranks_test_panic() {
+        let outcome = IsolatedTestOutcome::Panicked(Box::new("panic sentinel"));
+        let result =
+            resolve_isolated_test_outcome(outcome, Err(anyhow::anyhow!("cleanup sentinel")));
+
+        let error = result.expect_err("cleanup failure must win").to_string();
+        assert!(error.contains("isolated Mongo cleanup failed"));
+        assert!(error.contains("cleanup sentinel"));
+    }
+
+    #[test]
+    fn successful_cleanup_preserves_test_error() {
+        let outcome = IsolatedTestOutcome::Completed(Err(anyhow::anyhow!("test sentinel")));
+        let error = resolve_isolated_test_outcome(outcome, Ok(()))
+            .expect_err("test error must be returned")
+            .to_string();
+
+        assert_eq!(error, "test sentinel");
+    }
+
+    #[test]
+    fn successful_cleanup_resumes_test_panic() {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            resolve_isolated_test_outcome(
+                IsolatedTestOutcome::Panicked(Box::new("panic sentinel")),
+                Ok(()),
+            )
+        }));
+
+        let payload = result.expect_err("test panic must resume");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"panic sentinel"));
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_test_success() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = run_isolated_test_lifecycle(
+            || async { Ok(()) },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert!(result.is_ok());
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_test_error() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = run_isolated_test_lifecycle(
+            || async { Err(anyhow::anyhow!("test sentinel")) },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        )
+        .await;
+
+        assert_eq!(
+            result.expect_err("test error must survive").to_string(),
+            "test sentinel"
+        );
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_test_panic() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = AssertUnwindSafe(run_isolated_test_lifecycle(
+            || async {
+                panic!("panic sentinel");
+            },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .catch_unwind()
+        .await;
+
+        assert!(result.is_err(), "test panic must resume after cleanup");
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn cleanup_runs_once_after_synchronous_test_factory_panic() {
+        let cleanup_count = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let cleanup_count_for_task = cleanup_count.clone();
+
+        let result = AssertUnwindSafe(run_isolated_test_lifecycle(
+            || -> std::future::Ready<anyhow::Result<()>> {
+                panic!("synchronous panic sentinel");
+            },
+            || async move {
+                cleanup_count_for_task.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Ok(())
+            },
+        ))
+        .catch_unwind()
+        .await;
+
+        assert!(
+            result.is_err(),
+            "synchronous test factory panic must resume after cleanup"
+        );
+        assert_eq!(cleanup_count.load(std::sync::atomic::Ordering::SeqCst), 1);
     }
 
     #[test]
@@ -1411,16 +1719,7 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    #[ignore = "requires MongoDB environment and persists test data"]
-    async fn settings_round_trip_against_mongo() -> anyhow::Result<()> {
-        let config = require_mongo_test_config("settings_round_trip_against_mongo")?;
-        let guild_store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "settings_round_trip_guild",
-        ))
-        .await?;
-
+    async fn settings_round_trip_body(guild_store: MongoPersistence) -> anyhow::Result<()> {
         let marker = chrono::Utc::now().timestamp_millis().unsigned_abs();
         let created_guild_id = marker;
         let guild_module_guild_id = marker + 1;
@@ -1428,11 +1727,11 @@ mod tests {
         let guild_module_id = format!("integration_guild_module_{marker}");
         let guild_command_id = format!("integration::guild::command::{marker}");
 
-        let created =
-            GuildSettingsRepository::get_or_create(&guild_store, created_guild_id).await?;
-        assert_eq!(created.guild_id, created_guild_id);
-        assert!(created.modules.is_empty());
-        assert!(created.commands.is_empty());
+        let count_before_absent_read = guild_store.guild_settings.count_documents(doc! {}).await?;
+        let absent = GuildSettingsRepository::get(&guild_store, created_guild_id).await?;
+        let count_after_absent_read = guild_store.guild_settings.count_documents(doc! {}).await?;
+        assert_eq!(absent, None);
+        assert_eq!(count_after_absent_read, count_before_absent_read);
 
         let guild_module_settings = GuildModuleSettings {
             enabled: false,
@@ -1451,6 +1750,15 @@ mod tests {
             Some(&guild_module_settings)
         );
         assert!(guild_after_module.commands.is_empty());
+
+        let count_before_existing_read =
+            guild_store.guild_settings.count_documents(doc! {}).await?;
+        let existing = GuildSettingsRepository::get(&guild_store, guild_module_guild_id)
+            .await?
+            .expect("upserted guild settings should exist");
+        let count_after_existing_read = guild_store.guild_settings.count_documents(doc! {}).await?;
+        assert_eq!(existing, guild_after_module);
+        assert_eq!(count_after_existing_read, count_before_existing_read);
 
         let guild_module_settings_updated = GuildModuleSettings {
             enabled: true,
@@ -1511,11 +1819,7 @@ mod tests {
         );
         assert!(guild_after_command_update.modules.is_empty());
 
-        let deployment_module_store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "settings_round_trip_deployment_module",
-        ))
-        .await?;
+        let deployment_module_store = guild_store.clone();
         let deployment_module_id = format!("integration_deployment_module_{marker}");
 
         let deployment_module_settings = DeploymentModuleSettings {
@@ -1556,11 +1860,7 @@ mod tests {
             Some(&deployment_module_settings)
         );
 
-        let deployment_command_store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "settings_round_trip_deployment_command",
-        ))
-        .await?;
+        let deployment_command_store = guild_store.clone();
         let deployment_command_id = format!("integration::deployment::command::{marker}");
         let deployment_command_settings = DeploymentCommandSettings {
             installed: false,
@@ -1579,7 +1879,10 @@ mod tests {
                 .get(&deployment_command_id),
             Some(&deployment_command_settings)
         );
-        assert!(deployment_after_command.modules.is_empty());
+        assert_eq!(
+            deployment_after_command.modules.get(&deployment_module_id),
+            Some(&deployment_module_settings_updated)
+        );
 
         let deployment_command_settings_updated = DeploymentCommandSettings {
             installed: true,
@@ -1605,21 +1908,23 @@ mod tests {
                 .get(&deployment_command_id),
             Some(&deployment_command_settings)
         );
-        assert!(deployment_after_command_update.modules.is_empty());
+        assert_eq!(
+            deployment_after_command_update
+                .modules
+                .get(&deployment_module_id),
+            Some(&deployment_module_settings_updated)
+        );
 
         Ok(())
     }
 
     #[tokio::test]
-    #[ignore = "requires MongoDB environment and persists test data"]
-    async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
-        let config = require_mongo_test_config("dashboard_audit_logs_round_trip_against_mongo")?;
-        let store = MongoPersistence::connect(isolated_mongo_test_config(
-            &config,
-            "dashboard_audit_logs_round_trip",
-        ))
-        .await?;
+    #[ignore = "requires scripts/test-isolated-mongo.ps1 and a disposable MongoDB"]
+    async fn settings_round_trip_against_mongo() -> anyhow::Result<()> {
+        run_isolated_mongo_test(settings_round_trip_body).await
+    }
 
+    async fn dashboard_audit_logs_round_trip_body(store: MongoPersistence) -> anyhow::Result<()> {
         store.ensure_initialized().await?;
         let marker = format!("integration::{}", chrono::Utc::now().timestamp_millis());
         let entry = DashboardAuditLogEntry {
@@ -1651,5 +1956,11 @@ mod tests {
 
         assert!(page.entries.iter().any(|row| row.entity_id == marker));
         Ok(())
+    }
+
+    #[tokio::test]
+    #[ignore = "requires scripts/test-isolated-mongo.ps1 and a disposable MongoDB"]
+    async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
+        run_isolated_mongo_test(dashboard_audit_logs_round_trip_body).await
     }
 }

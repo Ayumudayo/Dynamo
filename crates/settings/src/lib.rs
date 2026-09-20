@@ -10,6 +10,15 @@ pub struct GuildSettings {
     pub commands: BTreeMap<String, GuildCommandSettings>,
 }
 
+impl GuildSettings {
+    pub fn for_guild(guild_id: u64) -> Self {
+        Self {
+            guild_id,
+            ..Self::default()
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct GuildModuleSettings {

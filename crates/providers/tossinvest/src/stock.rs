@@ -17,10 +17,7 @@ use tracing::warn;
 use crate::{
     TossInvestClient, TossInvestMarketCalendarService, TossInvestResponse, TossMarketSessionPhase,
     TossRateLimitGroup,
-    models::{
-        ApiEnvelope, CandlePageResponse, TossCandleRaw, TossErrorEnvelope, TossPriceRaw,
-        TossStockRaw,
-    },
+    models::{ApiEnvelope, CandlePageResponse, TossCandleRaw, TossPriceRaw, TossStockRaw},
 };
 
 const PRICE_GROUP: TossRateLimitGroup = TossRateLimitGroup::MarketData;
@@ -671,20 +668,7 @@ fn build_candles(response: TossInvestResponse) -> Result<Vec<TossCandleRaw>, Err
 }
 
 fn build_stock_request_error(endpoint: &str, response: &TossInvestResponse) -> Error {
-    if let Ok(error) = response.json::<TossErrorEnvelope>() {
-        return anyhow!(
-            "Toss Invest {endpoint} request failed with status {} (request_id: {}, code: {}, message: {})",
-            response.status(),
-            error.error.request_id.as_deref().unwrap_or("unknown"),
-            error.error.code,
-            error.error.message,
-        );
-    }
-
-    anyhow!(
-        "Toss Invest {endpoint} request failed with status {}",
-        response.status()
-    )
+    response.request_error(endpoint).into()
 }
 
 fn build_stock_quote(
@@ -708,17 +692,17 @@ fn build_stock_quote(
     };
 
     match active_price_field(phase) {
-        ActivePriceField::PreMarket => {
+        ActivePriceField::Pre => {
             quote.pre_market_price = Some(price.price);
             quote.pre_market_change = change.change;
             quote.pre_market_change_percent = change.change_percent;
         }
-        ActivePriceField::RegularMarket => {
+        ActivePriceField::Regular => {
             quote.regular_market_price = Some(price.price);
             quote.regular_market_change = change.change;
             quote.regular_market_change_percent = change.change_percent;
         }
-        ActivePriceField::PostMarket => {
+        ActivePriceField::Post => {
             quote.post_market_price = Some(price.price);
             quote.post_market_change = change.change;
             quote.post_market_change_percent = change.change_percent;
@@ -856,19 +840,19 @@ fn most_recent_regular_close_date(
 fn active_price_field(phase: TossMarketSessionPhase) -> ActivePriceField {
     match phase {
         TossMarketSessionPhase::DayMarket | TossMarketSessionPhase::PreMarket => {
-            ActivePriceField::PreMarket
+            ActivePriceField::Pre
         }
-        TossMarketSessionPhase::AfterMarket => ActivePriceField::PostMarket,
+        TossMarketSessionPhase::AfterMarket => ActivePriceField::Post,
         TossMarketSessionPhase::RegularMarket
         | TossMarketSessionPhase::Closed
-        | TossMarketSessionPhase::Unknown => ActivePriceField::RegularMarket,
+        | TossMarketSessionPhase::Unknown => ActivePriceField::Regular,
     }
 }
 
 enum ActivePriceField {
-    PreMarket,
-    RegularMarket,
-    PostMarket,
+    Pre,
+    Regular,
+    Post,
 }
 
 fn close_for_target(
@@ -1369,8 +1353,17 @@ mod tests {
     }
 
     #[test]
-    fn stock_quote_fields_follow_pre_regular_after_and_closed_phase() {
+    fn stock_quote_fields_follow_each_market_session_phase() {
         let phases = [
+            (
+                TossMarketSessionPhase::DayMarket,
+                Some(100.5),
+                None,
+                None,
+                Some(0.5),
+                None,
+                None,
+            ),
             (
                 TossMarketSessionPhase::PreMarket,
                 Some(101.0),
@@ -1405,6 +1398,15 @@ mod tests {
                 None,
                 None,
                 Some(4.0),
+                None,
+            ),
+            (
+                TossMarketSessionPhase::Unknown,
+                None,
+                Some(105.0),
+                None,
+                None,
+                Some(5.0),
                 None,
             ),
         ];

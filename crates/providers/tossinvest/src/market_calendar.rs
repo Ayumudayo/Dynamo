@@ -1,12 +1,12 @@
 use std::fmt;
 
-use anyhow::{Context, Result, anyhow};
+use anyhow::{Context, Result};
 use chrono::{DateTime, NaiveDate, TimeDelta, TimeZone, Utc};
 use reqwest::Method;
 
 use crate::{
     TossInvestClient, TossInvestResponse, TossRateLimitGroup,
-    models::{ApiEnvelope, TossErrorEnvelope, TossMarketCalendarRaw, TossMarketDayRaw},
+    models::{ApiEnvelope, TossMarketCalendarRaw, TossMarketDayRaw},
 };
 
 const MARKET_CALENDAR_PATH: &str = "/api/v1/market-calendar/US";
@@ -129,20 +129,7 @@ fn build_market_calendar(response: TossInvestResponse) -> Result<TossMarketCalen
 }
 
 fn build_market_calendar_request_error(response: &TossInvestResponse) -> anyhow::Error {
-    if let Ok(error) = response.json::<TossErrorEnvelope>() {
-        return anyhow!(
-            "Toss Invest market-calendar request failed with status {} (request_id: {}, code: {}, message: {})",
-            response.status(),
-            error.error.request_id.as_deref().unwrap_or("unknown"),
-            error.error.code,
-            error.error.message,
-        );
-    }
-
-    anyhow!(
-        "Toss Invest market-calendar request failed with status {}",
-        response.status()
-    )
+    response.request_error("market-calendar").into()
 }
 
 fn classify_day_session(

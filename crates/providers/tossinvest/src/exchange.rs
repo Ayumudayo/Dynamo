@@ -12,7 +12,7 @@ use tokio::sync::RwLock;
 
 use crate::{
     TossInvestClient, TossInvestResponse, TossRateLimitGroup,
-    models::{ApiEnvelope, TossErrorEnvelope, TossExchangeRateRaw},
+    models::{ApiEnvelope, TossExchangeRateRaw},
 };
 
 const USD: &str = "USD";
@@ -182,20 +182,7 @@ fn build_fetched_exchange_rate(response: TossInvestResponse) -> Result<FetchedEx
 }
 
 fn build_exchange_request_error(response: &TossInvestResponse) -> Error {
-    if let Ok(error) = response.json::<TossErrorEnvelope>() {
-        return anyhow!(
-            "Toss Invest exchange-rate request failed with status {} (request_id: {}, code: {}, message: {})",
-            response.status(),
-            error.error.request_id.as_deref().unwrap_or("unknown"),
-            error.error.code,
-            error.error.message,
-        );
-    }
-
-    anyhow!(
-        "Toss Invest exchange-rate request failed with status {}",
-        response.status()
-    )
+    response.request_error("exchange-rate").into()
 }
 
 fn parse_mid_rate(value: &str) -> Result<f64, Error> {

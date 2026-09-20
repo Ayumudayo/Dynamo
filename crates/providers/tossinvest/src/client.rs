@@ -2,6 +2,7 @@ use std::{
     collections::BTreeMap,
     fmt,
     sync::{Arc, Mutex as StdMutex, OnceLock, Weak},
+    time::Duration,
 };
 
 use anyhow::{Context, Result, anyhow};
@@ -21,6 +22,9 @@ use crate::{
 
 const OAUTH_TOKEN_PATH: &str = "/oauth2/token";
 const TOKEN_REFRESH_SKEW_SECONDS: i64 = 60;
+const TOSS_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
+const TOSS_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+const TOSS_TOTAL_DEADLINE: Duration = Duration::from_secs(15);
 
 #[derive(Debug, Clone)]
 pub struct TossInvestResponse {
@@ -40,6 +44,24 @@ impl TossInvestResponse {
 
     pub fn body(&self) -> &[u8] {
         &self.body
+    }
+
+    /// Returns a structured error for a non-successful Toss API response.
+    ///
+    /// Callers should keep this error intact when propagating it so consumers can
+    /// distinguish a provider-wide maintenance response from an endpoint-specific
+    /// failure without inspecting localized response text.
+    pub fn request_error(&self, endpoint: impl Into<String>) -> TossInvestRequestError {
+        let api_error = self
+            .json::<TossErrorEnvelope>()
+            .ok()
+            .map(|envelope| TossInvestApiError::from(envelope.error));
+
+        TossInvestRequestError {
+            endpoint: endpoint.into(),
+            status: self.status,
+            api_error,
+        }
     }
 
     pub fn text(&self) -> Result<String> {
@@ -95,6 +117,67 @@ impl TossInvestResponse {
     }
 }
 
+/// A non-success response from the Toss Invest API.
+///
+/// `maintenance` is an API error code, rather than a localized message.  It is
+/// therefore safe for downstream commands and jobs to use for stable recovery
+/// behavior and user-facing grouping.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TossInvestRequestError {
+    endpoint: String,
+    status: StatusCode,
+    api_error: Option<TossInvestApiError>,
+}
+
+impl TossInvestRequestError {
+    pub fn endpoint(&self) -> &str {
+        &self.endpoint
+    }
+
+    pub fn status(&self) -> StatusCode {
+        self.status
+    }
+
+    pub fn api_error(&self) -> Option<&TossInvestApiError> {
+        self.api_error.as_ref()
+    }
+
+    pub fn code(&self) -> Option<&str> {
+        self.api_error
+            .as_ref()
+            .and_then(|error| error.code.as_deref())
+    }
+
+    pub fn is_maintenance(&self) -> bool {
+        self.code()
+            .is_some_and(|code| code.trim().eq_ignore_ascii_case("maintenance"))
+    }
+}
+
+impl fmt::Display for TossInvestRequestError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if let Some(error) = &self.api_error {
+            return write!(
+                f,
+                "Toss Invest {} request failed with status {} (request_id: {}, code: {}, message: {})",
+                self.endpoint,
+                self.status,
+                error.request_id.as_deref().unwrap_or("unknown"),
+                error.code.as_deref().unwrap_or("unknown"),
+                error.message.as_deref().unwrap_or("unknown"),
+            );
+        }
+
+        write!(
+            f,
+            "Toss Invest {} request failed with status {}",
+            self.endpoint, self.status
+        )
+    }
+}
+
+impl std::error::Error for TossInvestRequestError {}
+
 #[derive(Clone)]
 pub struct TossInvestClient {
     http_client: Client,
@@ -107,7 +190,11 @@ impl TossInvestClient {
     /// so later provider tasks can safely construct shared service wrappers around one client.
     pub fn new(config: TossInvestConfig) -> Self {
         Self {
-            http_client: Client::new(),
+            http_client: Client::builder()
+                .connect_timeout(TOSS_CONNECT_TIMEOUT)
+                .timeout(TOSS_REQUEST_TIMEOUT)
+                .build()
+                .expect("fixed Toss HTTP client configuration should be valid"),
             shared_state: shared_state_for(&config),
             config,
         }
@@ -157,6 +244,46 @@ impl TossInvestClient {
     }
 
     async fn send_authenticated_with<E, Fut>(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+        execute: E,
+    ) -> Result<TossInvestResponse>
+    where
+        E: FnMut(RequestBuilder) -> Fut,
+        Fut: std::future::Future<Output = Result<TossInvestResponse>>,
+    {
+        self.send_authenticated_with_deadline(group, method, path, TOSS_TOTAL_DEADLINE, execute)
+            .await
+    }
+
+    async fn send_authenticated_with_deadline<E, Fut>(
+        &self,
+        group: TossRateLimitGroup,
+        method: Method,
+        path: &str,
+        total_deadline: Duration,
+        execute: E,
+    ) -> Result<TossInvestResponse>
+    where
+        E: FnMut(RequestBuilder) -> Fut,
+        Fut: std::future::Future<Output = Result<TossInvestResponse>>,
+    {
+        tokio::time::timeout(
+            total_deadline,
+            self.send_authenticated_attempts(group, method, path, execute),
+        )
+        .await
+        .map_err(|_| {
+            anyhow!(
+                "Toss authenticated operation exceeded its {} ms total deadline",
+                total_deadline.as_millis()
+            )
+        })?
+    }
+
+    async fn send_authenticated_attempts<E, Fut>(
         &self,
         group: TossRateLimitGroup,
         method: Method,
@@ -409,13 +536,12 @@ fn build_oauth_error(status: reqwest::StatusCode, body: &str) -> anyhow::Error {
     }
 
     if let Ok(envelope) = serde_json::from_str::<TossErrorEnvelope>(body) {
-        let error = TossInvestApiError::from(envelope.error);
-        return anyhow!(
-            "Toss OAuth token request failed with status {status} (request_id: {}, code: {}, message: {})",
-            error.request_id.as_deref().unwrap_or("unknown"),
-            error.code.as_deref().unwrap_or("unknown"),
-            error.message.as_deref().unwrap_or("unknown"),
-        );
+        return TossInvestRequestError {
+            endpoint: "OAuth token".to_string(),
+            status,
+            api_error: Some(TossInvestApiError::from(envelope.error)),
+        }
+        .into();
     }
 
     anyhow!("Toss OAuth token request failed with status {status}")
@@ -498,7 +624,11 @@ impl TossInvestClient {
 mod tests {
     use std::{
         collections::{BTreeMap, BTreeSet},
-        sync::Arc,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
     };
 
     use chrono::{TimeDelta, Utc};
@@ -509,7 +639,10 @@ mod tests {
 
     use crate::TossRateLimitGroup;
 
-    use super::{CachedAccessToken, TossInvestClient, TossInvestResponse, build_oauth_error};
+    use super::{
+        CachedAccessToken, TossInvestClient, TossInvestRequestError, TossInvestResponse,
+        build_oauth_error,
+    };
 
     const DEFAULT_TEST_BASE_URL: &str = "https://openapi.tossinvest.com";
 
@@ -556,6 +689,70 @@ mod tests {
 
         assert!(!fresh_token.needs_refresh(now));
         assert!(expiring_token.needs_refresh(now));
+    }
+
+    #[test]
+    fn request_error_classifies_maintenance_from_api_code_not_localized_message() {
+        let response = TossInvestResponse::test_json(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{
+                "error": {
+                    "requestId": "request-123",
+                    "code": " MAINTENANCE ",
+                    "message": "점검 중입니다. 잠시 후 다시 시도해 주세요."
+                }
+            }"#,
+        );
+
+        let error = response.request_error("exchange-rate");
+
+        assert!(error.is_maintenance());
+        assert_eq!(error.endpoint(), "exchange-rate");
+        assert_eq!(error.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(error.code(), Some(" MAINTENANCE "));
+        assert!(error.to_string().contains("request-123"));
+        assert!(error.to_string().contains("점검 중입니다"));
+    }
+
+    #[test]
+    fn request_error_retains_non_maintenance_api_context() {
+        let response = TossInvestResponse::test_json(
+            StatusCode::BAD_REQUEST,
+            r#"{
+                "error": {
+                    "requestId": "request-456",
+                    "code": "invalid-request",
+                    "message": "invalid currency"
+                }
+            }"#,
+        );
+
+        let error = response.request_error("exchange-rate");
+
+        assert!(!error.is_maintenance());
+        assert_eq!(error.code(), Some("invalid-request"));
+        assert_eq!(
+            error.to_string(),
+            "Toss Invest exchange-rate request failed with status 400 Bad Request (request_id: request-456, code: invalid-request, message: invalid currency)"
+        );
+    }
+
+    #[test]
+    fn oauth_toss_maintenance_error_preserves_structured_classification() {
+        let error = build_oauth_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            r#"{
+                "error": {
+                    "requestId": "request-789",
+                    "code": "maintenance",
+                    "message": "any locale is fine"
+                }
+            }"#,
+        );
+
+        let structured = error.downcast_ref::<TossInvestRequestError>().unwrap();
+        assert!(structured.is_maintenance());
+        assert_eq!(structured.endpoint(), "OAuth token");
     }
 
     #[tokio::test]
@@ -885,6 +1082,113 @@ mod tests {
             seen_headers.lock().unwrap().as_slice(),
             ["Bearer old-token", "Bearer new-token"]
         );
+    }
+
+    #[tokio::test]
+    async fn oauth_total_deadline_includes_waiting_for_token_lock() {
+        let client = TossInvestClient::new(test_config("client-id-deadline-token-lock"));
+        let _token_lock = client.shared_state.access_token.lock().await;
+
+        let error = client
+            .send_authenticated_with_deadline(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                Duration::from_millis(20),
+                |_| async { unreachable!("request must not execute while token lock is held") },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("total deadline"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_total_deadline_includes_endpoint_limiter_wait() {
+        let client = TossInvestClient::new(test_config("client-id-deadline-endpoint-limiter"));
+        client
+            .test_set_cached_token(
+                "cached-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+        client
+            .rate_limiter()
+            .acquire(TossRateLimitGroup::MarketData)
+            .await;
+
+        let error = client
+            .send_authenticated_with_deadline(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                Duration::from_millis(20),
+                |_| async { unreachable!("request must not execute before limiter admission") },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("total deadline"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn oauth_total_deadline_is_not_reset_for_second_attempt_body() {
+        let client = TossInvestClient::new(test_config("client-id-deadline-second-body"));
+        client
+            .test_set_cached_token("old-token", "Bearer", Utc::now() + TimeDelta::seconds(3600))
+            .await;
+        client
+            .test_set_next_refresh_token(
+                "new-token",
+                "Bearer",
+                Utc::now() + TimeDelta::seconds(3600),
+            )
+            .await;
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_for_execute = attempts.clone();
+
+        let error = client
+            .send_authenticated_with_deadline(
+                TossRateLimitGroup::MarketData,
+                Method::GET,
+                "/api/v1/prices",
+                Duration::from_millis(250),
+                move |_| {
+                    let attempt = attempts_for_execute.fetch_add(1, Ordering::SeqCst);
+                    async move {
+                        if attempt == 0 {
+                            Ok(TossInvestResponse::test_json(
+                                StatusCode::UNAUTHORIZED,
+                                r#"{"error":{"code":"invalid-token","message":"expired","requestId":"req-1"}}"#,
+                            ))
+                        } else {
+                            tokio::time::sleep(Duration::from_millis(250)).await;
+                            Ok(TossInvestResponse::test_json(
+                                StatusCode::OK,
+                                r#"{"result":{"ok":true}}"#,
+                            ))
+                        }
+                    }
+                },
+            )
+            .await
+            .unwrap_err()
+            .to_string();
+
+        assert!(
+            error.contains("total deadline"),
+            "unexpected error: {error}"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 
     #[tokio::test]

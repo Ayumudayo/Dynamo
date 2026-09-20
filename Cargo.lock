@@ -792,6 +792,7 @@ name = "dynamo-dashboard"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "axum",
  "axum-extra",
  "chrono",
@@ -802,6 +803,7 @@ dependencies = [
  "dynamo-observability",
  "dynamo-ops",
  "dynamo-persistence-api",
+ "dynamo-repositories",
  "dynamo-runtime-api",
  "dynamo-settings",
  "futures-util",
@@ -809,7 +811,9 @@ dependencies = [
  "reqwest",
  "serde",
  "serde_json",
+ "sha2",
  "tokio",
+ "tower",
  "tracing",
  "url",
 ]
@@ -1019,6 +1023,7 @@ dependencies = [
 name = "dynamo-module-stock"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "dynamo-access",
  "dynamo-domain-stock",
  "dynamo-module-kit",
@@ -1088,6 +1093,7 @@ name = "dynamo-persistence-api"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dynamo-domain-giveaway",
  "dynamo-domain-invite",
@@ -1097,6 +1103,7 @@ dependencies = [
  "dynamo-repositories",
  "dynamo-settings",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1106,7 +1113,6 @@ dependencies = [
  "anyhow",
  "async-trait",
  "chrono",
- "dotenvy",
  "dynamo-domain-giveaway",
  "dynamo-domain-invite",
  "dynamo-domain-moderation",

@@ -8,3 +8,4 @@ README.md export-ignore
 * text=auto
 *.sh text eol=lf
 *.ps1 text eol=crlf
+crates/dashboard/assets/fonts/*.txt text eol=lf

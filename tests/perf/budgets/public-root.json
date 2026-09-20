@@ -1,0 +1,5 @@
+{
+  "max_p95_ms": 10,
+  "max_failed": 0,
+  "max_decoded_bytes_per_request": 27041
+}

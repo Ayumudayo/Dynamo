@@ -1,8 +1,8 @@
 use crate::{
     constants::{MAX_MANUAL_REFRESHES, STOCK_REFRESH_BUTTON_ID},
     state::{
-        edit_message, fetch_response_for_kind, initialize_session_loop, session_for_message,
-        total_updates,
+        ManualRestartStart, edit_message, edit_refresh_components, fetch_response_for_session,
+        initialize_session_loop, session_for_message, try_begin_manual_restart,
     },
 };
 use dynamo_runtime_api::Error;
@@ -32,9 +32,9 @@ async fn handle_refresh_button(
     component: &ComponentInteraction,
 ) -> Result<(), Error> {
     let message_id = component.message.id.get();
-    let session = session_for_message(message_id).await;
+    let entry = session_for_message(message_id).await;
 
-    let Some(session) = session else {
+    let Some(entry) = entry else {
         component
             .create_response(
                 ctx,
@@ -47,10 +47,16 @@ async fn handle_refresh_button(
             .await?;
         return Ok(());
     };
+    let session = entry.session.clone();
 
-    {
+    let start = {
         let mut state = session.lock().await;
-        if state.active {
+        try_begin_manual_restart(&mut state)
+    };
+
+    match start {
+        ManualRestartStart::Started => {}
+        ManualRestartStart::ActiveLoop => {
             component
                 .create_response(
                     ctx,
@@ -63,8 +69,7 @@ async fn handle_refresh_button(
                 .await?;
             return Ok(());
         }
-
-        if state.manual_restart_in_progress {
+        ManualRestartStart::AlreadyInProgress => {
             component
                 .create_response(
                     ctx,
@@ -79,8 +84,7 @@ async fn handle_refresh_button(
                 .await?;
             return Ok(());
         }
-
-        if state.manual_refresh_count >= MAX_MANUAL_REFRESHES {
+        ManualRestartStart::LimitReached => {
             component
                 .create_response(
                     ctx,
@@ -96,17 +100,30 @@ async fn handle_refresh_button(
                 .await?;
             return Ok(());
         }
-
-        state.manual_restart_in_progress = true;
     }
 
     component.defer_ephemeral(ctx).await?;
 
-    let (kind, service) = {
-        let state = session.lock().await;
-        (state.kind.clone(), state.service.clone())
+    if let Err(error) =
+        edit_refresh_components(&ctx.http, component.channel_id, message_id, true).await
+    {
+        let mut state = session.lock().await;
+        state.manual_restart_in_progress = false;
+        return Err(error);
+    }
+
+    let response = match fetch_response_for_session(&session, 0).await {
+        Ok(value) => value,
+        Err(error) => {
+            {
+                let mut state = session.lock().await;
+                state.manual_restart_in_progress = false;
+            }
+            let _ =
+                edit_refresh_components(&ctx.http, component.channel_id, message_id, false).await;
+            return Err(error);
+        }
     };
-    let response = fetch_response_for_kind(service.as_ref(), &kind, 0, total_updates()).await?;
 
     let Some(response) = response else {
         {
@@ -115,6 +132,8 @@ async fn handle_refresh_button(
             state.last_stop_reason = Some("fetch_failed");
             state.active = false;
         }
+
+        let _ = edit_refresh_components(&ctx.http, component.channel_id, message_id, false).await;
 
         component
             .edit_response(
@@ -126,13 +145,21 @@ async fn handle_refresh_button(
         return Ok(());
     };
 
-    edit_message(
+    if let Err(error) = edit_message(
         &ctx.http,
         component.channel_id,
         message_id,
         response.embed.clone(),
+        response.stop_reason.is_none(),
     )
-    .await?;
+    .await
+    {
+        let mut state = session.lock().await;
+        state.manual_restart_in_progress = false;
+        drop(state);
+        let _ = edit_refresh_components(&ctx.http, component.channel_id, message_id, false).await;
+        return Err(error);
+    }
 
     {
         let mut state = session.lock().await;
@@ -144,7 +171,7 @@ async fn handle_refresh_button(
         ctx.http.clone(),
         component.channel_id,
         message_id,
-        session,
+        entry,
         response.stop_reason,
     )
     .await;
