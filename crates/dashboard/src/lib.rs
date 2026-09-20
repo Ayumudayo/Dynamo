@@ -596,7 +596,6 @@ struct GuildCard {
     id: u64,
     name: String,
     icon_url: Option<String>,
-    manageable: bool,
     bot_presence: BotGuildPresence,
     manage_url: String,
     invite_url: String,
@@ -1154,9 +1153,11 @@ async fn deployment_page(
             }
         }
     };
-    let script = include_mutation_script
-        .then(|| format!("<script>{}</script>", dashboard_script()))
-        .unwrap_or_default();
+    let script = if include_mutation_script {
+        format!("<script>{}</script>", dashboard_script())
+    } else {
+        String::new()
+    };
     let content = format!(
         "{}{modals}{script}",
         render_dashboard_page_shell(
@@ -1454,9 +1455,11 @@ async fn guild_page(
             }
         }
     };
-    let script = include_mutation_script
-        .then(|| format!("<script>{}</script>", dashboard_script()))
-        .unwrap_or_default();
+    let script = if include_mutation_script {
+        format!("<script>{}</script>", dashboard_script())
+    } else {
+        String::new()
+    };
     let content = format!(
         "{}{modals}{script}",
         render_dashboard_page_shell(
@@ -1673,7 +1676,6 @@ async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) ->
             id: guild.id,
             name: guild.name.clone(),
             icon_url: guild_icon_url(&guild),
-            manageable: true,
             bot_presence,
             manage_url: format!("/guild/{}", guild.id),
             invite_url: build_bot_invite_url(state, guild.id),
@@ -1704,7 +1706,6 @@ async fn load_guild_card(
         id: guild.id,
         name: guild.name.clone(),
         icon_url: guild_icon_url(guild),
-        manageable: true,
         bot_presence: bot_is_in_guild(state, guild.id).await,
         manage_url: format!("/guild/{}", guild.id),
         invite_url: build_bot_invite_url(state, guild.id),
@@ -3362,10 +3363,7 @@ fn command_category_label(entry: &CommandCatalogEntry) -> String {
 }
 
 fn module_category_label_from_name(name: &str) -> &str {
-    match name {
-        "Game Info" => "Game Info",
-        _ => name,
-    }
+    name
 }
 
 fn modal_id_for_module(scope: &str, module_id: &str) -> String {
@@ -3795,6 +3793,7 @@ async fn list_live_module_states(
     .into_response()
 }
 
+#[allow(clippy::result_large_err)]
 async fn require_api_session(
     state: &DashboardState,
     jar: &CookieJar,
@@ -3808,6 +3807,7 @@ async fn require_api_session(
     })
 }
 
+#[allow(clippy::result_large_err)]
 async fn require_api_admin(
     state: &DashboardState,
     jar: &CookieJar,
@@ -3826,6 +3826,7 @@ async fn require_api_admin(
     }
 }
 
+#[allow(clippy::result_large_err)]
 async fn require_api_guild_access(
     state: &DashboardState,
     jar: &CookieJar,
@@ -3869,6 +3870,7 @@ async fn require_api_guild_access(
     }
 }
 
+#[allow(clippy::result_large_err)]
 async fn require_current_api_guild_access(
     state: &DashboardState,
     jar: &CookieJar,
@@ -5320,7 +5322,6 @@ mod tests {
             id: 42,
             name: "Unavailable Guild".to_string(),
             icon_url: None,
-            manageable: true,
             bot_presence: BotGuildPresence::Unavailable,
             manage_url: "/guild/42".to_string(),
             invite_url: "https://discord.com/invite".to_string(),
@@ -5538,7 +5539,6 @@ mod tests {
                 id: 20,
                 name: "beta".to_string(),
                 icon_url: None,
-                manageable: true,
                 bot_presence: BotGuildPresence::Missing,
                 manage_url: "/guild/20".to_string(),
                 invite_url: "https://discord.com/invite/20".to_string(),
@@ -5547,7 +5547,6 @@ mod tests {
                 id: 3,
                 name: "Alpha".to_string(),
                 icon_url: None,
-                manageable: true,
                 bot_presence: BotGuildPresence::Missing,
                 manage_url: "/guild/3".to_string(),
                 invite_url: "https://discord.com/invite/3".to_string(),
@@ -5556,7 +5555,6 @@ mod tests {
                 id: 4,
                 name: "alpha".to_string(),
                 icon_url: None,
-                manageable: true,
                 bot_presence: BotGuildPresence::Missing,
                 manage_url: "/guild/4".to_string(),
                 invite_url: "https://discord.com/invite/4".to_string(),
