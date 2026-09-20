@@ -1619,7 +1619,7 @@ mod tests {
                 .expect("guild counters"),
         )
         .await;
-        assert_eq!(guild_counters["repository_reads"], 3);
+        assert_eq!(guild_counters["repository_reads"], 2);
         assert_eq!(guild_counters["repository_mutations"], 0);
         assert_eq!(guild_counters["provider_guild_lookups"], 1);
 
@@ -1710,7 +1710,7 @@ mod tests {
             .clone()
             .oneshot(request(
                 "GET",
-                runtime.guild_path(),
+                &format!("{}?tab=modules", runtime.guild_path()),
                 Some((SESSION_COOKIE_NAME, &runtime.cookie_value)),
             ))
             .await
