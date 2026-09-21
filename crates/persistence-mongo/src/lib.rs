@@ -10,212 +10,29 @@ pub use config::{DEFAULT_DATABASE_NAME, MongoPersistenceConfig};
 pub use initialization::MongoInitializationReport;
 pub use store::MongoPersistence;
 
-use crate::documents::DashboardAuditLogDocument;
-
-use async_trait::async_trait;
-use dynamo_ops::{
-    DashboardAuditLogEntry, DashboardAuditLogPage, DashboardAuditLogQuery,
-    DashboardAuditLogRepository,
-};
-use futures_util::TryStreamExt;
-use mongodb::bson::{doc, to_bson};
-
 type Error = anyhow::Error;
-
-#[async_trait]
-impl DashboardAuditLogRepository for MongoPersistence {
-    async fn append(
-        &self,
-        record: DashboardAuditLogEntry,
-    ) -> Result<DashboardAuditLogEntry, Error> {
-        let mut document = DashboardAuditLogDocument::from_domain(record);
-        let result = self
-            .dashboard_audit_logs
-            .insert_one(document.clone())
-            .await?;
-        document.id = result.inserted_id.as_object_id();
-        document.into_domain()
-    }
-
-    async fn list(&self, query: DashboardAuditLogQuery) -> Result<DashboardAuditLogPage, Error> {
-        let page = query.page.max(1);
-        let page_size = query.page_size.clamp(1, 100);
-        let skip = page.saturating_sub(1).saturating_mul(page_size);
-
-        let mut filter = doc! {
-            "scope": to_bson(&query.scope)?,
-        };
-        if let Some(guild_id) = query.guild_id {
-            filter.insert("guild_id", guild_id.to_string());
-        }
-        if let Some(entity_type) = query.entity_type {
-            filter.insert("entity_type", to_bson(&entity_type)?);
-        }
-        if let Some(action) = query.action {
-            filter.insert("action", to_bson(&action)?);
-        }
-
-        let total = self
-            .dashboard_audit_logs
-            .count_documents(filter.clone())
-            .await?;
-        let mut cursor = self
-            .dashboard_audit_logs
-            .find(filter)
-            .sort(doc! { "timestamp": -1, "_id": -1 })
-            .skip(skip)
-            .limit(page_size as i64)
-            .await?;
-
-        let mut entries = Vec::new();
-        while let Some(document) = cursor.try_next().await? {
-            entries.push(document.into_domain()?);
-        }
-
-        Ok(DashboardAuditLogPage {
-            entries,
-            page,
-            page_size,
-            total,
-        })
-    }
-}
 
 #[cfg(test)]
 mod tests {
+    mod dashboard_audit;
+    mod support;
+
+    use self::support::{
+        IsolatedTestOutcome, isolated_database_name, resolve_isolated_test_outcome,
+        run_isolated_mongo_test, run_isolated_test_lifecycle,
+    };
     use super::{DEFAULT_DATABASE_NAME, MongoPersistence};
     use crate::MongoInitializationReport;
     use crate::documents::{DeploymentSettingsDocument, GuildSettingsDocument};
-    use dynamo_ops::DashboardAuditLogRepository;
-    use dynamo_ops::{
-        DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
-        DashboardAuditLogQuery, DashboardAuditScope,
-    };
     use dynamo_repositories::{DeploymentSettingsRepository, GuildSettingsRepository};
     use dynamo_settings::{
         DeploymentCommandSettings, DeploymentModuleSettings, GuildCommandSettings,
         GuildModuleSettings,
     };
     use futures_util::FutureExt;
-    use mongodb::{
-        Client,
-        bson::{Bson, doc, oid::ObjectId, to_bson},
-    };
+    use mongodb::bson::{Bson, doc, to_bson};
     use serde_json::json;
-    use std::{
-        any::Any,
-        env,
-        future::Future,
-        panic::{AssertUnwindSafe, catch_unwind, resume_unwind},
-    };
-
-    type PanicPayload = Box<dyn Any + Send + 'static>;
-
-    enum IsolatedTestOutcome {
-        Completed(anyhow::Result<()>),
-        Panicked(PanicPayload),
-    }
-
-    struct IsolatedMongoTest {
-        client: Client,
-        database_name: String,
-    }
-
-    impl IsolatedMongoTest {
-        async fn create() -> anyhow::Result<Self> {
-            let connection_string = env::var("MONGODB_URI_FOR_ISOLATED_TEST").map_err(|_| {
-                anyhow::anyhow!("isolated Mongo tests require the dedicated PowerShell runner")
-            })?;
-            let client = Client::with_uri_str(connection_string)
-                .await
-                .map_err(|_| anyhow::anyhow!("isolated Mongo client initialization failed"))?;
-
-            Ok(Self {
-                client,
-                database_name: isolated_database_name(),
-            })
-        }
-
-        fn store(&self) -> MongoPersistence {
-            MongoPersistence::from_database(self.client.database(&self.database_name))
-        }
-
-        async fn cleanup(self) -> anyhow::Result<()> {
-            self.client
-                .database(&self.database_name)
-                .drop()
-                .await
-                .map_err(|_| anyhow::anyhow!("isolated Mongo database drop failed"))?;
-
-            let remaining_databases = self
-                .client
-                .list_database_names()
-                .await
-                .map_err(|_| anyhow::anyhow!("isolated Mongo cleanup verification failed"))?;
-            anyhow::ensure!(
-                !remaining_databases
-                    .iter()
-                    .any(|name| name == &self.database_name),
-                "isolated Mongo database still exists after cleanup"
-            );
-            Ok(())
-        }
-    }
-
-    fn isolated_database_name() -> String {
-        format!(
-            "dynmongo_{}_{}",
-            std::process::id(),
-            ObjectId::new().to_hex()
-        )
-    }
-
-    fn resolve_isolated_test_outcome(
-        test_outcome: IsolatedTestOutcome,
-        cleanup_result: anyhow::Result<()>,
-    ) -> anyhow::Result<()> {
-        if let Err(error) = cleanup_result {
-            return Err(anyhow::anyhow!("isolated Mongo cleanup failed: {error}"));
-        }
-
-        match test_outcome {
-            IsolatedTestOutcome::Completed(result) => result,
-            IsolatedTestOutcome::Panicked(payload) => resume_unwind(payload),
-        }
-    }
-
-    async fn run_isolated_test_lifecycle<F, Fut, C, CleanupFut>(
-        test: F,
-        cleanup: C,
-    ) -> anyhow::Result<()>
-    where
-        F: FnOnce() -> Fut,
-        Fut: Future<Output = anyhow::Result<()>>,
-        C: FnOnce() -> CleanupFut,
-        CleanupFut: Future<Output = anyhow::Result<()>>,
-    {
-        let test_outcome = match catch_unwind(AssertUnwindSafe(test)) {
-            Ok(future) => match AssertUnwindSafe(future).catch_unwind().await {
-                Ok(result) => IsolatedTestOutcome::Completed(result),
-                Err(payload) => IsolatedTestOutcome::Panicked(payload),
-            },
-            Err(payload) => IsolatedTestOutcome::Panicked(payload),
-        };
-        let cleanup_result = cleanup().await;
-
-        resolve_isolated_test_outcome(test_outcome, cleanup_result)
-    }
-
-    async fn run_isolated_mongo_test<F, Fut>(test: F) -> anyhow::Result<()>
-    where
-        F: FnOnce(MongoPersistence) -> Fut,
-        Fut: Future<Output = anyhow::Result<()>>,
-    {
-        let isolated = IsolatedMongoTest::create().await?;
-        let store = isolated.store();
-
-        run_isolated_test_lifecycle(|| test(store), || isolated.cleanup()).await
-    }
+    use std::panic::{AssertUnwindSafe, catch_unwind};
 
     #[test]
     fn initialization_report_can_include_dashboard_audit_collection() {
@@ -771,45 +588,5 @@ mod tests {
     #[ignore = "requires scripts/test-isolated-mongo.ps1 and a disposable MongoDB"]
     async fn settings_round_trip_against_mongo() -> anyhow::Result<()> {
         run_isolated_mongo_test(settings_round_trip_body).await
-    }
-
-    async fn dashboard_audit_logs_round_trip_body(store: MongoPersistence) -> anyhow::Result<()> {
-        store.ensure_initialized().await?;
-        let marker = format!("integration::{}", chrono::Utc::now().timestamp_millis());
-        let entry = DashboardAuditLogEntry {
-            id: None,
-            timestamp: chrono::Utc::now(),
-            actor_user_id: 1,
-            actor_username: "integration-test".to_string(),
-            scope: DashboardAuditScope::Guild,
-            guild_id: Some(42),
-            entity_type: DashboardAuditEntityType::Command,
-            entity_id: marker.clone(),
-            action: DashboardAuditAction::SaveSettings,
-            summary: "Saved guild settings for command integration::test.".to_string(),
-        };
-
-        let saved = store.append(entry).await?;
-        assert!(saved.id.is_some());
-
-        let page = store
-            .list(DashboardAuditLogQuery {
-                scope: DashboardAuditScope::Guild,
-                guild_id: Some(42),
-                entity_type: Some(DashboardAuditEntityType::Command),
-                action: Some(DashboardAuditAction::SaveSettings),
-                page: 1,
-                page_size: 10,
-            })
-            .await?;
-
-        assert!(page.entries.iter().any(|row| row.entity_id == marker));
-        Ok(())
-    }
-
-    #[tokio::test]
-    #[ignore = "requires scripts/test-isolated-mongo.ps1 and a disposable MongoDB"]
-    async fn dashboard_audit_logs_round_trip_against_mongo() -> anyhow::Result<()> {
-        run_isolated_mongo_test(dashboard_audit_logs_round_trip_body).await
     }
 }

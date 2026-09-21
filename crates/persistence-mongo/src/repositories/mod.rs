@@ -1,3 +1,4 @@
+mod dashboard_audit;
 mod giveaways;
 mod invites;
 mod provider_state;
