@@ -8,9 +8,8 @@ use std::{
 
 use axum::{
     Json, Router,
-    body::Body,
     extract::{Path, Query, Request, State},
-    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
+    http::{HeaderMap, StatusCode, Uri},
     middleware::{self, Next},
     response::{Html, IntoResponse, Redirect, Response},
     routing::{get, patch, post},
@@ -45,7 +44,9 @@ use tokio::sync::RwLock;
 use tracing::{info, warn};
 use url::Url;
 
-include!(concat!(env!("OUT_DIR"), "/font_assets.rs"));
+mod font_assets;
+
+pub(crate) use font_assets::*;
 
 #[cfg(feature = "perf-harness")]
 mod perf_harness;
@@ -58,7 +59,6 @@ const SESSION_TTL_HOURS: i64 = 24 * 14;
 const OAUTH_STATE_TTL_MINUTES: i64 = 15;
 const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 const DEFAULT_INVITE_PERMISSIONS: u64 = 2_146_958_847;
-const FONT_CACHE_CONTROL: &str = "public, max-age=31536000, immutable";
 const DASHBOARD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
 const DASHBOARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
 
@@ -75,82 +75,6 @@ fn build_dashboard_http_client_with_timeouts(
 
 fn build_dashboard_http_client() -> anyhow::Result<reqwest::Client> {
     build_dashboard_http_client_with_timeouts(DASHBOARD_CONNECT_TIMEOUT, DASHBOARD_REQUEST_TIMEOUT)
-}
-
-fn font_asset_router<S>() -> Router<S>
-where
-    S: Clone + Send + Sync + 'static,
-{
-    Router::new()
-        .route(FIRA_SANS_LIGHT_PATH, get(fira_sans_light_font))
-        .route(FIRA_SANS_REGULAR_PATH, get(fira_sans_regular_font))
-        .route(FIRA_SANS_MEDIUM_PATH, get(fira_sans_medium_font))
-        .route(FIRA_SANS_SEMIBOLD_PATH, get(fira_sans_semibold_font))
-        .route(FIRA_SANS_BOLD_PATH, get(fira_sans_bold_font))
-        .route(FIRA_CODE_VARIABLE_PATH, get(fira_code_variable_font))
-}
-
-fn if_none_match_matches(headers: &HeaderMap, etag: &str) -> bool {
-    headers
-        .get(header::IF_NONE_MATCH)
-        .and_then(|value| value.to_str().ok())
-        .is_some_and(|value| {
-            value.split(',').any(|candidate| {
-                let candidate = candidate.trim();
-                candidate == "*" || candidate == etag || candidate.strip_prefix("W/") == Some(etag)
-            })
-        })
-}
-
-fn font_asset_response(
-    request_headers: &HeaderMap,
-    bytes: &'static [u8],
-    etag: &'static str,
-) -> Response {
-    let not_modified = if_none_match_matches(request_headers, etag);
-    let mut response = if not_modified {
-        let mut response = Response::new(Body::empty());
-        *response.status_mut() = StatusCode::NOT_MODIFIED;
-        response
-    } else {
-        Response::new(Body::from(bytes))
-    };
-    let headers = response.headers_mut();
-    headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("font/woff2"));
-    headers.insert(
-        header::CACHE_CONTROL,
-        HeaderValue::from_static(FONT_CACHE_CONTROL),
-    );
-    headers.insert(header::ETAG, HeaderValue::from_static(etag));
-    headers.insert(
-        header::X_CONTENT_TYPE_OPTIONS,
-        HeaderValue::from_static("nosniff"),
-    );
-    response
-}
-
-async fn fira_sans_light_font(headers: HeaderMap) -> Response {
-    font_asset_response(&headers, FIRA_SANS_LIGHT_BYTES, FIRA_SANS_LIGHT_ETAG)
-}
-
-async fn fira_sans_regular_font(headers: HeaderMap) -> Response {
-    font_asset_response(&headers, FIRA_SANS_REGULAR_BYTES, FIRA_SANS_REGULAR_ETAG)
-}
-
-async fn fira_sans_medium_font(headers: HeaderMap) -> Response {
-    font_asset_response(&headers, FIRA_SANS_MEDIUM_BYTES, FIRA_SANS_MEDIUM_ETAG)
-}
-
-async fn fira_sans_semibold_font(headers: HeaderMap) -> Response {
-    font_asset_response(&headers, FIRA_SANS_SEMIBOLD_BYTES, FIRA_SANS_SEMIBOLD_ETAG)
-}
-
-async fn fira_sans_bold_font(headers: HeaderMap) -> Response {
-    font_asset_response(&headers, FIRA_SANS_BOLD_BYTES, FIRA_SANS_BOLD_ETAG)
-}
-
-async fn fira_code_variable_font(headers: HeaderMap) -> Response {
-    font_asset_response(&headers, FIRA_CODE_VARIABLE_BYTES, FIRA_CODE_VARIABLE_ETAG)
 }
 
 pub async fn run_production() -> anyhow::Result<()> {
