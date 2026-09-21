@@ -1,9 +1,12 @@
 use mongodb::{Client, Collection, Database};
 
 use crate::{
-    DashboardAuditLogDocument, Error, GiveawayDocument, InviteMemberDocument, MemberStatsDocument,
-    MongoPersistenceConfig, ProviderStateDocument, SuggestionDocument, WarningLogDocument,
-    documents::{DeploymentSettingsDocument, GuildSettingsDocument},
+    Error, MongoPersistenceConfig,
+    documents::{
+        DashboardAuditLogDocument, DeploymentSettingsDocument, GiveawayDocument,
+        GuildSettingsDocument, InviteMemberDocument, MemberStatsDocument, ProviderStateDocument,
+        SuggestionDocument, WarningLogDocument,
+    },
 };
 
 #[derive(Clone)]
