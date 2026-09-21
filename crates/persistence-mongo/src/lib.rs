@@ -1,4 +1,14 @@
-use std::{collections::BTreeMap, env};
+mod config;
+mod initialization;
+mod store;
+
+pub use config::{DEFAULT_DATABASE_NAME, MongoPersistenceConfig};
+pub use initialization::MongoInitializationReport;
+pub use store::MongoPersistence;
+
+use std::collections::BTreeMap;
+
+use crate::config::DEPLOYMENT_SETTINGS_ID;
 
 use async_trait::async_trait;
 use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
@@ -24,7 +34,6 @@ use dynamo_settings::{
 };
 use futures_util::TryStreamExt;
 use mongodb::{
-    Client, Collection, Database,
     bson::{Bson, DateTime as BsonDateTime, Document, doc, from_bson, oid::ObjectId, to_bson},
     options::ReturnDocument,
 };
@@ -32,212 +41,7 @@ use serde::{Deserialize, Serialize};
 
 type Error = anyhow::Error;
 
-const DEPLOYMENT_SETTINGS_ID: &str = "global";
-pub const DEFAULT_DATABASE_NAME: &str = "dynamo-rs";
-
-#[derive(Debug, Clone)]
-pub struct MongoInitializationReport {
-    pub database_name: String,
-    pub existing_collections: Vec<String>,
-    pub created_collections: Vec<String>,
-    pub final_collections: Vec<String>,
-    pub deployment_settings_seeded: bool,
-}
-
-#[derive(Debug, Clone)]
-pub struct MongoPersistenceConfig {
-    pub connection_string: String,
-    pub database_name: String,
-}
-
-impl MongoPersistenceConfig {
-    pub fn new(connection_string: impl Into<String>, database_name: impl Into<String>) -> Self {
-        Self {
-            connection_string: connection_string.into(),
-            database_name: database_name.into(),
-        }
-    }
-
-    pub fn from_env() -> Result<Self, Error> {
-        let connection_string = env::var("MONGODB_URI")
-            .or_else(|_| env::var("MONGO_CONNECTION"))
-            .map_err(|_| anyhow::anyhow!("MONGODB_URI or MONGO_CONNECTION must be set"))?;
-        let database_name =
-            env::var("MONGODB_DATABASE").unwrap_or_else(|_| DEFAULT_DATABASE_NAME.to_string());
-
-        Ok(Self::new(connection_string, database_name))
-    }
-
-    pub fn try_from_env() -> Result<Option<Self>, Error> {
-        let connection_string =
-            match env::var("MONGODB_URI").or_else(|_| env::var("MONGO_CONNECTION")) {
-                Ok(value) => value,
-                Err(env::VarError::NotPresent) => return Ok(None),
-                Err(error) => {
-                    return Err(anyhow::anyhow!(
-                        "MongoDB connection environment could not be read: {error}"
-                    ));
-                }
-            };
-        let database_name =
-            env::var("MONGODB_DATABASE").unwrap_or_else(|_| DEFAULT_DATABASE_NAME.to_string());
-
-        Ok(Some(Self::new(connection_string, database_name)))
-    }
-}
-
-#[derive(Clone)]
-pub struct MongoPersistence {
-    database: Database,
-    guild_settings: Collection<GuildSettingsDocument>,
-    deployment_settings: Collection<DeploymentSettingsDocument>,
-    provider_state: Collection<ProviderStateDocument>,
-    suggestions: Collection<SuggestionDocument>,
-    giveaways: Collection<GiveawayDocument>,
-    invite_members: Collection<InviteMemberDocument>,
-    member_stats: Collection<MemberStatsDocument>,
-    warning_logs: Collection<WarningLogDocument>,
-    dashboard_audit_logs: Collection<DashboardAuditLogDocument>,
-}
-
 impl MongoPersistence {
-    pub async fn connect(config: MongoPersistenceConfig) -> Result<Self, Error> {
-        let client = Client::with_uri_str(&config.connection_string).await?;
-        let database = client.database(&config.database_name);
-        let guild_settings = database.collection::<GuildSettingsDocument>("guild_settings");
-        let deployment_settings =
-            database.collection::<DeploymentSettingsDocument>("deployment_settings");
-        let provider_state = database.collection::<ProviderStateDocument>("provider_state");
-        let suggestions = database.collection::<SuggestionDocument>("suggestions");
-        let giveaways = database.collection::<GiveawayDocument>("giveaways");
-        let invite_members = database.collection::<InviteMemberDocument>("members");
-        let member_stats = database.collection::<MemberStatsDocument>("member-stats");
-        let warning_logs = database.collection::<WarningLogDocument>("mod-logs");
-        let dashboard_audit_logs =
-            database.collection::<DashboardAuditLogDocument>("dashboard-audit-logs");
-
-        Ok(Self {
-            database,
-            guild_settings,
-            deployment_settings,
-            provider_state,
-            suggestions,
-            giveaways,
-            invite_members,
-            member_stats,
-            warning_logs,
-            dashboard_audit_logs,
-        })
-    }
-
-    pub async fn ensure_initialized_report(&self) -> Result<MongoInitializationReport, Error> {
-        let existing_collections = self.database.list_collection_names().await?;
-        let mut created_collections = Vec::new();
-
-        if !existing_collections
-            .iter()
-            .any(|name| name == "guild_settings")
-        {
-            self.database.create_collection("guild_settings").await?;
-            created_collections.push("guild_settings".to_string());
-        }
-
-        if !existing_collections
-            .iter()
-            .any(|name| name == "deployment_settings")
-        {
-            self.database
-                .create_collection("deployment_settings")
-                .await?;
-            created_collections.push("deployment_settings".to_string());
-        }
-
-        if !existing_collections
-            .iter()
-            .any(|name| name == "provider_state")
-        {
-            self.database.create_collection("provider_state").await?;
-            created_collections.push("provider_state".to_string());
-        }
-
-        if !existing_collections
-            .iter()
-            .any(|name| name == "suggestions")
-        {
-            self.database.create_collection("suggestions").await?;
-            created_collections.push("suggestions".to_string());
-        }
-
-        if !existing_collections.iter().any(|name| name == "giveaways") {
-            self.database.create_collection("giveaways").await?;
-            created_collections.push("giveaways".to_string());
-        }
-
-        if !existing_collections.iter().any(|name| name == "members") {
-            self.database.create_collection("members").await?;
-            created_collections.push("members".to_string());
-        }
-
-        if !existing_collections
-            .iter()
-            .any(|name| name == "member-stats")
-        {
-            self.database.create_collection("member-stats").await?;
-            created_collections.push("member-stats".to_string());
-        }
-
-        if !existing_collections.iter().any(|name| name == "mod-logs") {
-            self.database.create_collection("mod-logs").await?;
-            created_collections.push("mod-logs".to_string());
-        }
-
-        if !existing_collections
-            .iter()
-            .any(|name| name == "dashboard-audit-logs")
-        {
-            self.database
-                .create_collection("dashboard-audit-logs")
-                .await?;
-            created_collections.push("dashboard-audit-logs".to_string());
-        }
-
-        let deployment_settings_result = self
-            .deployment_settings
-            .update_one(
-                doc! { "_id": DEPLOYMENT_SETTINGS_ID },
-                doc! {
-                    "$setOnInsert": {
-                        "_id": DEPLOYMENT_SETTINGS_ID,
-                        "modules": {}
-                    }
-                },
-            )
-            .upsert(true)
-            .await?;
-
-        let final_collections = self.database.list_collection_names().await?;
-
-        Ok(MongoInitializationReport {
-            database_name: self.database.name().to_string(),
-            existing_collections,
-            created_collections,
-            final_collections,
-            deployment_settings_seeded: deployment_settings_result.upserted_id.is_some(),
-        })
-    }
-
-    pub async fn ensure_initialized(&self) -> Result<(), Error> {
-        self.ensure_initialized_report().await.map(|_| ())
-    }
-
-    pub fn database(&self) -> &Database {
-        &self.database
-    }
-
-    fn guild_document_id(guild_id: u64) -> String {
-        guild_id.to_string()
-    }
-
     pub async fn load_provider_state(
         &self,
         provider_id: &str,
@@ -1234,7 +1038,7 @@ mod tests {
     };
     use futures_util::FutureExt;
     use mongodb::{
-        Client, Database,
+        Client,
         bson::{Bson, doc, oid::ObjectId, to_bson},
     };
     use serde_json::json;
@@ -1273,7 +1077,7 @@ mod tests {
         }
 
         fn store(&self) -> MongoPersistence {
-            mongo_persistence_for_database(self.client.database(&self.database_name))
+            MongoPersistence::from_database(self.client.database(&self.database_name))
         }
 
         async fn cleanup(self) -> anyhow::Result<()> {
@@ -1304,22 +1108,6 @@ mod tests {
             std::process::id(),
             ObjectId::new().to_hex()
         )
-    }
-
-    fn mongo_persistence_for_database(database: Database) -> MongoPersistence {
-        MongoPersistence {
-            guild_settings: database.collection::<GuildSettingsDocument>("guild_settings"),
-            deployment_settings: database
-                .collection::<DeploymentSettingsDocument>("deployment_settings"),
-            provider_state: database.collection("provider_state"),
-            suggestions: database.collection("suggestions"),
-            giveaways: database.collection("giveaways"),
-            invite_members: database.collection("members"),
-            member_stats: database.collection("member-stats"),
-            warning_logs: database.collection("mod-logs"),
-            dashboard_audit_logs: database.collection("dashboard-audit-logs"),
-            database,
-        }
     }
 
     fn resolve_isolated_test_outcome(
