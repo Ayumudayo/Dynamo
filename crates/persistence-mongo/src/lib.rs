@@ -1,17 +1,17 @@
 mod config;
 mod documents;
+mod ids;
 mod initialization;
+mod settings;
 mod store;
 
 pub use config::{DEFAULT_DATABASE_NAME, MongoPersistenceConfig};
 pub use initialization::MongoInitializationReport;
 pub use store::MongoPersistence;
 
-use crate::config::DEPLOYMENT_SETTINGS_ID;
 use crate::documents::{
-    DashboardAuditLogDocument, DeploymentSettingsDocument, GiveawayDocument, GuildSettingsDocument,
-    InviteMemberDocument, MemberStatsDocument, ProviderStateDocument, SuggestionDocument,
-    WarningLogDocument,
+    DashboardAuditLogDocument, GiveawayDocument, InviteMemberDocument, MemberStatsDocument,
+    ProviderStateDocument, SuggestionDocument, WarningLogDocument,
 };
 
 use async_trait::async_trait;
@@ -25,18 +25,11 @@ use dynamo_ops::{
     DashboardAuditLogRepository,
 };
 use dynamo_repositories::{
-    DeploymentSettingsRepository, GiveawaysRepository, GuildSettingsRepository, InviteRepository,
-    MemberStatsRepository, ProviderStateRepository, SuggestionsRepository, WarningLogRepository,
-};
-use dynamo_settings::{
-    DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
-    GuildModuleSettings, GuildSettings,
+    GiveawaysRepository, InviteRepository, MemberStatsRepository, ProviderStateRepository,
+    SuggestionsRepository, WarningLogRepository,
 };
 use futures_util::TryStreamExt;
-use mongodb::{
-    bson::{Bson, DateTime as BsonDateTime, Document, doc, from_bson, to_bson},
-    options::ReturnDocument,
-};
+use mongodb::bson::{DateTime as BsonDateTime, doc, from_bson, to_bson};
 
 type Error = anyhow::Error;
 
@@ -76,171 +69,6 @@ impl MongoPersistence {
             .await?;
 
         Ok(())
-    }
-}
-
-fn settings_set_on_insert(document_id: &str, excluded_parent_path: Option<&str>) -> Document {
-    let mut set_on_insert = doc! {
-        "_id": document_id,
-    };
-
-    if excluded_parent_path != Some("modules") {
-        set_on_insert.insert("modules", Document::new());
-    }
-
-    if excluded_parent_path != Some("commands") {
-        set_on_insert.insert("commands", Document::new());
-    }
-
-    set_on_insert
-}
-
-fn settings_field_path(section: &str, id_kind: &str, id: &str) -> Result<String, Error> {
-    if id.is_empty() {
-        return Err(anyhow::anyhow!(
-            "{id_kind} id cannot be empty for Mongo settings paths"
-        ));
-    }
-
-    if id.contains('.') {
-        return Err(anyhow::anyhow!(
-            "{id_kind} id `{id}` cannot contain `.` for Mongo settings paths"
-        ));
-    }
-
-    if id.starts_with('$') {
-        return Err(anyhow::anyhow!(
-            "{id_kind} id `{id}` cannot start with `$` for Mongo settings paths"
-        ));
-    }
-
-    Ok(format!("{section}.{id}"))
-}
-
-fn settings_upsert_update(document_id: &str, settings_path: &str, settings: Bson) -> Document {
-    let excluded_parent_path = settings_path.split_once('.').map(|(parent, _)| parent);
-
-    doc! {
-        "$setOnInsert": settings_set_on_insert(document_id, excluded_parent_path),
-        "$set": {
-            settings_path: settings,
-        },
-    }
-}
-
-#[async_trait]
-impl GuildSettingsRepository for MongoPersistence {
-    async fn get(&self, guild_id: u64) -> Result<Option<GuildSettings>, Error> {
-        let id = Self::guild_document_id(guild_id);
-        let document = self.guild_settings.find_one(doc! { "_id": &id }).await?;
-
-        document.map(GuildSettingsDocument::into_domain).transpose()
-    }
-
-    async fn upsert_module_settings(
-        &self,
-        guild_id: u64,
-        module_id: &str,
-        settings: GuildModuleSettings,
-    ) -> Result<GuildSettings, Error> {
-        let id = Self::guild_document_id(guild_id);
-        let module_path = settings_field_path("modules", "module", module_id)?;
-        let module_settings = to_bson(&settings)?;
-        let document = self
-            .guild_settings
-            .find_one_and_update(
-                doc! { "_id": &id },
-                settings_upsert_update(&id, &module_path, module_settings),
-            )
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("guild module settings upsert returned no document"))?;
-
-        document.into_domain()
-    }
-
-    async fn upsert_command_settings(
-        &self,
-        guild_id: u64,
-        command_id: &str,
-        settings: GuildCommandSettings,
-    ) -> Result<GuildSettings, Error> {
-        let id = Self::guild_document_id(guild_id);
-        let command_path = settings_field_path("commands", "command", command_id)?;
-        let command_settings = to_bson(&settings)?;
-        let document = self
-            .guild_settings
-            .find_one_and_update(
-                doc! { "_id": &id },
-                settings_upsert_update(&id, &command_path, command_settings),
-            )
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("guild command settings upsert returned no document"))?;
-
-        document.into_domain()
-    }
-}
-
-#[async_trait]
-impl DeploymentSettingsRepository for MongoPersistence {
-    async fn get(&self) -> Result<DeploymentSettings, Error> {
-        let document = self
-            .deployment_settings
-            .find_one(doc! { "_id": DEPLOYMENT_SETTINGS_ID })
-            .await?;
-
-        Ok(document
-            .unwrap_or_else(DeploymentSettingsDocument::default_document)
-            .into_domain())
-    }
-
-    async fn upsert_module_settings(
-        &self,
-        module_id: &str,
-        settings: DeploymentModuleSettings,
-    ) -> Result<DeploymentSettings, Error> {
-        let module_path = settings_field_path("modules", "module", module_id)?;
-        let module_settings = to_bson(&settings)?;
-        let document = self
-            .deployment_settings
-            .find_one_and_update(
-                doc! { "_id": DEPLOYMENT_SETTINGS_ID },
-                settings_upsert_update(DEPLOYMENT_SETTINGS_ID, &module_path, module_settings),
-            )
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("deployment module settings upsert returned no document")
-            })?;
-
-        Ok(document.into_domain())
-    }
-
-    async fn upsert_command_settings(
-        &self,
-        command_id: &str,
-        settings: DeploymentCommandSettings,
-    ) -> Result<DeploymentSettings, Error> {
-        let command_path = settings_field_path("commands", "command", command_id)?;
-        let command_settings = to_bson(&settings)?;
-        let document = self
-            .deployment_settings
-            .find_one_and_update(
-                doc! { "_id": DEPLOYMENT_SETTINGS_ID },
-                settings_upsert_update(DEPLOYMENT_SETTINGS_ID, &command_path, command_settings),
-            )
-            .upsert(true)
-            .return_document(ReturnDocument::After)
-            .await?
-            .ok_or_else(|| {
-                anyhow::anyhow!("deployment command settings upsert returned no document")
-            })?;
-
-        Ok(document.into_domain())
     }
 }
 
@@ -609,10 +437,9 @@ impl DashboardAuditLogRepository for MongoPersistence {
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        DEFAULT_DATABASE_NAME, DeploymentSettingsDocument, GuildSettingsDocument, MongoPersistence,
-    };
+    use super::{DEFAULT_DATABASE_NAME, MongoPersistence};
     use crate::MongoInitializationReport;
+    use crate::documents::{DeploymentSettingsDocument, GuildSettingsDocument};
     use dynamo_ops::DashboardAuditLogRepository;
     use dynamo_ops::{
         DashboardAuditAction, DashboardAuditEntityType, DashboardAuditLogEntry,
@@ -781,7 +608,7 @@ mod tests {
             configuration: json!({ "threshold": 7 }),
         };
 
-        let update = super::settings_upsert_update(
+        let update = crate::settings::settings_upsert_update(
             "42",
             "modules.stock",
             to_bson(&settings).expect("guild module settings serialize"),
@@ -811,7 +638,7 @@ mod tests {
             configuration: json!({ "precision": 2 }),
         };
 
-        let update = super::settings_upsert_update(
+        let update = crate::settings::settings_upsert_update(
             "42",
             "commands.exchange::rate",
             to_bson(&settings).expect("guild command settings serialize"),
@@ -841,7 +668,7 @@ mod tests {
             enabled: true,
         };
 
-        let update = super::settings_upsert_update(
+        let update = crate::settings::settings_upsert_update(
             "global",
             "modules.stock",
             to_bson(&settings).expect("deployment module settings serialize"),
@@ -872,7 +699,7 @@ mod tests {
             configuration: json!({ "visible": true }),
         };
 
-        let update = super::settings_upsert_update(
+        let update = crate::settings::settings_upsert_update(
             "global",
             "commands.exchange::rate",
             to_bson(&settings).expect("deployment command settings serialize"),
@@ -1061,32 +888,33 @@ mod tests {
     #[test]
     fn settings_field_path_accepts_real_style_ids() {
         assert_eq!(
-            super::settings_field_path("modules", "module", "stock").unwrap(),
+            crate::settings::settings_field_path("modules", "module", "stock").unwrap(),
             "modules.stock"
         );
         assert_eq!(
-            super::settings_field_path("commands", "command", "exchange::rate").unwrap(),
+            crate::settings::settings_field_path("commands", "command", "exchange::rate").unwrap(),
             "commands.exchange::rate"
         );
     }
 
     #[test]
     fn settings_field_path_rejects_invalid_ids() {
-        let empty = super::settings_field_path("modules", "module", "").unwrap_err();
+        let empty = crate::settings::settings_field_path("modules", "module", "").unwrap_err();
         assert!(
             empty
                 .to_string()
                 .contains("module id cannot be empty for Mongo settings paths")
         );
 
-        let dotted = super::settings_field_path("modules", "module", "a.b").unwrap_err();
+        let dotted = crate::settings::settings_field_path("modules", "module", "a.b").unwrap_err();
         assert!(
             dotted
                 .to_string()
                 .contains("module id `a.b` cannot contain `.` for Mongo settings paths")
         );
 
-        let dollar = super::settings_field_path("commands", "command", "$bad").unwrap_err();
+        let dollar =
+            crate::settings::settings_field_path("commands", "command", "$bad").unwrap_err();
         assert!(
             dollar
                 .to_string()

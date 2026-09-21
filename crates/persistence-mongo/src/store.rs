@@ -1,9 +1,9 @@
 use mongodb::{Client, Collection, Database};
 
 use crate::{
-    DashboardAuditLogDocument, DeploymentSettingsDocument, Error, GiveawayDocument,
-    GuildSettingsDocument, InviteMemberDocument, MemberStatsDocument, MongoPersistenceConfig,
-    ProviderStateDocument, SuggestionDocument, WarningLogDocument,
+    DashboardAuditLogDocument, Error, GiveawayDocument, InviteMemberDocument, MemberStatsDocument,
+    MongoPersistenceConfig, ProviderStateDocument, SuggestionDocument, WarningLogDocument,
+    documents::{DeploymentSettingsDocument, GuildSettingsDocument},
 };
 
 #[derive(Clone)]
@@ -45,9 +45,5 @@ impl MongoPersistence {
                 .collection::<DashboardAuditLogDocument>("dashboard-audit-logs"),
             database,
         }
-    }
-
-    pub(crate) fn guild_document_id(guild_id: u64) -> String {
-        guild_id.to_string()
     }
 }

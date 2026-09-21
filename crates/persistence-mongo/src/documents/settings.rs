@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use crate::{Error, config::DEPLOYMENT_SETTINGS_ID};
 
 #[cfg(test)]
-use crate::store::MongoPersistence;
+use crate::ids::guild_document_id;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GuildSettingsDocument {
@@ -25,7 +25,7 @@ impl GuildSettingsDocument {
     #[cfg(test)]
     pub(crate) fn default_for_guild(guild_id: u64) -> Self {
         Self {
-            id: MongoPersistence::guild_document_id(guild_id),
+            id: guild_document_id(guild_id),
             modules: BTreeMap::new(),
             commands: BTreeMap::new(),
         }
