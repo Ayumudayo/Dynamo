@@ -4,6 +4,7 @@ use super::super::{
     DashboardSession, DashboardState, DashboardUser, count_runtime_notices, dashboard_styles,
     dashboard_ui_script, page_query_for_tab, render_runtime_notices,
 };
+use super::settings::escape_html;
 
 #[derive(Debug, Clone)]
 pub(crate) struct GuildCard {
@@ -425,12 +426,4 @@ fn initials(name: &str) -> String {
         .take(2)
         .collect::<String>()
         .to_uppercase()
-}
-
-pub(crate) fn escape_html(input: &str) -> String {
-    input
-        .replace('&', "&amp;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-        .replace('"', "&quot;")
 }
