@@ -1726,13 +1726,27 @@ mod tests {
                 "Installed: On | Deployment: On | Local guild: Off | Effective: Off | Blocked by local guild setting"
             )
         );
-        assert!(
-            guild_html.contains(
-                "Parent module: Off | Installed: On | Deployment: Off | Local guild: On | Effective: Off | Blocked by parent module"
-            )
-        );
         assert!(guild_html.contains("value=\"PERF-STOCK-CANARY\""));
-        assert!(guild_html.contains("value=\"GUILD-ETF-CANARY\""));
+
+        let commands = app
+            .clone()
+            .oneshot(request(
+                "GET",
+                &format!("{}?tab=commands", runtime.guild_path()),
+                Some((SESSION_COOKIE_NAME, &runtime.cookie_value)),
+            ))
+            .await
+            .expect("guild commands page");
+        assert_eq!(commands.status(), StatusCode::OK);
+        let commands_html = to_bytes(commands.into_body(), 2 * 1024 * 1024)
+            .await
+            .expect("bounded guild commands page");
+        let commands_html =
+            String::from_utf8(commands_html.to_vec()).expect("UTF-8 guild commands page");
+        assert!(commands_html.contains("value=\"GUILD-ETF-CANARY\""));
+        assert!(commands_html.contains(
+            "Parent module: Off | Installed: On | Deployment: Off | Local guild: On | Effective: Off | Blocked by parent module"
+        ));
 
         for query in [
             "tab=overview",
