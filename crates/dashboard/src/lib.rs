@@ -1,8 +1,4 @@
-use std::{
-    net::SocketAddr,
-    sync::Arc,
-    time::{Duration, Instant},
-};
+use std::{net::SocketAddr, sync::Arc, time::Instant};
 
 use axum::{
     Json, Router,
@@ -33,15 +29,22 @@ use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
 use serde::Deserialize;
 use tracing::{info, warn};
-use url::Url;
 
 mod browser_assets;
+mod discord;
 mod font_assets;
 mod mutation_script;
 mod render;
 mod state;
 
 use browser_assets::{dashboard_styles, dashboard_ui_script};
+#[cfg(test)]
+use discord::build_dashboard_http_client_with_timeouts;
+use discord::{
+    build_bot_invite_url, build_dashboard_http_client, build_discord_authorize_url,
+    build_oauth_session, fetch_application_info, guild_icon_url, oauth_token_request,
+    send_dashboard_http,
+};
 pub(crate) use font_assets::*;
 use mutation_script::dashboard_script;
 use render::document::{
@@ -50,11 +53,10 @@ use render::document::{
 };
 pub(crate) use render::settings::*;
 pub(crate) use state::{
-    DASHBOARD_CONNECT_TIMEOUT, DASHBOARD_REQUEST_TIMEOUT, DISCORD_API_BASE, DashboardConfig,
-    DashboardGuild, DashboardPageQuery, DashboardSession, DashboardState, DashboardUser,
-    DiscordApplicationInfo, DiscordApplicationResponse, DiscordCallbackQuery, DiscordOAuthUser,
+    DISCORD_API_BASE, DashboardConfig, DashboardGuild, DashboardPageQuery, DashboardSession,
+    DashboardState, DashboardUser, DiscordApplicationInfo, DiscordCallbackQuery, DiscordOAuthUser,
     DiscordTokenResponse, LoginQuery, OAUTH_STATE_TTL_MINUTES, PendingOauthState,
-    SESSION_COOKIE_NAME, SESSION_TTL_HOURS,
+    SESSION_COOKIE_NAME,
 };
 
 #[cfg(feature = "perf-harness")]
@@ -65,21 +67,6 @@ pub use perf_harness::run_perf_harness;
 
 #[cfg(feature = "perf-harness")]
 pub(crate) type DashboardPerfRuntime = perf_harness::PerfRuntime;
-
-fn build_dashboard_http_client_with_timeouts(
-    connect_timeout: Duration,
-    request_timeout: Duration,
-) -> anyhow::Result<reqwest::Client> {
-    Ok(reqwest::Client::builder()
-        .user_agent("Dynamo Dashboard/0.1.0")
-        .connect_timeout(connect_timeout)
-        .timeout(request_timeout)
-        .build()?)
-}
-
-fn build_dashboard_http_client() -> anyhow::Result<reqwest::Client> {
-    build_dashboard_http_client_with_timeouts(DASHBOARD_CONNECT_TIMEOUT, DASHBOARD_REQUEST_TIMEOUT)
-}
 
 pub async fn run_production() -> anyhow::Result<()> {
     let _ = dotenvy::dotenv();
@@ -1254,35 +1241,6 @@ fn guild_settings_notice(state: &str) -> &'static str {
     }
 }
 
-async fn fetch_application_info(
-    http: &reqwest::Client,
-    config: &DashboardConfig,
-) -> anyhow::Result<DiscordApplicationInfo> {
-    let request = http
-        .get(format!("{DISCORD_API_BASE}/oauth2/applications/@me"))
-        .header("Authorization", format!("Bot {}", config.bot_token));
-    let response = execute_dashboard_http(request).await?.error_for_status()?;
-
-    let payload: DiscordApplicationResponse = response.json().await?;
-    let owner_user_id = payload
-        .owner
-        .as_ref()
-        .and_then(|owner| owner.id.parse::<u64>().ok())
-        .or_else(|| {
-            payload
-                .team
-                .as_ref()
-                .and_then(|team| team.owner_user_id.parse::<u64>().ok())
-        });
-
-    Ok(DiscordApplicationInfo {
-        id: payload.id,
-        name: payload.name,
-        icon: payload.icon,
-        owner_user_id,
-    })
-}
-
 async fn load_session(state: &DashboardState, jar: &CookieJar) -> Option<DashboardSession> {
     let session_id = jar.get(SESSION_COOKIE_NAME)?.value().to_string();
     let session = state.sessions.read().await.get(&session_id).cloned()?;
@@ -1339,39 +1297,11 @@ fn session_cookie(session_id: &str) -> Cookie<'static> {
     cookie
 }
 
-fn build_discord_authorize_url(state: &DashboardState, oauth_state: &str) -> String {
-    let mut url = Url::parse("https://discord.com/oauth2/authorize").expect("valid url");
-    url.query_pairs_mut()
-        .append_pair("client_id", &state.app_info.id)
-        .append_pair("response_type", "code")
-        .append_pair("scope", "identify guilds")
-        .append_pair(
-            "redirect_uri",
-            &format!("{}/auth/discord/callback", state.config.public_base_url),
-        )
-        .append_pair("state", oauth_state);
-    url.to_string()
-}
-
 async fn exchange_oauth_code(
     state: &DashboardState,
     code: &str,
 ) -> Result<DashboardSession, anyhow::Error> {
-    let redirect_uri = format!("{}/auth/discord/callback", state.config.public_base_url);
-    let token_request = state
-        .http
-        .post(format!("{}/oauth2/token", state.discord_api_base))
-        .header(
-            reqwest::header::CONTENT_TYPE,
-            "application/x-www-form-urlencoded",
-        )
-        .form(&[
-            ("client_id", state.app_info.id.as_str()),
-            ("client_secret", state.config.client_secret.as_str()),
-            ("grant_type", "authorization_code"),
-            ("code", code),
-            ("redirect_uri", redirect_uri.as_str()),
-        ]);
+    let token_request = oauth_token_request(state, code);
     let token_response = send_dashboard_http(state, token_request)
         .await?
         .error_for_status()?;
@@ -1397,17 +1327,7 @@ async fn exchange_oauth_code(
         .error_for_status()?;
     let guilds: Vec<DashboardGuild> = guilds_response.json().await?;
 
-    Ok(DashboardSession {
-        user: DashboardUser {
-            id: user.id.parse::<u64>()?,
-            username: user.username,
-            global_name: user.global_name,
-            avatar: user.avatar,
-        },
-        guilds,
-        access_token: token_payload.access_token,
-        expires_at: chrono::Utc::now() + chrono::Duration::hours(SESSION_TTL_HOURS),
-    })
+    build_oauth_session(token_payload, user, guilds)
 }
 
 async fn load_guild_cards(state: &DashboardState, session: &DashboardSession) -> Vec<GuildCard> {
@@ -1624,48 +1544,6 @@ fn classify_bot_guild_status(status: StatusCode) -> BotGuildPresence {
     } else {
         BotGuildPresence::Unavailable
     }
-}
-
-async fn send_dashboard_http(
-    state: &DashboardState,
-    request: reqwest::RequestBuilder,
-) -> anyhow::Result<reqwest::Response> {
-    #[cfg(not(feature = "perf-harness"))]
-    let _ = state;
-
-    #[cfg(feature = "perf-harness")]
-    if let Some(runtime) = state.perf_runtime.as_ref() {
-        runtime.deny_outbound();
-        anyhow::bail!("external HTTP is disabled by the dashboard performance harness");
-    }
-
-    execute_dashboard_http(request).await
-}
-
-async fn execute_dashboard_http(
-    request: reqwest::RequestBuilder,
-) -> anyhow::Result<reqwest::Response> {
-    Ok(request.send().await?)
-}
-
-fn build_bot_invite_url(state: &DashboardState, guild_id: u64) -> String {
-    let mut url = Url::parse("https://discord.com/oauth2/authorize").expect("valid invite url");
-    url.query_pairs_mut()
-        .append_pair("client_id", &state.app_info.id)
-        .append_pair("scope", "bot applications.commands")
-        .append_pair("permissions", &state.config.invite_permissions.to_string())
-        .append_pair("guild_id", &guild_id.to_string())
-        .append_pair("disable_guild_select", "true");
-    url.to_string()
-}
-
-fn guild_icon_url(guild: &DashboardGuild) -> Option<String> {
-    guild.icon.as_ref().map(|icon| {
-        format!(
-            "https://cdn.discordapp.com/icons/{}/{}.png?size=128",
-            guild.id, icon
-        )
-    })
 }
 
 fn display_name(user: &DashboardUser) -> String {
