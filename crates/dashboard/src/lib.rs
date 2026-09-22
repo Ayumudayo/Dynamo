@@ -1,6 +1,4 @@
 use std::{
-    collections::HashMap,
-    env,
     net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
@@ -33,8 +31,7 @@ use dynamo_settings::{
 };
 use futures_util::{StreamExt, stream};
 use rand::{Rng, distributions::Alphanumeric};
-use serde::{Deserialize, Deserializer, Serialize};
-use tokio::sync::RwLock;
+use serde::Deserialize;
 use tracing::{info, warn};
 use url::Url;
 
@@ -42,6 +39,7 @@ mod browser_assets;
 mod font_assets;
 mod mutation_script;
 mod render;
+mod state;
 
 use browser_assets::{dashboard_styles, dashboard_ui_script};
 pub(crate) use font_assets::*;
@@ -51,6 +49,13 @@ use render::document::{
     render_landing_page, render_section_tabs, render_selector_page, user_is_dashboard_admin,
 };
 pub(crate) use render::settings::*;
+pub(crate) use state::{
+    DASHBOARD_CONNECT_TIMEOUT, DASHBOARD_REQUEST_TIMEOUT, DISCORD_API_BASE, DashboardConfig,
+    DashboardGuild, DashboardPageQuery, DashboardSession, DashboardState, DashboardUser,
+    DiscordApplicationInfo, DiscordApplicationResponse, DiscordCallbackQuery, DiscordOAuthUser,
+    DiscordTokenResponse, LoginQuery, OAUTH_STATE_TTL_MINUTES, PendingOauthState,
+    SESSION_COOKIE_NAME, SESSION_TTL_HOURS,
+};
 
 #[cfg(feature = "perf-harness")]
 mod perf_harness;
@@ -58,13 +63,8 @@ mod perf_harness;
 #[cfg(feature = "perf-harness")]
 pub use perf_harness::run_perf_harness;
 
-const SESSION_COOKIE_NAME: &str = "dynamo_dashboard_session";
-const SESSION_TTL_HOURS: i64 = 24 * 14;
-const OAUTH_STATE_TTL_MINUTES: i64 = 15;
-const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
-const DEFAULT_INVITE_PERMISSIONS: u64 = 2_146_958_847;
-const DASHBOARD_CONNECT_TIMEOUT: Duration = Duration::from_secs(5);
-const DASHBOARD_REQUEST_TIMEOUT: Duration = Duration::from_secs(15);
+#[cfg(feature = "perf-harness")]
+pub(crate) type DashboardPerfRuntime = perf_harness::PerfRuntime;
 
 fn build_dashboard_http_client_with_timeouts(
     connect_timeout: Duration,
@@ -108,8 +108,8 @@ pub async fn run_production() -> anyhow::Result<()> {
         module_catalog,
         command_catalog,
         persistence,
-        sessions: Arc::new(RwLock::new(HashMap::new())),
-        oauth_states: Arc::new(RwLock::new(HashMap::new())),
+        sessions: Default::default(),
+        oauth_states: Default::default(),
         #[cfg(feature = "perf-harness")]
         perf_runtime: None,
     });
@@ -179,94 +179,6 @@ fn build_dashboard_routes() -> Router<Arc<DashboardState>> {
             post(post_guild_command_sync),
         )
         .merge(font_asset_router())
-}
-
-#[derive(Debug, Clone)]
-struct DashboardConfig {
-    host: std::net::IpAddr,
-    port: u16,
-    public_base_url: String,
-    bot_token: String,
-    client_secret: String,
-    invite_permissions: u64,
-    admin_user_ids: Vec<u64>,
-    register_globally: bool,
-    command_sync_interval_seconds: u64,
-}
-
-impl DashboardConfig {
-    fn from_env() -> anyhow::Result<Self> {
-        let host = env::var("DASHBOARD_HOST")
-            .unwrap_or_else(|_| "127.0.0.1".to_string())
-            .parse()
-            .map_err(|error| {
-                anyhow::anyhow!("DASHBOARD_HOST must be a valid IP address: {error}")
-            })?;
-
-        let port = env::var("DASHBOARD_PORT")
-            .unwrap_or_else(|_| "3000".to_string())
-            .parse()
-            .map_err(|error| anyhow::anyhow!("DASHBOARD_PORT must be a valid u16: {error}"))?;
-
-        let public_base_url = env::var("DASHBOARD_BASE_URL")
-            .unwrap_or_else(|_| format!("http://{host}:{port}"))
-            .trim_end_matches('/')
-            .to_string();
-
-        let bot_token = env::var("DISCORD_TOKEN")
-            .or_else(|_| env::var("BOT_TOKEN"))
-            .map_err(|_| anyhow::anyhow!("DISCORD_TOKEN or BOT_TOKEN must be set"))?;
-
-        let client_secret = env::var("DISCORD_CLIENT_SECRET")
-            .or_else(|_| env::var("BOT_SECRET"))
-            .map_err(|_| {
-                anyhow::anyhow!(
-                    "DISCORD_CLIENT_SECRET or BOT_SECRET must be set for dashboard OAuth"
-                )
-            })?;
-
-        let invite_permissions = env::var("DISCORD_BOT_INVITE_PERMISSIONS")
-            .ok()
-            .map(|value| value.parse::<u64>())
-            .transpose()
-            .map_err(|error| {
-                anyhow::anyhow!("DISCORD_BOT_INVITE_PERMISSIONS must be a valid u64: {error}")
-            })?
-            .unwrap_or(DEFAULT_INVITE_PERMISSIONS);
-
-        let admin_user_ids = parse_u64_list_env("DASHBOARD_ADMIN_USER_IDS")?;
-        let dev_guild_id = env::var("DISCORD_DEV_GUILD_ID")
-            .or_else(|_| env::var("GUILD_ID"))
-            .ok()
-            .map(|value| value.parse::<u64>())
-            .transpose()
-            .map_err(|error| {
-                anyhow::anyhow!("DISCORD_DEV_GUILD_ID or GUILD_ID must be a valid u64: {error}")
-            })?;
-        let register_globally = match env::var("DISCORD_REGISTER_GLOBALLY") {
-            Ok(value) => parse_bool_value("DISCORD_REGISTER_GLOBALLY", &value)?,
-            Err(env::VarError::NotPresent) => dev_guild_id.is_none(),
-            Err(error) => {
-                return Err(anyhow::anyhow!(
-                    "DISCORD_REGISTER_GLOBALLY could not be read: {error}"
-                ));
-            }
-        };
-        let command_sync_interval_seconds =
-            parse_u64_env("DISCORD_COMMAND_SYNC_INTERVAL_SECONDS", 15)?;
-
-        Ok(Self {
-            host,
-            port,
-            public_base_url,
-            bot_token,
-            client_secret,
-            invite_permissions,
-            admin_user_ids,
-            register_globally,
-            command_sync_interval_seconds,
-        })
-    }
 }
 
 fn validate_dashboard_persistence(
@@ -464,74 +376,6 @@ fn dashboard_admin_mode_summary(state: &DashboardState) -> String {
     }
 }
 
-#[derive(Clone)]
-struct DashboardState {
-    config: DashboardConfig,
-    http: reqwest::Client,
-    discord_api_base: String,
-    app_info: DiscordApplicationInfo,
-    module_catalog: ModuleCatalog,
-    command_catalog: CommandCatalog,
-    persistence: Persistence,
-    sessions: Arc<RwLock<HashMap<String, DashboardSession>>>,
-    oauth_states: Arc<RwLock<HashMap<String, PendingOauthState>>>,
-    #[cfg(feature = "perf-harness")]
-    perf_runtime: Option<Arc<perf_harness::PerfRuntime>>,
-}
-
-#[derive(Debug, Clone)]
-struct DiscordApplicationInfo {
-    id: String,
-    name: String,
-    icon: Option<String>,
-    owner_user_id: Option<u64>,
-}
-
-#[derive(Debug, Clone)]
-struct DashboardSession {
-    user: DashboardUser,
-    guilds: Vec<DashboardGuild>,
-    access_token: String,
-    expires_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone)]
-struct PendingOauthState {
-    redirect_to: String,
-    created_at: chrono::DateTime<chrono::Utc>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DashboardUser {
-    id: u64,
-    username: String,
-    global_name: Option<String>,
-    avatar: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-struct DashboardGuild {
-    #[serde(deserialize_with = "deserialize_u64_from_discord_id")]
-    id: u64,
-    name: String,
-    icon: Option<String>,
-    #[serde(default, alias = "permissions_new")]
-    permissions: String,
-}
-
-#[derive(Debug, Deserialize, Clone, Default)]
-struct DashboardPageQuery {
-    tab: Option<String>,
-    log_entity: Option<String>,
-    log_action: Option<String>,
-    log_page: Option<u64>,
-}
-
-#[derive(Debug, Deserialize)]
-struct LoginQuery {
-    redirect: Option<String>,
-}
-
 fn normalized_tab(value: Option<&str>) -> &'static str {
     match value {
         Some("modules") => "modules",
@@ -722,13 +566,6 @@ fn format_sync_status_text(scope_state: &CommandSyncScopeState) -> Option<String
         parts.push(format!("Requested by {requested_by}"));
     }
     (!parts.is_empty()).then(|| parts.join(" | "))
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscordCallbackQuery {
-    code: Option<String>,
-    state: Option<String>,
-    error: Option<String>,
 }
 
 async fn index(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
@@ -1845,90 +1682,6 @@ fn count_runtime_notices(catalog: &ModuleCatalog) -> usize {
         .iter()
         .filter(|entry| runtime_notice_text(entry.module.id).is_some())
         .count()
-}
-
-fn parse_u64_list_env(key: &str) -> Result<Vec<u64>, anyhow::Error> {
-    let Some(raw) = env::var(key).ok() else {
-        return Ok(Vec::new());
-    };
-
-    raw.split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|error| anyhow::anyhow!("{key} must contain valid u64 values: {error}"))
-        })
-        .collect()
-}
-
-fn parse_bool_value(key: &str, value: &str) -> Result<bool, anyhow::Error> {
-    match value.trim().to_ascii_lowercase().as_str() {
-        "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
-        _ => anyhow::bail!("{key} must be one of true/false/1/0/yes/no/on/off"),
-    }
-}
-
-fn parse_u64_env(key: &str, default: u64) -> Result<u64, anyhow::Error> {
-    match env::var(key) {
-        Ok(value) => value
-            .trim()
-            .parse::<u64>()
-            .map_err(|error| anyhow::anyhow!("{key} must be a valid u64: {error}")),
-        Err(env::VarError::NotPresent) => Ok(default),
-        Err(error) => Err(anyhow::anyhow!("{key} could not be read: {error}")),
-    }
-}
-
-fn deserialize_u64_from_discord_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    #[derive(Deserialize)]
-    #[serde(untagged)]
-    enum DiscordId {
-        String(String),
-        Number(u64),
-    }
-
-    match DiscordId::deserialize(deserializer)? {
-        DiscordId::String(value) => value.parse::<u64>().map_err(serde::de::Error::custom),
-        DiscordId::Number(value) => Ok(value),
-    }
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscordApplicationResponse {
-    id: String,
-    name: String,
-    icon: Option<String>,
-    owner: Option<DiscordOwner>,
-    team: Option<DiscordTeam>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscordOwner {
-    id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscordTeam {
-    owner_user_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscordTokenResponse {
-    access_token: String,
-}
-
-#[derive(Debug, Deserialize)]
-struct DiscordOAuthUser {
-    id: String,
-    username: String,
-    global_name: Option<String>,
-    avatar: Option<String>,
 }
 
 fn render_runtime_notices(catalog: &ModuleCatalog) -> String {
@@ -4740,19 +4493,6 @@ mod tests {
         assert!(user_can_manage_guild(&manage_guild));
         assert!(user_can_manage_guild(&admin));
         assert!(!user_can_manage_guild(&member));
-    }
-
-    #[test]
-    fn discord_guild_id_deserializes_from_string() {
-        let guild: DashboardGuild = serde_json::from_value(serde_json::json!({
-            "id": "110340875107733504",
-            "name": "Test Guild",
-            "icon": null,
-            "permissions": "32"
-        }))
-        .expect("dashboard guild");
-
-        assert_eq!(guild.id, 110340875107733504);
     }
 
     #[test]
