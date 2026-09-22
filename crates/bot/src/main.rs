@@ -1,4 +1,7 @@
-use std::{collections::HashMap, fmt, sync::OnceLock, time::Duration};
+mod background;
+mod warning_throttle;
+
+use std::{collections::HashMap, sync::OnceLock, time::Duration};
 
 use chrono::Utc;
 use dynamo_access::command_access_for_context;
@@ -18,7 +21,13 @@ use poise::{CreateReply, FrameworkError, serenity_prelude as serenity};
 use tokio::sync::Mutex;
 use tracing::{error, info, warn};
 
-const GIVEAWAY_POLL_INTERVAL_SECONDS: u64 = 15;
+use crate::{
+    background::{
+        GIVEAWAY_POLL_INTERVAL_SECONDS, spawn_exchange_rate_refresh_loop, spawn_giveaway_poll_loop,
+    },
+    warning_throttle::WarningThrottle,
+};
+
 const CLEARED_COMMAND_FINGERPRINT: &str = "<cleared>";
 
 #[tokio::main]
@@ -806,195 +815,11 @@ async fn save_command_sync_state(
         .await
 }
 
-fn giveaway_poll_started() -> &'static OnceLock<()> {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    &STARTED
-}
-
-fn spawn_giveaway_poll_loop(ctx: serenity::Context, data: AppState) {
-    if giveaway_poll_started().set(()).is_err() {
-        return;
-    }
-
-    tokio::spawn(async move {
-        let interval = Duration::from_secs(GIVEAWAY_POLL_INTERVAL_SECONDS);
-        let mut warning_throttle = WarningThrottle::default();
-        loop {
-            tokio::time::sleep(interval).await;
-            if let Err(error) = dynamo_module_giveaway::poll_due_giveaways(&ctx, &data).await {
-                if let Some(suppressed_repetitions) = warning_throttle.record_error(&error) {
-                    warn!(
-                        ?error,
-                        suppressed_repetitions, "failed to poll due giveaways"
-                    );
-                }
-            } else {
-                warning_throttle.record_success();
-            }
-        }
-    });
-}
-
-fn exchange_rate_refresh_started() -> &'static OnceLock<()> {
-    static STARTED: OnceLock<()> = OnceLock::new();
-    &STARTED
-}
-
-fn spawn_exchange_rate_refresh_loop(data: AppState) {
-    if exchange_rate_refresh_started().set(()).is_err() {
-        return;
-    }
-
-    let Some(service) = data.services.exchange_rates.clone() else {
-        return;
-    };
-
-    tokio::spawn(async move {
-        if let Err(error) = service.refresh_cache().await {
-            warn!(?error, "failed to preflight exchange-rate data");
-        }
-
-        let interval =
-            Duration::from_secs(dynamo_provider_tossinvest::exchange_refresh_interval_seconds());
-        let mut warning_throttle = WarningThrottle::default();
-        loop {
-            tokio::time::sleep(interval).await;
-            if let Err(error) = service.refresh_cache().await {
-                if let Some(suppressed_repetitions) = warning_throttle.record_error(&error) {
-                    warn!(
-                        ?error,
-                        suppressed_repetitions, "failed to refresh exchange-rate data"
-                    );
-                }
-            } else {
-                warning_throttle.record_success();
-            }
-        }
-    });
-}
-
-const WARNING_THROTTLE_REPEAT_LOG_INTERVAL: u64 = 60;
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-enum WarningThrottleAction {
-    Log { suppressed_repetitions: u64 },
-    Suppress,
-}
-
-#[derive(Debug, Default)]
-struct WarningThrottle {
-    last_fingerprint: Option<String>,
-    suppressed_repetitions: u64,
-}
-
-impl WarningThrottle {
-    fn record_success(&mut self) {
-        self.last_fingerprint = None;
-        self.suppressed_repetitions = 0;
-    }
-
-    fn record_error(&mut self, error: &(impl fmt::Display + ?Sized)) -> Option<u64> {
-        match self.record(&error.to_string()) {
-            WarningThrottleAction::Log {
-                suppressed_repetitions,
-            } => Some(suppressed_repetitions),
-            WarningThrottleAction::Suppress => None,
-        }
-    }
-
-    fn record(&mut self, fingerprint: &str) -> WarningThrottleAction {
-        if self.last_fingerprint.as_deref() == Some(fingerprint) {
-            self.suppressed_repetitions = self.suppressed_repetitions.saturating_add(1);
-            if self
-                .suppressed_repetitions
-                .is_multiple_of(WARNING_THROTTLE_REPEAT_LOG_INTERVAL)
-            {
-                return WarningThrottleAction::Log {
-                    suppressed_repetitions: self.suppressed_repetitions,
-                };
-            }
-            return WarningThrottleAction::Suppress;
-        }
-
-        let suppressed_repetitions = self.suppressed_repetitions;
-        self.last_fingerprint = Some(fingerprint.to_string());
-        self.suppressed_repetitions = 0;
-        WarningThrottleAction::Log {
-            suppressed_repetitions,
-        }
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use dynamo_services_api::ServiceRegistry;
 
-    use super::{
-        WarningThrottle, WarningThrottleAction, collect_service_labels, command_scope_needs_sync,
-    };
-
-    #[test]
-    fn warning_throttle_logs_first_error_and_suppresses_identical_repeats() {
-        let mut throttle = WarningThrottle::default();
-
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Log {
-                suppressed_repetitions: 0
-            }
-        );
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Suppress
-        );
-    }
-
-    #[test]
-    fn warning_throttle_logs_when_error_changes_with_suppressed_count() {
-        let mut throttle = WarningThrottle::default();
-
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Log {
-                suppressed_repetitions: 0
-            }
-        );
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Suppress
-        );
-        assert_eq!(
-            throttle.record("audit write failed"),
-            WarningThrottleAction::Log {
-                suppressed_repetitions: 1
-            }
-        );
-    }
-
-    #[test]
-    fn warning_throttle_logs_same_error_after_success() {
-        let mut throttle = WarningThrottle::default();
-
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Log {
-                suppressed_repetitions: 0
-            }
-        );
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Suppress
-        );
-
-        throttle.record_success();
-
-        assert_eq!(
-            throttle.record("settings sync failed"),
-            WarningThrottleAction::Log {
-                suppressed_repetitions: 0
-            }
-        );
-    }
+    use super::{collect_service_labels, command_scope_needs_sync};
 
     #[test]
     fn command_scope_sync_is_skipped_when_cached_fingerprint_matches() {
