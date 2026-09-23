@@ -43,52 +43,23 @@ function Throw-RunnerFailure {
     throw $errorRecord
 }
 
+$artifactHelperPath = Join-Path $PSScriptRoot 'artifact-json.ps1'
+. $artifactHelperPath
+$runnerEvidenceHelperPath = Join-Path $PSScriptRoot 'runner-evidence.ps1'
+. $runnerEvidenceHelperPath
+$runnerValidationHelperPath = Join-Path $PSScriptRoot 'runner-validation.ps1'
+. $runnerValidationHelperPath
+$runnerCleanupHelperPath = Join-Path $PSScriptRoot 'runner-cleanup.ps1'
+. $runnerCleanupHelperPath
+$runnerExecutionHelperPath = Join-Path $PSScriptRoot 'runner-execution.ps1'
+. $runnerExecutionHelperPath
+
 function Get-RunnerFailureCode {
     param([Parameter(Mandatory)][System.Exception] $Exception)
     if ($Exception.Data.Contains('DynamoRunnerCode')) {
         return [string] $Exception.Data['DynamoRunnerCode']
     }
     return 'unexpected-runner-failure'
-}
-
-function Get-Sha256HexFromBytes {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]] $Bytes)
-    $hash = [System.Security.Cryptography.SHA256]::HashData($Bytes)
-    return [Convert]::ToHexString($hash).ToLowerInvariant()
-}
-
-function Get-Sha256HexFromString {
-    param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
-    return Get-Sha256HexFromBytes -Bytes $script:Utf8NoBom.GetBytes($Value)
-}
-
-function Get-FileSha256Hex {
-    param([Parameter(Mandatory)][string] $LiteralPath)
-    try {
-        $stream = [System.IO.FileStream]::new(
-            $LiteralPath,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::Read)
-        try {
-            return [Convert]::ToHexString(
-                [System.Security.Cryptography.SHA256]::HashData($stream)
-            ).ToLowerInvariant()
-        }
-        finally {
-            $stream.Dispose()
-        }
-    }
-    catch {
-        Throw-RunnerFailure 'artifact-hash-failed'
-    }
-}
-
-function Get-RandomHex {
-    param([ValidateRange(16, 128)][int] $ByteCount = 32)
-    $bytes = [byte[]]::new($ByteCount)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToHexString($bytes).ToLowerInvariant()
 }
 
 function New-ExclusiveDirectoryNative {
@@ -118,23 +89,6 @@ namespace Dynamo.Perf.Runner
     if ($errorCode -eq 0) { return $true }
     if ($errorCode -eq 183) { return $false }
     Throw-RunnerFailure 'attempt-allocation-failed'
-}
-
-function Assert-ExactJsonKeys {
-    param(
-        [Parameter(Mandatory)][object] $Value,
-        [Parameter(Mandatory)][string[]] $Keys,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.Collections.IEnumerable] -and $Value -isnot [pscustomobject]) {
-        Throw-RunnerFailure $FailureCode
-    }
-    $actual = @($Value.PSObject.Properties.Name | Sort-Object)
-    $expected = @($Keys | Sort-Object)
-    if ($actual.Count -ne $expected.Count) { Throw-RunnerFailure $FailureCode }
-    for ($index = 0; $index -lt $expected.Count; $index++) {
-        if ($actual[$index] -cne $expected[$index]) { Throw-RunnerFailure $FailureCode }
-    }
 }
 
 function Assert-RegularPath {
@@ -309,131 +263,6 @@ function Assert-DirectoryOwnedByCurrentUser {
     }
 }
 
-function Write-ExclusiveJson {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [Parameter(Mandatory)][object] $Value
-    )
-    $parent = Split-Path -LiteralPath $LiteralPath
-    [void](Assert-RegularPath -LiteralPath $parent -Kind Container -FailureCode 'artifact-parent-invalid')
-    if (Test-Path -LiteralPath $LiteralPath) { Throw-RunnerFailure 'artifact-leaf-exists' }
-    $body = ($Value | ConvertTo-Json -Depth 32 -Compress) + "`n"
-    $temporary = Join-Path $parent ('.publish-' + (Get-RandomHex -ByteCount 16) + '.tmp')
-    $published = $false
-    try {
-        $stream = [System.IO.FileStream]::new(
-            $temporary,
-            [System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::Write,
-            [System.IO.FileShare]::None,
-            4096,
-            [System.IO.FileOptions]::WriteThrough)
-        try {
-            $bytes = $script:Utf8NoBom.GetBytes($body)
-            $stream.Write($bytes, 0, $bytes.Length)
-            $stream.Flush($true)
-        }
-        finally {
-            $stream.Dispose()
-        }
-        if ([System.IO.File]::ReadAllText($temporary, $script:Utf8NoBom) -cne $body) {
-            Throw-RunnerFailure 'artifact-temporary-readback-failed'
-        }
-        [System.IO.File]::Move($temporary, $LiteralPath, $false)
-        $published = $true
-        if ([System.IO.File]::ReadAllText($LiteralPath, $script:Utf8NoBom) -cne $body) {
-            Throw-RunnerFailure 'artifact-final-readback-failed'
-        }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'artifact-publication-failed'
-    }
-    finally {
-        if (-not $published -and (Test-Path -LiteralPath $temporary)) {
-            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-function Read-BoundedUtf8File {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [ValidateRange(1, 16777216)][int] $MaximumBytes = 2097152,
-        [switch] $AllowEmpty
-    )
-    try {
-        $item = Assert-RegularPath -LiteralPath $LiteralPath -Kind Leaf -FailureCode 'child-log-invalid'
-        if ($item.Length -gt $MaximumBytes -or (-not $AllowEmpty -and $item.Length -eq 0)) {
-            Throw-RunnerFailure 'child-log-size-invalid'
-        }
-        $stream = [System.IO.FileStream]::new(
-            $LiteralPath,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite)
-        try {
-            $reader = [System.IO.StreamReader]::new(
-                $stream,
-                $script:Utf8NoBom,
-                $true,
-                4096,
-                $true)
-            try { return $reader.ReadToEnd() }
-            finally { $reader.Dispose() }
-        }
-        finally { $stream.Dispose() }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'child-log-read-failed'
-    }
-}
-
-function Read-ExactJsonFile {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [ValidateRange(1, 16777216)][int] $MaximumBytes = 2097152,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    try {
-        $item = Assert-RegularPath -LiteralPath $LiteralPath -Kind Leaf -FailureCode $FailureCode
-        if ($item.Length -le 0 -or $item.Length -gt $MaximumBytes) { Throw-RunnerFailure $FailureCode }
-        $body = [System.IO.File]::ReadAllText($LiteralPath, $script:Utf8NoBom)
-        return $body | ConvertFrom-Json -Depth 32
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
-}
-
-function ConvertFrom-ExactJsonLine {
-    param(
-        [Parameter(Mandatory)][string] $Body,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    if ($Body -notmatch '^\{[^\r\n]*\}\r?\n$') { Throw-RunnerFailure $FailureCode }
-    try { return $Body.TrimEnd("`r", "`n") | ConvertFrom-Json -Depth 32 }
-    catch { Throw-RunnerFailure $FailureCode }
-}
-
-function Get-MinimalChildEnvironment {
-    $environment = [ordered]@{}
-    foreach ($name in @(
-        'SystemRoot', 'WINDIR', 'ComSpec', 'PATH', 'PATHEXT', 'TEMP', 'TMP',
-        'USERPROFILE', 'HOME', 'LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA',
-        'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'CARGO_HOME',
-        'RUSTUP_HOME', 'RUSTUP_TOOLCHAIN', 'PLAYWRIGHT_BROWSERS_PATH', 'CI'
-    )) {
-        $value = [System.Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($null -ne $value -and $value.Length -gt 0) { $environment[$name] = [string]$value }
-    }
-    $environment['NO_COLOR'] = '1'
-    $environment['CARGO_TERM_COLOR'] = 'never'
-    return $environment
-}
-
 function Resolve-ReparseFreeApplicationPath {
     param(
         [Parameter(Mandatory)][string] $LiteralPath,
@@ -489,82 +318,6 @@ function Resolve-ReparseFreeApplicationPath {
     }
 }
 
-function Resolve-Executable {
-    param(
-        [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    try {
-        $command = Get-Command -Name $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1
-        $path = [System.IO.Path]::GetFullPath([string]$command.Source)
-        return Resolve-ReparseFreeApplicationPath -LiteralPath $path -FailureCode $FailureCode
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
-}
-
-function Invoke-DirectBoundedProcess {
-    param(
-        [Parameter(Mandatory)][string] $ExecutablePath,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $ArgumentList,
-        [Parameter(Mandatory)][string] $WorkingDirectory,
-        [ValidateRange(100, 120000)][int] $TimeoutMilliseconds = 30000,
-        [int[]] $AllowedExitCodes = @(0),
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $ExecutablePath
-    $start.WorkingDirectory = $WorkingDirectory
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardInput = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $start.StandardOutputEncoding = $script:Utf8NoBom
-    $start.StandardErrorEncoding = $script:Utf8NoBom
-    $start.Environment.Clear()
-    foreach ($entry in (Get-MinimalChildEnvironment).GetEnumerator()) {
-        $start.Environment[[string]$entry.Key] = [string]$entry.Value
-    }
-    $start.Environment['GIT_OPTIONAL_LOCKS'] = '0'
-    foreach ($argument in $ArgumentList) { [void]$start.ArgumentList.Add($argument) }
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    try {
-        if (-not $process.Start()) { Throw-RunnerFailure $FailureCode }
-        $process.StandardInput.Close()
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
-            $killError = $null
-            try {
-                if (-not $process.HasExited) { $process.Kill($true) }
-            }
-            catch { $killError = $_.Exception }
-            $terminated = $process.WaitForExit(5000)
-            if (-not $terminated) { Throw-RunnerFailure 'direct-process-cleanup-failed' }
-            Throw-RunnerFailure $FailureCode
-        }
-        [void][System.Threading.Tasks.Task]::WaitAll(@($stdoutTask, $stderrTask), 5000)
-        if ($stdoutTask.Result.Length -gt 33554432 -or $stderrTask.Result.Length -gt 4194304) {
-            Throw-RunnerFailure $FailureCode
-        }
-        if ($AllowedExitCodes -notcontains $process.ExitCode) { Throw-RunnerFailure $FailureCode }
-        return [pscustomobject]@{
-            ExitCode = $process.ExitCode
-            Stdout = $stdoutTask.Result
-            Stderr = $stderrTask.Result
-        }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
-    finally { $process.Dispose() }
-}
-
 function Invoke-Git {
     param(
         [Parameter(Mandatory)][string] $GitPath,
@@ -582,53 +335,6 @@ function Invoke-Git {
     return Invoke-DirectBoundedProcess -ExecutablePath $GitPath -ArgumentList $safeArguments `
         -WorkingDirectory $RepositoryRoot -AllowedExitCodes $AllowedExitCodes `
         -FailureCode $FailureCode
-}
-
-function Get-SourceSnapshot {
-    param(
-        [Parameter(Mandatory)][string] $GitPath,
-        [Parameter(Mandatory)][string] $RepositoryRoot
-    )
-    $head = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('rev-parse', '--verify', 'HEAD') -FailureCode 'source-head-failed').Stdout.Trim()
-    if ($head -cnotmatch '^[0-9a-f]{40}$') { Throw-RunnerFailure 'source-head-invalid' }
-    $status = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('status', '--porcelain=v1', '-z', '--untracked-files=all') `
-        -FailureCode 'source-status-failed').Stdout
-    if ($status.Length -ne 0) { Throw-RunnerFailure 'source-not-clean' }
-    $flags = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('ls-files', '-v', '-z', '--') -FailureCode 'source-index-flags-failed').Stdout
-    foreach ($record in $flags.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)) {
-        if ($record.Length -lt 2) { Throw-RunnerFailure 'source-index-flags-invalid' }
-        $flag = $record[0]
-        if ([char]::IsLower($flag) -or $flag -ceq 'S') {
-            Throw-RunnerFailure 'source-hidden-index-state'
-        }
-    }
-    $worktreeDiff = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('diff', '--no-ext-diff', '--binary', 'HEAD', '--') `
-        -FailureCode 'source-diff-failed').Stdout
-    $cachedDiff = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('diff', '--no-ext-diff', '--cached', '--binary', 'HEAD', '--') `
-        -FailureCode 'source-cached-diff-failed').Stdout
-    $canonical = "worktree`0$worktreeDiff`0cached`0$cachedDiff`0untracked`0"
-    return [ordered]@{
-        head = $head
-        clean = $true
-        diff_sha256 = Get-Sha256HexFromString -Value $canonical
-    }
-}
-
-function Assert-SnapshotEqual {
-    param(
-        [Parameter(Mandatory)][System.Collections.IDictionary] $Expected,
-        [Parameter(Mandatory)][System.Collections.IDictionary] $Actual
-    )
-    foreach ($key in @('head', 'clean', 'diff_sha256')) {
-        if ([string]$Expected[$key] -cne [string]$Actual[$key]) {
-            Throw-RunnerFailure 'source-state-drift'
-        }
-    }
 }
 
 function Get-EnvironmentIdentity {
@@ -756,276 +462,6 @@ function Start-RunnerJob {
     }
 }
 
-function Get-JobEvidenceRow {
-    param(
-        [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][string] $Phase,
-        [Parameter(Mandatory)][object] $Handle,
-        [AllowNull()][object] $Evidence
-    )
-    if ($null -eq $Evidence) { $Evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job }
-    if ($Evidence.ProcessId -ne $Handle.Job.ProcessId -or
-        $Evidence.CreationFileTimeUtc -ne $Handle.Job.CreationFileTimeUtc -or
-        $Evidence.ActiveProcessCount -lt 0 -or $Evidence.TotalProcessCount -lt 1) {
-        Throw-RunnerFailure 'job-evidence-invalid'
-    }
-    return [ordered]@{
-        name = $Name
-        phase = $Phase
-        direct_pid = $Handle.Job.ProcessId
-        creation_file_time_utc = [uint64]$Handle.Job.CreationFileTimeUtc
-        is_process_in_job = [bool]$Evidence.IsProcessInJob
-        active_processes = [int64]$Evidence.ActiveProcessCount
-        total_processes = [int64]$Evidence.TotalProcessCount
-        terminated_processes = [int64]$Evidence.TerminatedProcessCount
-        active_process_ids = @($Evidence.ActiveProcessIds | ForEach-Object { [uint64]$_ })
-    }
-}
-
-function Get-HarnessRssBytes {
-    param([Parameter(Mandatory)][object] $HarnessHandle)
-    try {
-        $process = [System.Diagnostics.Process]::GetProcessById($HarnessHandle.Job.ProcessId)
-        try {
-            $creation = [uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
-            $rss = [int64]$process.WorkingSet64
-            if ($creation -ne $HarnessHandle.Job.CreationFileTimeUtc -or $rss -le 0) {
-                Throw-RunnerFailure 'harness-rss-invalid'
-            }
-            return $rss
-        }
-        finally { $process.Dispose() }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'harness-rss-unavailable'
-    }
-}
-
-function Get-SanitizedProcessSnapshot {
-    param(
-        [Parameter(Mandatory)][object] $Handle,
-        [Parameter(Mandatory)][object] $Evidence,
-        [Parameter(Mandatory)][int64] $ObservedElapsedMilliseconds,
-        [Parameter(Mandatory)][string] $Phase
-    )
-    $processIds = @($Evidence.ActiveProcessIds | Select-Object -First 64 | ForEach-Object { [uint64]$_ })
-    $parentRecords = @{}
-    $parentQueryStatus = 'not-needed'
-    if ($processIds.Count -gt 0) {
-        try {
-            $filter = ($processIds | ForEach-Object { "ProcessId = $_" }) -join ' OR '
-            $query = "SELECT ProcessId, Name, ExecutablePath, ParentProcessId, CreationDate FROM Win32_Process WHERE $filter"
-            foreach ($record in @(Get-CimInstance -Query $query -OperationTimeoutSec 2 -ErrorAction Stop)) {
-                $parentRecords[[uint64]$record.ProcessId] = $record
-            }
-            $parentQueryStatus = 'ok'
-        }
-        catch { $parentQueryStatus = 'unavailable' }
-    }
-    $rows = [System.Collections.Generic.List[object]]::new()
-    foreach ($processId in $processIds) {
-        $row = [ordered]@{
-            pid = $processId
-            creation_file_time_utc = [uint64]0
-            name = $null
-            executable_path = $null
-            parent_pid = [uint64]0
-            observed_elapsed_ms = $ObservedElapsedMilliseconds
-            phase = $Phase
-            observed_in_initial_job_snapshot = $true
-            job_member = $false
-            query_status = 'unavailable'
-            parent_query_status = $parentQueryStatus
-        }
-        try {
-            $process = [System.Diagnostics.Process]::GetProcessById([int]$processId)
-            try {
-                $creationFileTimeUtc = [uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
-                $name = [string]$process.ProcessName
-                $path = [string]$process.MainModule.FileName
-            }
-            finally { $process.Dispose() }
-            if ($name.Length -lt 1 -or $name.Length -gt 256 -or $name -match '[\x00-\x1f\x7f]' -or
-                $path.Length -lt 1 -or $path.Length -gt 1024 -or $path -match '[\x00-\x1f\x7f]') {
-                $row.query_status = 'invalid-data'
-            }
-            else {
-                $currentEvidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
-                $stillActive = @($currentEvidence.ActiveProcessIds) -contains $processId
-                $birthStillMatches = $false
-                if ($stillActive) {
-                    try {
-                        $currentProcess = [System.Diagnostics.Process]::GetProcessById([int]$processId)
-                        try {
-                            $birthStillMatches = [uint64]$currentProcess.StartTime.ToUniversalTime().ToFileTimeUtc() `
-                                -eq $creationFileTimeUtc
-                        }
-                        finally { $currentProcess.Dispose() }
-                    }
-                    catch { $birthStillMatches = $false }
-                }
-                if (-not $stillActive -or -not $birthStillMatches) {
-                    $row.query_status = 'raced-or-exited'
-                }
-                else {
-                    $row.creation_file_time_utc = $creationFileTimeUtc
-                    $row.name = $name
-                    $row.executable_path = [System.IO.Path]::GetFullPath($path)
-                    $row.job_member = $true
-                    $row.query_status = 'ok-parent-unavailable'
-                    if ($parentRecords.ContainsKey($processId)) {
-                        $parentRecord = $parentRecords[$processId]
-                        $cimCreationFileTimeUtc = [uint64]0
-                        try {
-                            $cimCreationFileTimeUtc = [uint64]([DateTime]$parentRecord.CreationDate).ToUniversalTime().ToFileTimeUtc()
-                        }
-                        catch { }
-                        if ($cimCreationFileTimeUtc -eq $creationFileTimeUtc) {
-                            $row.parent_pid = [uint64]$parentRecord.ParentProcessId
-                            $row.parent_query_status = 'ok'
-                            $row.query_status = 'ok'
-                        }
-                        else { $row.parent_query_status = 'raced-or-unavailable' }
-                    }
-                }
-            }
-        }
-        catch {
-            $row.query_status = 'raced-or-exited'
-        }
-        $rows.Add([pscustomobject]$row)
-    }
-    return [ordered]@{
-        phase = $Phase
-        observed_elapsed_ms = $ObservedElapsedMilliseconds
-        active_processes = [int64]$Evidence.ActiveProcessCount
-        captured_processes = $rows.Count
-        truncated = [int64]$Evidence.ActiveProcessCount -gt $rows.Count
-        processes = @($rows.ToArray())
-    }
-}
-
-function Write-DescendantDiagnostic {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [Parameter(Mandatory)][object] $Handle,
-        [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][object[]] $Samples,
-        [string] $FailureCode = 'child-descendants-survived'
-    )
-    Write-ExclusiveJson -LiteralPath $LiteralPath -Value ([ordered]@{
-        schema_version = 1
-        failure_code = $FailureCode
-        process_role = $Name
-        direct_pid = [uint64]$Handle.Job.ProcessId
-        direct_creation_file_time_utc = [uint64]$Handle.Job.CreationFileTimeUtc
-        samples = @($Samples)
-    })
-}
-
-function Test-AllowlistedBuildHelperSnapshot {
-    param(
-        [Parameter(Mandatory)][object] $Sample,
-        [Parameter(Mandatory)][object] $Evidence,
-        [bool] $AllowContractBuildHelper = $false
-    )
-    $rows = @($Sample.processes)
-    $activeIds = @($Evidence.ActiveProcessIds | ForEach-Object { [uint64]$_ } | Sort-Object)
-    $rowIds = @($rows | ForEach-Object { [uint64]$_.pid } | Sort-Object)
-    if ($rows.Count -lt 1 -or $Sample.truncated -or
-        $rows.Count -ne [int64]$Evidence.ActiveProcessCount -or
-        $rowIds.Count -ne $activeIds.Count) {
-        return $false
-    }
-    for ($index = 0; $index -lt $activeIds.Count; $index++) {
-        if ($rowIds[$index] -ne $activeIds[$index]) { return $false }
-    }
-    foreach ($row in $rows) {
-        if (-not $row.observed_in_initial_job_snapshot -or -not $row.job_member -or
-            [uint64]$row.creation_file_time_utc -eq 0 -or
-            [string]$row.query_status -cnotlike 'ok*') {
-            return $false
-        }
-        $path = [System.IO.Path]::GetFullPath([string]$row.executable_path)
-        $isContractPwsh = [string]$row.name -ceq 'pwsh' -and
-            [string]::Equals(
-                $path,
-                [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName,
-                [System.StringComparison]::OrdinalIgnoreCase)
-        $contractConhostPath = Join-Path ([System.Environment]::GetFolderPath(
-            [System.Environment+SpecialFolder]::System)) 'conhost.exe'
-        $isContractConhost = [string]$row.name -ceq 'conhost' -and
-            [string]::Equals(
-                $path,
-                $contractConhostPath,
-                [System.StringComparison]::OrdinalIgnoreCase)
-        $isContractHelper = $AllowContractBuildHelper -and
-            ($isContractPwsh -or $isContractConhost)
-        $isVctip = [string]$row.name -ceq 'vctip' -and
-            $path -cmatch '(?i)\\Microsoft Visual Studio\\[^\\]+\\[^\\]+\\VC\\Tools\\MSVC\\[0-9.]+\\bin\\HostX64\\x64\\VCTIP\.EXE$'
-        if (-not $isContractHelper -and -not $isVctip) { return $false }
-        if ($isVctip) {
-            try {
-                $programFiles = [System.Environment]::GetFolderPath(
-                    [System.Environment+SpecialFolder]::ProgramFiles)
-                $helperParent = [System.IO.Path]::GetDirectoryName($path)
-                [void](Assert-ExistingPathChainNoReparse -Root $programFiles -Candidate $helperParent `
-                    -FailureCode 'build-helper-path-invalid')
-                $item = Assert-RegularPath -LiteralPath $path -Kind Leaf `
-                    -FailureCode 'build-helper-path-invalid'
-                if (-not [string]::Equals(
-                    $item.FullName,
-                    $path,
-                    [System.StringComparison]::OrdinalIgnoreCase)) {
-                    return $false
-                }
-            }
-            catch { return $false }
-        }
-    }
-    return $true
-}
-
-function Get-CurrentBuildHelperEvidence {
-    param(
-        [Parameter(Mandatory)][object] $Handle,
-        [Parameter(Mandatory)][object] $Sample
-    )
-    try {
-        $freshEvidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
-        $rows = @($Sample.processes)
-        $freshIds = @($freshEvidence.ActiveProcessIds | ForEach-Object { [uint64]$_ } | Sort-Object)
-        $rowIds = @($rows | ForEach-Object { [uint64]$_.pid } | Sort-Object)
-        if ($freshIds.Count -ne $rowIds.Count -or
-            $freshIds.Count -ne [int64]$freshEvidence.ActiveProcessCount) {
-            return $null
-        }
-        for ($index = 0; $index -lt $freshIds.Count; $index++) {
-            if ($freshIds[$index] -ne $rowIds[$index]) { return $null }
-        }
-        foreach ($row in $rows) {
-            $process = [System.Diagnostics.Process]::GetProcessById([int]$row.pid)
-            try {
-                $birth = [uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
-                $name = [string]$process.ProcessName
-                $path = [System.IO.Path]::GetFullPath([string]$process.MainModule.FileName)
-            }
-            finally { $process.Dispose() }
-            if ($birth -ne [uint64]$row.creation_file_time_utc -or
-                $name -cne [string]$row.name -or
-                -not [string]::Equals(
-                    $path,
-                    [string]$row.executable_path,
-                    [System.StringComparison]::OrdinalIgnoreCase)) {
-                return $null
-            }
-        }
-        return $freshEvidence
-    }
-    catch { return $null }
-}
-
 function Wait-RunnerJob {
     param(
         [Parameter(Mandatory)][object] $Handle,
@@ -1119,79 +555,6 @@ function Wait-RunnerJob {
     }
 }
 
-function Remove-RunnerJobHandle {
-    param([AllowNull()][object] $Handle)
-    if ($null -eq $Handle) { return }
-    $cleanupFault = $false
-    $exited = $false
-    try {
-        $wait = Wait-DynamoIsolatedProcess -Process $Handle.Job -TimeoutMilliseconds 0
-        $exited = [bool]$wait.Exited
-    }
-    catch { $cleanupFault = $true }
-    if (-not $exited) {
-        try {
-            Stop-DynamoIsolatedProcess -Process $Handle.Job
-        }
-        catch {
-            $cleanupFault = $true
-            try { $Handle.Job.Terminate([uint32]3758161936) }
-            catch { Throw-RunnerFailure 'teardown-child-cleanup-failed' }
-        }
-        try {
-            $terminated = Wait-DynamoIsolatedProcess -Process $Handle.Job -TimeoutMilliseconds 5000
-            if (-not $terminated.Exited) { Throw-RunnerFailure 'teardown-child-cleanup-failed' }
-            $exited = $true
-        }
-        catch {
-            if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-            Throw-RunnerFailure 'teardown-child-cleanup-failed'
-        }
-    }
-    $proofFault = $false
-    try {
-        $evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
-        if ($evidence.ActiveProcessCount -ne 0 -or $evidence.ActiveProcessIds.Count -ne 0) {
-            try { Stop-DynamoIsolatedProcess -Process $Handle.Job }
-            catch {
-                $cleanupFault = $true
-                $Handle.Job.Terminate([uint32]3758161936)
-            }
-            $deadline = [System.Diagnostics.Stopwatch]::StartNew()
-            do {
-                Start-Sleep -Milliseconds 25
-                $evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job
-            } while ($evidence.ActiveProcessCount -ne 0 -and $deadline.ElapsedMilliseconds -lt 5000)
-        }
-        if (-not $evidence.IsProcessInJob -or $evidence.ActiveProcessCount -ne 0 -or
-            $evidence.ActiveProcessIds.Count -ne 0) {
-            $proofFault = $true
-        }
-        Assert-OriginalProcessAbsent -ProcessId $Handle.Job.ProcessId `
-            -CreationFileTimeUtc $Handle.Job.CreationFileTimeUtc
-    }
-    catch { $proofFault = $true }
-    try {
-        Remove-DynamoIsolatedProcess -Process $Handle.Job
-    }
-    catch {
-        $cleanupFault = $true
-        try { $Handle.Job.Dispose() } catch { Throw-RunnerFailure 'teardown-child-cleanup-failed' }
-    }
-    if ($cleanupFault -or $proofFault) { Throw-RunnerFailure 'teardown-child-cleanup-failed' }
-}
-
-function Remove-ChildLogs {
-    param([AllowNull()][object] $Handle)
-    if ($null -eq $Handle) { return }
-    foreach ($path in @($Handle.StdoutPath, $Handle.StderrPath)) {
-        if (Test-Path -LiteralPath $path) {
-            Remove-Item -LiteralPath $path -Force
-            if (Test-Path -LiteralPath $path) { Throw-RunnerFailure 'temporary-file-cleanup-failed' }
-        }
-    }
-}
-
 function Wait-ReadyFile {
     param(
         [Parameter(Mandatory)][string] $LiteralPath,
@@ -1209,207 +572,6 @@ function Wait-ReadyFile {
         Start-Sleep -Milliseconds 50
     }
     Throw-RunnerFailure 'ready-timeout'
-}
-
-function Assert-ReadyFile {
-    param(
-        [Parameter(Mandatory)][object] $Ready,
-        [Parameter(Mandatory)][string] $Revision,
-        [Parameter(Mandatory)][string] $Nonce,
-        [Parameter(Mandatory)][int] $ProcessId,
-        [Parameter(Mandatory)][string] $FixtureMode
-    )
-    Assert-ExactJsonKeys -Value $Ready -Keys @(
-        'schema_version', 'host', 'dynamic_port', 'port', 'pid', 'revision',
-        'nonce', 'fixture_mode', 'fixture', 'guild_id', 'cookie_name', 'cookie_value'
-    ) -FailureCode 'ready-schema-mismatch'
-    Assert-ExactJsonKeys -Value $Ready.fixture -Keys @('version', 'sha256') `
-        -FailureCode 'ready-fixture-schema-mismatch'
-    if ($Ready.schema_version -ne 1 -or $Ready.host -cne '127.0.0.1' -or
-        $Ready.dynamic_port -ne $true -or $Ready.port -lt 1 -or $Ready.port -gt 65535 -or
-        $Ready.pid -ne $ProcessId -or $Ready.revision -cne $Revision -or
-        $Ready.nonce -cne $Nonce -or $Ready.fixture_mode -cne $FixtureMode -or
-        $Ready.fixture.version -cne $script:FixtureVersion -or
-        $Ready.fixture.sha256 -cne $script:FixtureSha256 -or
-        $Ready.guild_id -ne 9000000000000000101 -or
-        $Ready.cookie_name -cne 'dynamo_dashboard_session' -or
-        $Ready.cookie_value -isnot [string] -or
-        $Ready.cookie_value -cnotmatch '^perf_[0-9a-f]{64}$' -or
-        $Ready.cookie_value -ceq $Nonce -or $Ready.cookie_value -ceq "perf_$Nonce") {
-        Throw-RunnerFailure 'ready-identity-mismatch'
-    }
-}
-
-function Invoke-LoopbackJson {
-    param(
-        [Parameter(Mandatory)][System.Net.Http.HttpClient] $Client,
-        [Parameter(Mandatory)][ValidateSet('GET', 'POST')][string] $Method,
-        [Parameter(Mandatory)][int] $Port,
-        [Parameter(Mandatory)][string] $Route,
-        [string] $ControlToken,
-        [int] $ExpectedStatus = 200,
-        [switch] $NoBody
-    )
-    if ($Route -notmatch '^/[a-z0-9_./-]+$' -or $Route.Contains('?') -or $Route.Contains('#')) {
-        Throw-RunnerFailure 'control-route-invalid'
-    }
-    $request = [System.Net.Http.HttpRequestMessage]::new(
-        [System.Net.Http.HttpMethod]::new($Method),
-        "http://127.0.0.1:$Port$Route")
-    try {
-        if ($null -ne $ControlToken) {
-            [void]$request.Headers.TryAddWithoutValidation('x-dynamo-perf-control', $ControlToken)
-        }
-        $response = $Client.Send($request)
-        try {
-            if ([int]$response.StatusCode -ne $ExpectedStatus) { Throw-RunnerFailure 'control-status-mismatch' }
-            if ($NoBody) { return $null }
-            $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
-            if ($body.Length -le 0 -or $body.Length -gt 65536) { Throw-RunnerFailure 'control-body-invalid' }
-            try { return $body | ConvertFrom-Json -Depth 16 }
-            catch { Throw-RunnerFailure 'control-json-invalid' }
-        }
-        finally { $response.Dispose() }
-    }
-    finally { $request.Dispose() }
-}
-
-function Assert-InstanceSnapshot {
-    param(
-        [Parameter(Mandatory)][object] $Instance,
-        [Parameter(Mandatory)][string] $Revision,
-        [Parameter(Mandatory)][string] $Nonce,
-        [Parameter(Mandatory)][int] $ProcessId,
-        [Parameter(Mandatory)][string] $FixtureMode
-    )
-    Assert-ExactJsonKeys -Value $Instance -Keys @(
-        'schema_version', 'revision', 'nonce', 'pid', 'fixture_mode', 'fixture',
-        'outbound_calls', 'browser_outbound_attempts'
-    ) -FailureCode 'instance-schema-mismatch'
-    Assert-ExactJsonKeys -Value $Instance.fixture -Keys @('version', 'sha256') `
-        -FailureCode 'instance-fixture-schema-mismatch'
-    if ($Instance.schema_version -ne 1 -or $Instance.revision -cne $Revision -or
-        $Instance.nonce -cne $Nonce -or $Instance.pid -ne $ProcessId -or
-        $Instance.fixture_mode -cne $FixtureMode -or
-        $Instance.fixture.version -cne $script:FixtureVersion -or
-        $Instance.fixture.sha256 -cne $script:FixtureSha256 -or
-        $Instance.outbound_calls -ne 0 -or $Instance.browser_outbound_attempts -ne 0) {
-        Throw-RunnerFailure 'instance-identity-or-counter-mismatch'
-    }
-}
-
-function Assert-CounterSnapshot {
-    param([Parameter(Mandatory)][object] $Counters)
-    Assert-ExactJsonKeys -Value $Counters -Keys @(
-        'schema_version', 'denied_requests', 'server_write_attempts', 'repository_reads',
-        'repository_mutations', 'outbound_calls', 'browser_outbound_attempts',
-        'provider_guild_lookups'
-    ) -FailureCode 'counter-schema-mismatch'
-    if ($Counters.schema_version -ne 1 -or $Counters.denied_requests -ne 0 -or
-        $Counters.server_write_attempts -ne 0 -or
-        $Counters.repository_reads -ne 0 -or $Counters.repository_mutations -ne 0 -or
-        $Counters.outbound_calls -ne 0 -or
-        $Counters.browser_outbound_attempts -ne 0 -or $Counters.provider_guild_lookups -ne 0) {
-        Throw-RunnerFailure 'counter-drift-detected'
-    }
-}
-
-function Assert-LoadResult {
-    param(
-        [Parameter(Mandatory)][object] $Result,
-        [Parameter(Mandatory)][System.Collections.IDictionary] $SourceState,
-        [Parameter(Mandatory)][System.Collections.IDictionary] $Environment,
-        [Parameter(Mandatory)][string] $Nonce,
-        [Parameter(Mandatory)][int] $ProcessId,
-        [Parameter(Mandatory)][string] $Path,
-        [Parameter(Mandatory)][int] $Requests,
-        [Parameter(Mandatory)][int] $Concurrency
-    )
-    Assert-ExactJsonKeys -Value $Result -Keys @(
-        'schema_version', 'runner_version', 'source_state', 'fixture', 'environment',
-        'instance', 'path', 'requests', 'concurrency', 'ok', 'failed', 'decoded_bytes',
-        'wire_bytes', 'content_encodings', 'p50_ms', 'p95_ms', 'max_ms', 'statuses'
-    ) -FailureCode 'load-result-schema-mismatch'
-    if ($Result.schema_version -ne 1 -or $Result.runner_version -cne 'dashboard-load-v1' -or
-        $Result.source_state.head -cne $SourceState.head -or
-        $Result.source_state.clean -ne $true -or
-        $Result.source_state.diff_sha256 -cne $SourceState.diff_sha256 -or
-        $Result.fixture.version -cne $script:FixtureVersion -or
-        $Result.fixture.sha256 -cne $script:FixtureSha256 -or
-        $Result.environment.fingerprint_sha256 -cne $Environment.fingerprint_sha256 -or
-        $Result.instance.revision -cne $SourceState.head -or
-        $Result.instance.nonce -cne $Nonce -or $Result.instance.pid -ne $ProcessId -or
-        $Result.instance.fixture_mode -cne 'Public' -or
-        $Result.instance.outbound_calls_before -ne 0 -or
-        $Result.instance.outbound_calls_after -ne 0 -or
-        $Result.instance.browser_outbound_attempts -ne 0 -or
-        $Result.path -cne $Path -or $Result.requests -ne $Requests -or
-        $Result.concurrency -ne $Concurrency -or $Result.ok -ne $Requests -or
-        $Result.failed -ne 0) {
-        Throw-RunnerFailure 'load-result-identity-mismatch'
-    }
-}
-
-function Assert-PortClosed {
-    param([Parameter(Mandatory)][int] $Port)
-    $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
-    $listener.ExclusiveAddressUse = $true
-    try { $listener.Start(1) }
-    catch { Throw-RunnerFailure 'teardown-port-still-open' }
-    finally { try { $listener.Stop() } catch { } }
-}
-
-function Assert-OriginalProcessAbsent {
-    param(
-        [Parameter(Mandatory)][int] $ProcessId,
-        [Parameter(Mandatory)][uint64] $CreationFileTimeUtc
-    )
-    try {
-        $candidate = [System.Diagnostics.Process]::GetProcessById($ProcessId)
-        try {
-            $candidateCreation = [uint64]$candidate.StartTime.ToUniversalTime().ToFileTimeUtc()
-            if ($candidateCreation -eq $CreationFileTimeUtc) {
-                Throw-RunnerFailure 'teardown-process-still-alive'
-            }
-        }
-        finally { $candidate.Dispose() }
-    }
-    catch [System.ArgumentException] { }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'teardown-process-proof-failed'
-    }
-}
-
-function Assert-NoReparseTree {
-    param(
-        [Parameter(Mandatory)][string] $TreeRoot,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    $rootFull = [System.IO.Path]::GetFullPath($TreeRoot)
-    [void](Assert-RegularPath -LiteralPath $rootFull -Kind Container -FailureCode $FailureCode)
-    $pending = [System.Collections.Generic.Queue[System.IO.DirectoryInfo]]::new()
-    $pending.Enqueue([System.IO.DirectoryInfo]::new($rootFull))
-    try {
-        while ($pending.Count -gt 0) {
-            $directory = $pending.Dequeue()
-            foreach ($entry in $directory.EnumerateFileSystemInfos()) {
-                $entryFull = Assert-PathUnderRoot -Root $rootFull -Candidate $entry.FullName `
-                    -FailureCode $FailureCode
-                $attributes = [System.IO.File]::GetAttributes($entryFull)
-                if (($attributes -band [System.IO.FileAttributes]::ReparsePoint) -ne 0) {
-                    Throw-RunnerFailure $FailureCode
-                }
-                if (($attributes -band [System.IO.FileAttributes]::Directory) -ne 0) {
-                    $pending.Enqueue([System.IO.DirectoryInfo]::new($entryFull))
-                }
-            }
-        }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
 }
 
 function Remove-OwnedAttempt {
@@ -1580,12 +742,19 @@ try {
 
     $sourceState = Get-SourceSnapshot -GitPath $gitPath -RepositoryRoot $repositoryRoot
 
+    $artifactHelperPath = Join-Path $repositoryRoot 'scripts\perf\artifact-json.ps1'
+    $runnerEvidenceHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-evidence.ps1'
+    $runnerValidationHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-validation.ps1'
+    $runnerCleanupHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-cleanup.ps1'
+    $runnerExecutionHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-execution.ps1'
     $modulePath = Join-Path $repositoryRoot 'scripts\perf\isolated-process-job.psm1'
     $fixturePath = Join-Path $repositoryRoot 'tests\perf\fixtures\guild-detail-v1.json'
     $loadScriptPath = Join-Path $repositoryRoot 'scripts\perf\dashboard-load.cjs'
     $budgetScriptPath = Join-Path $repositoryRoot 'scripts\perf\assert-budgets.cjs'
     $budgetPath = Join-Path $repositoryRoot 'tests\perf\budgets\public-root.json'
-    foreach ($leaf in @($modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath)) {
+    foreach ($leaf in @(
+        $artifactHelperPath, $runnerEvidenceHelperPath, $runnerValidationHelperPath, $runnerCleanupHelperPath, $runnerExecutionHelperPath, $modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath
+    )) {
         [void](Assert-RegularPath -LiteralPath $leaf -Kind Leaf -FailureCode 'required-runner-file-invalid')
     }
     if ((Get-FileSha256Hex -LiteralPath $fixturePath) -cne $script:FixtureSha256) {
@@ -1593,6 +762,11 @@ try {
     }
     foreach ($trackedRunnerPath in @(
         'scripts/perf/with-isolated-dashboard.ps1',
+        'scripts/perf/artifact-json.ps1',
+        'scripts/perf/runner-evidence.ps1',
+        'scripts/perf/runner-validation.ps1',
+        'scripts/perf/runner-cleanup.ps1',
+        'scripts/perf/runner-execution.ps1',
         'scripts/perf/isolated-process-job.psm1',
         'scripts/perf/dashboard-load.cjs',
         'scripts/perf/assert-budgets.cjs',

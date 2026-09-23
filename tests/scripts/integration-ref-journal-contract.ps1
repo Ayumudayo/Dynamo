@@ -12,6 +12,11 @@ $PlanNames = @(
     '2026-07-13-wave0-bootstrap.md'
 )
 $BootstrapPaths = @(
+    'scripts/remediation/control-schema-v2.json'
+    'scripts/remediation/modules/canonical-json.ps1'
+    'scripts/remediation/modules/path-security.ps1'
+    'scripts/remediation/modules/plan-set-binding-schema.ps1'
+    'scripts/remediation/modules/publisher-publication-journal.ps1'
     'scripts/remediation/publish-plan-set.ps1'
     'scripts/remediation/update-integration-ref.ps1'
     'tests/scripts/plan-set-publisher-contract.ps1'
@@ -1628,6 +1633,10 @@ function New-IntegrationFixture {
         $null = Invoke-Git -WorkingDirectory $repository -Arguments @('reset', '--hard', $AuditBaseline)
         foreach ($relative in $BootstrapPaths) {
             Copy-FileExact -Source (Join-Path $SourceRepository $relative) -Destination (Join-Path $repository $relative)
+        }
+        $bootstrapAcl = [System.IO.FileSystemAclExtensions]::GetAccessControl([System.IO.FileInfo]::new((Join-Path $repository 'scripts/remediation/publish-plan-set.ps1')))
+        foreach ($relative in $BootstrapPaths) {
+            [System.IO.FileSystemAclExtensions]::SetAccessControl([System.IO.FileInfo]::new((Join-Path $repository $relative)), $bootstrapAcl)
         }
         $null = Invoke-Git -WorkingDirectory $repository -Arguments (@('add', '--') + $BootstrapPaths)
         $null = Invoke-Git -WorkingDirectory $repository -Arguments @('commit', '--quiet', '-m', 'fixture: install bootstrap contract inputs')

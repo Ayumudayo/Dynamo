@@ -1,7 +1,11 @@
+mod commands;
+mod constants;
+pub mod interactions;
 mod module;
-
-pub mod interactions {
-    pub use super::module::handle_interaction as handle;
-}
+mod render;
+mod settings;
+#[cfg(test)]
+mod tests;
+mod workflow;
 
 pub use module::SuggestionModule;

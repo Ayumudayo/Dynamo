@@ -9,6 +9,9 @@ $dashboardRoot = Join-Path $repoRoot 'crates/dashboard'
 $fontRoot = Join-Path $dashboardRoot 'assets/fonts'
 $lockPath = Join-Path $fontRoot 'fonts.lock.json'
 $mainPath = Join-Path $dashboardRoot 'src/main.rs'
+$libraryPath = Join-Path $dashboardRoot 'src/lib.rs'
+$fontAssetsPath = Join-Path $dashboardRoot 'src/font_assets.rs'
+$browserAssetsPath = Join-Path $dashboardRoot 'src/browser_assets.rs'
 $buildPath = Join-Path $dashboardRoot 'build.rs'
 
 function Assert-Contract {
@@ -22,7 +25,7 @@ function Assert-Contract {
     }
 }
 
-foreach ($requiredPath in @($lockPath, $mainPath, $buildPath)) {
+foreach ($requiredPath in @($lockPath, $mainPath, $libraryPath, $fontAssetsPath, $browserAssetsPath, $buildPath)) {
     Assert-Contract (Test-Path -LiteralPath $requiredPath -PathType Leaf) "missing $requiredPath"
 }
 
@@ -108,11 +111,14 @@ Assert-Contract ((@($lock.fallback_metrics.fira_sans.faces.weight) -join ',') -c
 Assert-Contract ((@($lock.fallback_metrics.fira_code.faces.weight) -join ',') -ceq '500,600,700') 'Fira Code fallback weights must be exact'
 
 $main = Get-Content -LiteralPath $mainPath -Raw
+$library = Get-Content -LiteralPath $libraryPath -Raw
+$fontAssets = Get-Content -LiteralPath $fontAssetsPath -Raw
+$browserAssets = Get-Content -LiteralPath $browserAssetsPath -Raw
 Assert-Contract ($main -cnotmatch 'fonts\.googleapis\.com|fonts\.gstatic\.com') 'runtime Google Fonts reference remains'
-Assert-Contract ($main -cnotmatch '@import\s+url\s*\(\s*["'']?https?://') 'remote CSS import remains'
-Assert-Contract ($main -cmatch 'include!\(concat!\(env!\("OUT_DIR"\), "/font_assets\.rs"\)\)') 'generated font asset constants are not included'
-Assert-Contract ($main -cmatch '\.merge\(font_asset_router\(\)\)') 'font asset router is not mounted'
-Assert-Contract ($main -cmatch 'font-synthesis:\s*none') 'font synthesis must be disabled'
+Assert-Contract ($browserAssets -cnotmatch '@import\s+url\s*\(\s*["'']?https?://') 'remote CSS import remains'
+Assert-Contract ($fontAssets -cmatch 'include!\(concat!\(env!\("OUT_DIR"\), "/font_assets\.rs"\)\)') 'generated font asset constants are not included'
+Assert-Contract ($library -cmatch '\.merge\(font_asset_router\(\)\)') 'font asset router is not mounted'
+Assert-Contract ($browserAssets -cmatch 'font-synthesis:\s*none') 'font synthesis must be disabled'
 Assert-Contract ($build -cnotmatch 'https?://|reqwest|Invoke-WebRequest|curl') 'build.rs must never download font assets'
 foreach ($entry in @($lock.assets) + @($lock.licenses)) {
     Assert-Contract ($build.Contains([string]$entry.sha256)) "build.rs does not pin $($entry.file)"
