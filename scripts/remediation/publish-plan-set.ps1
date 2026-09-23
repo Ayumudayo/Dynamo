@@ -1123,22 +1123,12 @@ function New-PublicationRow {
     $row
 }
 
-function Get-BindingKeys([int64] $SchemaVersion) {
-    if ($SchemaVersion -eq 1) {
-        return @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','publisher_sha256','integration_helper_sha256','publisher_contract_test_sha256','integration_contract_test_sha256','bundle_prepared_row_sha256','binding_sha256')
-    }
-    if ($SchemaVersion -eq 2) {
-        return @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','control_schema_path','control_schema_sha256','control_schema_version','control_hashes','bundle_prepared_row_sha256','binding_sha256')
-    }
-    throw "Unsupported binding schema version: $SchemaVersion"
-}
-
 function Read-Binding([object] $Context, [object] $Manifest, [object] $Prepared, [string] $Path = $Context.BindingPath) {
     $probe = Read-CanonicalJsonFile -Path $Path
     Assert-JsonInt64 $probe.Value['schema_version'] 'Binding schema_version'
     [int64]$schemaVersion = $probe.Value['schema_version']
-    $record = Read-CanonicalJsonFile -Path $Path -ExpectedKeys (Get-BindingKeys $schemaVersion)
-    $keys = Get-BindingKeys $schemaVersion
+    $record = Read-CanonicalJsonFile -Path $Path -ExpectedKeys (Get-PlanSetBindingKeys $schemaVersion)
+    $keys = Get-PlanSetBindingKeys $schemaVersion
     $preimage = [ordered]@{}
     foreach ($key in $keys[0..($keys.Count - 2)]) { $preimage[$key] = $record.Value[$key] }
     $hash = Get-DomainHash 'dynamo-plan-set-binding-v1' (ConvertTo-CanonicalBytes $preimage)
@@ -2043,6 +2033,13 @@ $pathSecurityHelperBefore = Get-PathRecord $pathSecurityHelperPath
 $pathSecurityHelperAfter = Assert-SafeExistingPath -Path $pathSecurityHelperPath -LeafType File
 if ($pathSecurityHelperBefore.IdentitySha256 -cne $pathSecurityHelperAfter.IdentitySha256 -or $pathSecurityHelperBefore.Owner -cne $pathSecurityHelperAfter.Owner -or $pathSecurityHelperBefore.AclSha256 -cne $pathSecurityHelperAfter.AclSha256) {
     throw 'Path-security helper path identity, owner, or ACL changed during load.'
+}
+$bindingSchemaHelperPath = Join-Path $script:RepositoryRoot 'scripts/remediation/modules/plan-set-binding-schema.ps1'
+$bindingSchemaHelperBefore = Get-PathRecord $bindingSchemaHelperPath
+. $bindingSchemaHelperPath
+$bindingSchemaHelperAfter = Assert-SafeExistingPath -Path $bindingSchemaHelperPath -LeafType File
+if ($bindingSchemaHelperBefore.IdentitySha256 -cne $bindingSchemaHelperAfter.IdentitySha256 -or $bindingSchemaHelperBefore.Owner -cne $bindingSchemaHelperAfter.Owner -or $bindingSchemaHelperBefore.AclSha256 -cne $bindingSchemaHelperAfter.AclSha256) {
+    throw 'Binding-schema helper path identity, owner, or ACL changed during load.'
 }
 Initialize-ControlSchema
 $evidenceRootValue = [Environment]::GetEnvironmentVariable('DYNAMO_REMEDIATION_EVIDENCE_ROOT', 'Process')

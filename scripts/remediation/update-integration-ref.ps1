@@ -675,12 +675,11 @@ function Assert-BindingAndManifest([string] $CommonDirectory) {
     Assert-SafeExistingPath -Path $controlRoot -LeafType Directory | Out-Null
     Assert-RestrictiveDirectory $controlRoot
     $bindingPath = Join-Path $CommonDirectory 'dynamo-remediation/plan-set-binding-v1.json'
-    $legacyBindingKeys = @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','publisher_sha256','integration_helper_sha256','publisher_contract_test_sha256','integration_contract_test_sha256','bundle_prepared_row_sha256','binding_sha256')
-    $v2BindingKeys = @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','control_schema_path','control_schema_sha256','control_schema_version','control_hashes','bundle_prepared_row_sha256','binding_sha256')
     $bindingProbe = Read-CanonicalJsonFile -Path $bindingPath
     Assert-JsonInt64Token $bindingProbe.Value['schema_version'] 'binding schema_version'
     [int64]$bindingSchemaVersion = $bindingProbe.Value['schema_version']
-    $bindingKeys = if ($bindingSchemaVersion -eq 1) { $legacyBindingKeys } elseif ($bindingSchemaVersion -eq 2) { $v2BindingKeys } else { throw 'Binding schema version mismatch.' }
+    try { $bindingKeys = Get-PlanSetBindingKeys $bindingSchemaVersion }
+    catch { throw 'Binding schema version mismatch.' }
     $binding = Read-CanonicalJsonFile -Path $bindingPath -ExpectedKeys $bindingKeys
     $keys = @($binding.Value.Keys)
     if ($keys.Count -lt 2 -or $keys[-1] -cne 'binding_sha256') { throw 'binding_sha256 must be the final binding field.' }
@@ -2314,6 +2313,13 @@ $pathSecurityHelperBefore = Get-PathRecord $pathSecurityHelperPath
 $pathSecurityHelperAfter = Assert-SafeExistingPath -Path $pathSecurityHelperPath -LeafType File
 if ($pathSecurityHelperBefore.Identity -cne $pathSecurityHelperAfter.Identity -or $pathSecurityHelperBefore.Owner -cne $pathSecurityHelperAfter.Owner -or $pathSecurityHelperBefore.AclSha256 -cne $pathSecurityHelperAfter.AclSha256) {
     throw 'Path-security helper path identity, owner, or ACL changed during load.'
+}
+$bindingSchemaHelperPath = Join-Path $script:RepositoryProbeRoot 'scripts/remediation/modules/plan-set-binding-schema.ps1'
+$bindingSchemaHelperBefore = Get-PathRecord $bindingSchemaHelperPath
+. $bindingSchemaHelperPath
+$bindingSchemaHelperAfter = Assert-SafeExistingPath -Path $bindingSchemaHelperPath -LeafType File
+if ($bindingSchemaHelperBefore.Identity -cne $bindingSchemaHelperAfter.Identity -or $bindingSchemaHelperBefore.Owner -cne $bindingSchemaHelperAfter.Owner -or $bindingSchemaHelperBefore.AclSha256 -cne $bindingSchemaHelperAfter.AclSha256) {
+    throw 'Binding-schema helper path identity, owner, or ACL changed during load.'
 }
 $expectedScriptPath = [IO.Path]::GetFullPath((Join-Path $script:RepositoryProbeRoot 'scripts/remediation/update-integration-ref.ps1'))
 if ($scriptPathRecord.Path -cne $expectedScriptPath) { throw 'Helper must run from its canonical fixed repository path.' }

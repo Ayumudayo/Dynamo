@@ -13,6 +13,7 @@ $BootstrapPaths = @(
     'scripts/remediation/control-schema-v2.json'
     'scripts/remediation/modules/canonical-json.ps1'
     'scripts/remediation/modules/path-security.ps1'
+    'scripts/remediation/modules/plan-set-binding-schema.ps1'
     'scripts/remediation/publish-plan-set.ps1'
     'scripts/remediation/update-integration-ref.ps1'
     'tests/scripts/plan-set-publisher-contract.ps1'
