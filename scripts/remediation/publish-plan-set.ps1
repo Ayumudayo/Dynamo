@@ -558,17 +558,7 @@ function Assert-RestrictedAcl {
 
 function Assert-SafeExistingPath {
     param([string] $Path, [ValidateSet('Any','File','Directory')][string] $LeafType = 'Any')
-    $full = [IO.Path]::GetFullPath($Path)
-    $root = [IO.Path]::GetPathRoot($full)
-    $relative = $full.Substring($root.Length)
-    $current = $root.TrimEnd([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar)
-    if ([string]::IsNullOrEmpty($current)) { $current = $root }
-    foreach ($part in $relative.Split(@([IO.Path]::DirectorySeparatorChar, [IO.Path]::AltDirectorySeparatorChar), [StringSplitOptions]::RemoveEmptyEntries)) {
-        $current = Join-Path $current $part
-        if (-not (Test-Path -LiteralPath $current)) { throw "Missing path ancestor: $current" }
-        $item = Get-Item -LiteralPath $current -Force
-        if (($item.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) { throw "Reparse ancestor rejected: $current" }
-    }
+    $full = Resolve-ReparseFreeExistingPath -Path $Path
     $leaf = Get-Item -LiteralPath $full -Force
     if ($LeafType -eq 'File' -and $leaf.PSIsContainer) { throw "Expected regular file: $full" }
     if ($LeafType -eq 'Directory' -and -not $leaf.PSIsContainer) { throw "Expected directory: $full" }
@@ -2042,10 +2032,17 @@ function Assert-PublicationMutationBoundaryUnchanged {
 $script:RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $canonicalHelperPath = Join-Path $script:RepositoryRoot 'scripts/remediation/modules/canonical-json.ps1'
 . $canonicalHelperPath
-$canonicalHelperBefore = Assert-SafeExistingPath -Path $canonicalHelperPath -LeafType File
-$canonicalHelperAfter = Assert-SafeExistingPath -Path $canonicalHelperPath -LeafType File
+$canonicalHelperBefore = Get-PathRecord $canonicalHelperPath
+$canonicalHelperAfter = Get-PathRecord $canonicalHelperPath
 if ($canonicalHelperBefore.IdentitySha256 -cne $canonicalHelperAfter.IdentitySha256 -or $canonicalHelperBefore.Owner -cne $canonicalHelperAfter.Owner -or $canonicalHelperBefore.AclSha256 -cne $canonicalHelperAfter.AclSha256) {
     throw 'Canonical helper path identity, owner, or ACL changed during load.'
+}
+$pathSecurityHelperPath = Join-Path $script:RepositoryRoot 'scripts/remediation/modules/path-security.ps1'
+$pathSecurityHelperBefore = Get-PathRecord $pathSecurityHelperPath
+. $pathSecurityHelperPath
+$pathSecurityHelperAfter = Assert-SafeExistingPath -Path $pathSecurityHelperPath -LeafType File
+if ($pathSecurityHelperBefore.IdentitySha256 -cne $pathSecurityHelperAfter.IdentitySha256 -or $pathSecurityHelperBefore.Owner -cne $pathSecurityHelperAfter.Owner -or $pathSecurityHelperBefore.AclSha256 -cne $pathSecurityHelperAfter.AclSha256) {
+    throw 'Path-security helper path identity, owner, or ACL changed during load.'
 }
 Initialize-ControlSchema
 $evidenceRootValue = [Environment]::GetEnvironmentVariable('DYNAMO_REMEDIATION_EVIDENCE_ROOT', 'Process')
