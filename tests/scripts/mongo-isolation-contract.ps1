@@ -7,6 +7,8 @@ Set-StrictMode -Version Latest
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
 $runnerPath = Join-Path $repoRoot 'scripts/test-isolated-mongo.ps1'
 $rustPath = Join-Path $repoRoot 'crates/persistence-mongo/src/lib.rs'
+$rustTestSupportPath = Join-Path $repoRoot 'crates/persistence-mongo/src/tests/support.rs'
+$rustDashboardAuditTestPath = Join-Path $repoRoot 'crates/persistence-mongo/src/tests/dashboard_audit.rs'
 $tempRoot = Join-Path ([IO.Path]::GetTempPath()) ("dynamo-mongo-contract-{0}" -f [Guid]::NewGuid().ToString('N'))
 $cargoStubCommand = 'Invoke-DynamoMongoCargoStub'
 $logPath = Join-Path $tempRoot 'cargo-calls.jsonl'
@@ -172,6 +174,8 @@ $originalEnvironment = Get-EnvironmentSnapshot -Names $managedEnvironment
 try {
     Assert-Contract (Test-Path -LiteralPath $runnerPath -PathType Leaf) 'missing scripts/test-isolated-mongo.ps1'
     Assert-Contract (Test-Path -LiteralPath $rustPath -PathType Leaf) 'missing Mongo persistence source'
+    Assert-Contract (Test-Path -LiteralPath $rustTestSupportPath -PathType Leaf) 'missing isolated Mongo test support'
+    Assert-Contract (Test-Path -LiteralPath $rustDashboardAuditTestPath -PathType Leaf) 'missing dashboard audit Mongo test'
 
     New-Item -ItemType Directory -Path $tempRoot -Force | Out-Null
     function global:Invoke-DynamoMongoCargoStub {
@@ -363,7 +367,9 @@ $global:LASTEXITCODE = 0
     }) -ShouldSucceed $true -ExpectedCargoCalls 2 -ForbiddenOutput $secretUri)
 
     $rust = Get-Content -LiteralPath $rustPath -Raw
-    $testModule = $rust.Substring($rust.IndexOf('#[cfg(test)]', [StringComparison]::Ordinal))
+    $testModuleStart = $rust.IndexOf('#[cfg(test)]', [StringComparison]::Ordinal)
+    Assert-Contract ($testModuleStart -ge 0) 'missing Mongo persistence test module'
+    $testModule = $rust.Substring($testModuleStart) + [Environment]::NewLine + (Get-Content -LiteralPath $rustTestSupportPath -Raw) + [Environment]::NewLine + (Get-Content -LiteralPath $rustDashboardAuditTestPath -Raw)
     Assert-Contract ($testModule -cnotmatch 'dotenvy::dotenv|MongoPersistenceConfig::try_from_env') 'ignored tests still load dotenv or general Mongo environment'
     Assert-Contract ($testModule.Contains('MONGODB_URI_FOR_ISOLATED_TEST', [StringComparison]::Ordinal)) 'Rust tests do not consume the runner-only URI variable'
     Assert-Contract ($testModule.Contains('catch_unwind', [StringComparison]::Ordinal)) 'panic is not captured before cleanup'
