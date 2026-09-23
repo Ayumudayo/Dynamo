@@ -342,6 +342,7 @@ Assert-Equal -Actual $pathFunctionDefinitions.Count -Expected $pathFunctionNames
     -Message 'launcher path resolver function extraction'
 . ([scriptblock]::Create(($pathFunctionDefinitions -join "`n`n")))
 $launcherText = [System.IO.File]::ReadAllText($launcherSource, $script:Utf8NoBom)
+$runnerEvidenceHelperText = [System.IO.File]::ReadAllText($runnerEvidenceHelperSource, $script:Utf8NoBom)
 Assert-True -Condition $launcherText.Contains("`$script:FixtureVersion = '$($script:ExpectedFixtureVersion)'") `
     -Message 'launcher declares the pinned fixture version'
 Assert-True -Condition $launcherText.Contains("`$script:FixtureSha256 = '$($script:ExpectedFixtureSha256)'") `
@@ -365,8 +366,8 @@ foreach ($required in @(
     'DYNAMO_PERF_BUILD_REVISION', 'x-dynamo-perf-control',
     'provider_guild_lookups', 'repository_reads', 'denied_requests'
 )) {
-    Assert-True -Condition $launcherText.Contains($required) `
-        -Message "launcher contains required isolation contract $required"
+    Assert-True -Condition (($launcherText + "`n" + $runnerEvidenceHelperText).Contains($required)) `
+        -Message "runner control sources contain required isolation contract $required"
 }
 
 $temporaryBase = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\')
