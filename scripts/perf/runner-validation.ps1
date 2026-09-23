@@ -26,7 +26,6 @@ function Assert-ReadyFile {
         Throw-RunnerFailure 'ready-identity-mismatch'
     }
 }
-
 function Invoke-LoopbackJson {
     param(
         [Parameter(Mandatory)][System.Net.Http.HttpClient] $Client,
@@ -198,4 +197,3 @@ function Assert-NoReparseTree {
         Throw-RunnerFailure $FailureCode
     }
 }
-

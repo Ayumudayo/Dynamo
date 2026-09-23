@@ -13,7 +13,6 @@ function Get-MinimalChildEnvironment {
     $environment['CARGO_TERM_COLOR'] = 'never'
     return $environment
 }
-
 function Resolve-ReparseFreeApplicationPath {
     param(
         [Parameter(Mandatory)][string] $LiteralPath,
@@ -144,4 +143,3 @@ function Invoke-DirectBoundedProcess {
     }
     finally { $process.Dispose() }
 }
-

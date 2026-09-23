@@ -59,7 +59,6 @@ function Remove-RunnerJobHandle {
     }
     if ($cleanupFault -or $proofFault) { Throw-RunnerFailure 'teardown-child-cleanup-failed' }
 }
-
 function Remove-ChildLogs {
     param([AllowNull()][object] $Handle)
     if ($null -eq $Handle) { return }
@@ -70,4 +69,3 @@ function Remove-ChildLogs {
         }
     }
 }
-
