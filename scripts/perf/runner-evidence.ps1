@@ -317,4 +317,3 @@ function Get-CurrentBuildHelperEvidence {
     }
     catch { return $null }
 }
-
