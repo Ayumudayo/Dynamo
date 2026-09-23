@@ -15,12 +15,15 @@ $script:PayloadPaths = @(
     'docs/superpowers/plans/2026-07-12-dashboard-ux-remediation.md'
     'docs/superpowers/plans/2026-07-13-wave0-bootstrap.md'
 ) | Sort-Object -CaseSensitive
-$script:ControlPaths = @(
+$script:ControlSchemaPath = 'scripts/remediation/control-schema-v2.json'
+$script:LegacyControlPaths = @(
     'scripts/remediation/publish-plan-set.ps1'
     'scripts/remediation/update-integration-ref.ps1'
     'tests/scripts/plan-set-publisher-contract.ps1'
     'tests/scripts/integration-ref-journal-contract.ps1'
 ) | Sort-Object -CaseSensitive
+$script:ControlPaths = $script:LegacyControlPaths
+$script:ControlSchema = $null
 $script:PublisherFailpoints = @(
     'after-lease-create'
     'after-bundle-publish'
@@ -937,6 +940,35 @@ function Get-SourceSnapshot {
     }
 }
 
+function Initialize-ControlSchema {
+    $path = Join-Path $script:RepositoryRoot $script:ControlSchemaPath
+    $before = Assert-SafeExistingPath -Path $path -LeafType File
+    [byte[]]$headBytes = Get-MatchedHeadBlobBytes -RelativePath $script:ControlSchemaPath -NativePath $path
+    $after = Assert-SafeExistingPath -Path $path -LeafType File
+    if ($before.IdentitySha256 -cne $after.IdentitySha256 -or $before.Owner -cne $after.Owner -or $before.AclSha256 -cne $after.AclSha256) { throw 'Control schema path identity, owner, or ACL changed during read.' }
+    $document = [Text.Json.JsonDocument]::Parse($script:Utf8.GetString($headBytes), [Text.Json.JsonDocumentOptions]@{ AllowTrailingCommas = $false; CommentHandling = [Text.Json.JsonCommentHandling]::Disallow })
+    try { $value = Convert-JsonElement $document.RootElement } finally { $document.Dispose() }
+    if (-not (Test-BytesEqual $headBytes (ConvertTo-CanonicalBytes $value)) -or [string]::Join("`n", @($value.Keys)) -cne "schema_version`ncontrols") { throw 'Control schema must be canonical JSON with its exact v2 keys.' }
+    Assert-JsonInt64 $value['schema_version'] 'Control schema schema_version'
+    if ([int64]$value['schema_version'] -ne 2) { throw 'Unsupported control schema version.' }
+    $controls = @($value['controls'])
+    if ($controls.Count -lt 1 -or @($controls | Where-Object { $_ -isnot [string] -or $_ -notmatch '^[a-zA-Z0-9._/-]+$' -or $_ -match '(^|/)\.\.(/|$)' }).Count -ne 0) {
+        throw 'Control schema contains an invalid repository-relative control path.'
+    }
+    $ordinal = @($controls | Sort-Object -CaseSensitive)
+    if ([string]::Join("`n", $controls) -cne [string]::Join("`n", $ordinal) -or @($controls | Sort-Object -Unique -CaseSensitive).Count -ne $controls.Count) {
+        throw 'Control schema paths must be ordinal-sorted and unique.'
+    }
+    if ($controls -notcontains $script:ControlSchemaPath) { throw 'Control schema must protect itself.' }
+    $script:ControlPaths = $controls
+    $script:ControlSchema = [pscustomobject]@{
+        Path = $script:ControlSchemaPath
+        Version = [int64]$value['schema_version']
+        Sha256 = Get-Sha256Bytes $headBytes
+        Controls = $controls
+    }
+}
+
 function Assert-SnapshotEqual([object] $Expected, [object] $Actual) {
     $left = ConvertTo-CanonicalBytes ([ordered]@{ payloads = @($Expected.Payloads); controls = @($Expected.Controls) })
     $right = ConvertTo-CanonicalBytes ([ordered]@{ payloads = @($Actual.Payloads); controls = @($Actual.Controls) })
@@ -1203,20 +1235,28 @@ function New-PublicationRow {
     $row
 }
 
-function Get-BindingKeys {
-    @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','publisher_sha256','integration_helper_sha256','publisher_contract_test_sha256','integration_contract_test_sha256','bundle_prepared_row_sha256','binding_sha256')
+function Get-BindingKeys([int64] $SchemaVersion) {
+    if ($SchemaVersion -eq 1) {
+        return @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','publisher_sha256','integration_helper_sha256','publisher_contract_test_sha256','integration_contract_test_sha256','bundle_prepared_row_sha256','binding_sha256')
+    }
+    if ($SchemaVersion -eq 2) {
+        return @('schema_version','audit_baseline','execution_baseline','plan_set_sha256','manifest_native_path','manifest_sha256','manifest_bytes','git_common_dir_native_path','git_common_dir_identity_sha256','git_common_dir_owner','git_common_dir_acl_sha256','control_schema_path','control_schema_sha256','control_schema_version','control_hashes','bundle_prepared_row_sha256','binding_sha256')
+    }
+    throw "Unsupported binding schema version: $SchemaVersion"
 }
 
 function Read-Binding([object] $Context, [object] $Manifest, [object] $Prepared, [string] $Path = $Context.BindingPath) {
-    $record = Read-CanonicalJsonFile -Path $Path -ExpectedKeys (Get-BindingKeys)
-    $keys = Get-BindingKeys
+    $probe = Read-CanonicalJsonFile -Path $Path
+    Assert-JsonInt64 $probe.Value['schema_version'] 'Binding schema_version'
+    [int64]$schemaVersion = $probe.Value['schema_version']
+    $record = Read-CanonicalJsonFile -Path $Path -ExpectedKeys (Get-BindingKeys $schemaVersion)
+    $keys = Get-BindingKeys $schemaVersion
     $preimage = [ordered]@{}
     foreach ($key in $keys[0..($keys.Count - 2)]) { $preimage[$key] = $record.Value[$key] }
     $hash = Get-DomainHash 'dynamo-plan-set-binding-v1' (ConvertTo-CanonicalBytes $preimage)
     if ($hash -cne [string]$record.Value['binding_sha256']) { throw 'Binding hash mismatch.' }
-    Assert-JsonInt64 $record.Value['schema_version'] 'Binding schema_version'
     Assert-JsonInt64 $record.Value['manifest_bytes'] 'Binding manifest_bytes'
-    if ([int64]$record.Value['schema_version'] -ne 1) { throw 'Binding schema version mismatch.' }
+    if ($schemaVersion -notin @(1,2)) { throw 'Binding schema version mismatch.' }
     $expectedControls = @{}
     foreach ($row in $Context.SourceSnapshot.Controls) { $expectedControls[$row.path] = $row.sha256 }
     $expected = [ordered]@{
@@ -1230,23 +1270,35 @@ function Read-Binding([object] $Context, [object] $Manifest, [object] $Prepared,
         git_common_dir_identity_sha256 = $Context.CommonDirectory.IdentitySha256
         git_common_dir_owner = $Context.CommonDirectory.Owner
         git_common_dir_acl_sha256 = $Context.CommonDirectory.AclSha256
-        publisher_sha256 = $expectedControls['scripts/remediation/publish-plan-set.ps1']
-        integration_helper_sha256 = $expectedControls['scripts/remediation/update-integration-ref.ps1']
-        publisher_contract_test_sha256 = $expectedControls['tests/scripts/plan-set-publisher-contract.ps1']
-        integration_contract_test_sha256 = $expectedControls['tests/scripts/integration-ref-journal-contract.ps1']
         bundle_prepared_row_sha256 = [string]$Prepared.Value['row_sha256']
     }
+    if ($schemaVersion -eq 1) {
+        $expected['publisher_sha256'] = $expectedControls['scripts/remediation/publish-plan-set.ps1']
+        $expected['integration_helper_sha256'] = $expectedControls['scripts/remediation/update-integration-ref.ps1']
+        $expected['publisher_contract_test_sha256'] = $expectedControls['tests/scripts/plan-set-publisher-contract.ps1']
+        $expected['integration_contract_test_sha256'] = $expectedControls['tests/scripts/integration-ref-journal-contract.ps1']
+    } else {
+        if ($null -eq $Context.ControlSchema) { throw 'Binding v2 requires the loaded control schema.' }
+        $expected['control_schema_path'] = $Context.ControlSchema.Path
+        $expected['control_schema_sha256'] = $Context.ControlSchema.Sha256
+        $expected['control_schema_version'] = [int64]$Context.ControlSchema.Version
+        $expected['control_hashes'] = @($Context.SourceSnapshot.Controls | ForEach-Object { [ordered]@{ path = $_.path; sha256 = $_.sha256 } })
+    }
     foreach ($key in $expected.Keys) {
+        if ($key -ceq 'control_hashes') { continue }
         if ([string]$record.Value[$key] -cne [string]$expected[$key]) { throw "Binding mismatch at $key" }
     }
-    [pscustomobject]@{ Value = $record.Value; Bytes = $record.Bytes; Sha256 = $hash; Path = $Path; PathRecord = $record.PathRecord }
+    if ($schemaVersion -eq 2 -and -not (Test-BytesEqual (ConvertTo-CanonicalBytes @($record.Value['control_hashes'])) (ConvertTo-CanonicalBytes @($expected['control_hashes'])))) {
+        throw 'Binding mismatch at control_hashes.'
+    }
+    [pscustomobject]@{ Value = $record.Value; Bytes = $record.Bytes; Sha256 = $hash; Path = $Path; PathRecord = $record.PathRecord; SchemaVersion = $schemaVersion }
 }
 
 function Write-Binding([object] $Context, [object] $Manifest, [object] $Prepared) {
     $controls = @{}
     foreach ($row in $Context.SourceSnapshot.Controls) { $controls[$row.path] = $row.sha256 }
     $binding = [ordered]@{
-        schema_version = 1
+        schema_version = 2
         audit_baseline = $script:AuditBaseline
         execution_baseline = $Context.ExecutionBaseline
         plan_set_sha256 = $Context.PlanSetSha256
@@ -1257,10 +1309,10 @@ function Write-Binding([object] $Context, [object] $Manifest, [object] $Prepared
         git_common_dir_identity_sha256 = $Context.CommonDirectory.IdentitySha256
         git_common_dir_owner = $Context.CommonDirectory.Owner
         git_common_dir_acl_sha256 = $Context.CommonDirectory.AclSha256
-        publisher_sha256 = $controls['scripts/remediation/publish-plan-set.ps1']
-        integration_helper_sha256 = $controls['scripts/remediation/update-integration-ref.ps1']
-        publisher_contract_test_sha256 = $controls['tests/scripts/plan-set-publisher-contract.ps1']
-        integration_contract_test_sha256 = $controls['tests/scripts/integration-ref-journal-contract.ps1']
+        control_schema_path = $Context.ControlSchema.Path
+        control_schema_sha256 = $Context.ControlSchema.Sha256
+        control_schema_version = [int64]$Context.ControlSchema.Version
+        control_hashes = @($Context.SourceSnapshot.Controls | ForEach-Object { [ordered]@{ path = $_.path; sha256 = $_.sha256 } })
         bundle_prepared_row_sha256 = [string]$Prepared.Value['row_sha256']
     }
     $binding['binding_sha256'] = Get-DomainHash 'dynamo-plan-set-binding-v1' (ConvertTo-CanonicalBytes $binding)
@@ -2090,6 +2142,7 @@ function Assert-PublicationMutationBoundaryUnchanged {
 
 # Resolve the repository only from the committed publisher location.
 $script:RepositoryRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+Initialize-ControlSchema
 $evidenceRootValue = [Environment]::GetEnvironmentVariable('DYNAMO_REMEDIATION_EVIDENCE_ROOT', 'Process')
 if ([string]::IsNullOrWhiteSpace($evidenceRootValue)) { throw 'DYNAMO_REMEDIATION_EVIDENCE_ROOT is required.' }
 Assert-InitialEnvironment -EvidenceRoot $evidenceRootValue
@@ -2128,6 +2181,7 @@ $context = [pscustomobject]@{
     PlanSetSha256 = $planSetSha256
     CoreBytes = $coreBytes
     SourceSnapshot = $sourceSnapshot
+    ControlSchema = $script:ControlSchema
     GitIgnoreEvidence = $gitignoreEvidence
     ControlRoot = $controlRootCandidate
     ControlRootRecord = $null

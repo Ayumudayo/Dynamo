@@ -10,6 +10,7 @@ $PlanNames = @(
     '2026-07-13-wave0-bootstrap.md'
 )
 $BootstrapPaths = @(
+    'scripts/remediation/control-schema-v2.json'
     'scripts/remediation/publish-plan-set.ps1'
     'scripts/remediation/update-integration-ref.ps1'
     'tests/scripts/plan-set-publisher-contract.ps1'
@@ -889,6 +890,10 @@ function New-PublisherFixture {
         $null = Invoke-Git -WorkingDirectory $repository -Arguments @('reset', '--hard', $AuditBaseline)
         foreach ($relative in $BootstrapPaths) {
             Copy-FileExact -Source (Join-Path $SourceRepository $relative) -Destination (Join-Path $repository $relative)
+        }
+        $bootstrapAcl = [System.IO.FileSystemAclExtensions]::GetAccessControl([System.IO.FileInfo]::new((Join-Path $repository 'scripts/remediation/publish-plan-set.ps1')))
+        foreach ($relative in $BootstrapPaths) {
+            [System.IO.FileSystemAclExtensions]::SetAccessControl([System.IO.FileInfo]::new((Join-Path $repository $relative)), $bootstrapAcl)
         }
         $null = Invoke-Git -WorkingDirectory $repository -Arguments (@('add', '--') + $BootstrapPaths)
         $commit = Invoke-Git -WorkingDirectory $repository -Arguments @('commit', '--quiet', '-m', 'fixture: install bootstrap contract inputs')
@@ -1955,8 +1960,11 @@ function Assert-PublisherContract {
     $bindingText = [System.Text.UTF8Encoding]::new($false, $true).GetString($bindingBytes)
     Assert-Contract ($bindingText -notmatch $secretShape) 'binding contains remote/environment/credential-shaped material'
     $bindingObject = $bindingText | ConvertFrom-Json -ErrorAction Stop
-    $bindingKeys = @('schema_version', 'audit_baseline', 'execution_baseline', 'plan_set_sha256', 'manifest_native_path', 'manifest_sha256', 'manifest_bytes', 'git_common_dir_native_path', 'git_common_dir_identity_sha256', 'git_common_dir_owner', 'git_common_dir_acl_sha256', 'publisher_sha256', 'integration_helper_sha256', 'publisher_contract_test_sha256', 'integration_contract_test_sha256', 'bundle_prepared_row_sha256', 'binding_sha256')
+    $bindingKeys = @('schema_version', 'audit_baseline', 'execution_baseline', 'plan_set_sha256', 'manifest_native_path', 'manifest_sha256', 'manifest_bytes', 'git_common_dir_native_path', 'git_common_dir_identity_sha256', 'git_common_dir_owner', 'git_common_dir_acl_sha256', 'control_schema_path', 'control_schema_sha256', 'control_schema_version', 'control_hashes', 'bundle_prepared_row_sha256', 'binding_sha256')
     Assert-Contract ((@($bindingObject.PSObject.Properties.Name) -join ',') -ceq ($bindingKeys -join ',')) 'binding key set/order mismatch'
+    Assert-Contract ($bindingObject.schema_version -eq 2 -and $bindingObject.control_schema_version -eq 2 -and $bindingObject.control_schema_path -ceq 'scripts/remediation/control-schema-v2.json') 'binding v2 control schema fields mismatch'
+    Assert-Contract ((@($bindingObject.control_hashes | ForEach-Object { $_.path }) -join "`n") -ceq ($expectedControlPaths -join "`n")) 'binding v2 control hashes do not exactly bind manifest controls'
+    foreach ($row in @($bindingObject.control_hashes)) { Assert-Contract ((@($row.PSObject.Properties.Name) -join ',') -ceq 'path,sha256' -and $row.sha256 -match '^[0-9a-f]{64}$') "binding v2 control-hash row mismatch: $($row.path)" }
     Assert-SelfOmittingHash -Raw $bindingText -Property 'binding_sha256' -Domain 'dynamo-plan-set-binding-v1' -Expected $handoff.binding_sha256 -Case 'binding'
 
     $publicationRoot = Join-Path $realCommon "dynamo-remediation/publication-state-v1/$($Fixture.ExecutionBaseline)/$($handoff.plan_set_sha256)"
@@ -2050,7 +2058,7 @@ function Assert-PublisherContract {
     Assert-Contract (($publicationBeforeReuse -join "`n") -ceq ((Get-TreeFingerprint -Root $publicationRoot) -join "`n")) 'PublicationComplete reuse was not read-only'
 
     try {
-        $duplicateBinding = $bindingText.Replace('{"schema_version":1,', '{"schema_version":1,"schema_version":1,', [System.StringComparison]::Ordinal)
+        $duplicateBinding = $bindingText.Replace('{"schema_version":2,', '{"schema_version":2,"schema_version":2,', [System.StringComparison]::Ordinal)
         Assert-Contract ($duplicateBinding -cne $bindingText) 'duplicate-key binding fixture was not constructed'
         [System.IO.File]::WriteAllText($bindingPath, $duplicateBinding, [System.Text.UTF8Encoding]::new($false))
         $null = Invoke-PublisherRejectedWithoutMutation -Repository $Fixture.Repository -EvidenceRoot $Fixture.EvidenceRoot -Case 'duplicate canonical binding key'
