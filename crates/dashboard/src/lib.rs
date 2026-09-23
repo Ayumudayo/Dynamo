@@ -57,10 +57,10 @@ use guild_access::{
 };
 pub(crate) use handlers::api::{error_payload, require_api_session};
 use handlers::api::{
-    get_deployment_settings, get_guild_settings, list_default_module_states, list_live_module_states,
-    list_modules, patch_deployment_command_settings, patch_deployment_module_settings,
-    patch_guild_command_settings, patch_guild_module_settings, post_deployment_command_sync,
-    post_guild_command_sync,
+    get_deployment_settings, get_guild_settings, list_default_module_states,
+    list_live_module_states, list_modules, patch_deployment_command_settings,
+    patch_deployment_module_settings, patch_guild_command_settings, patch_guild_module_settings,
+    post_deployment_command_sync, post_guild_command_sync,
 };
 use handlers::pages::{
     deployment_page, discord_callback, guild_page, index, login, logout, selector,
