@@ -184,111 +184,6 @@ function Get-UtcNowCanonical {
     [DateTime]::UtcNow.ToString('yyyy-MM-ddTHH:mm:ss.fffffffZ', [Globalization.CultureInfo]::InvariantCulture)
 }
 
-function Get-Sha256Bytes([byte[]] $Bytes) {
-    [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($Bytes)).ToLowerInvariant()
-}
-
-function Get-Sha256Text([string] $Domain, [byte[]] $CanonicalBytes) {
-    $domainBytes = $script:Utf8.GetBytes($Domain + [char]0)
-    $all = [byte[]]::new($domainBytes.Length + $CanonicalBytes.Length)
-    [Array]::Copy($domainBytes, 0, $all, 0, $domainBytes.Length)
-    [Array]::Copy($CanonicalBytes, 0, $all, $domainBytes.Length, $CanonicalBytes.Length)
-    Get-Sha256Bytes $all
-}
-
-function Test-BytesEqual([byte[]] $Left, [byte[]] $Right) {
-    if ($null -eq $Left -or $null -eq $Right -or $Left.Length -ne $Right.Length) { return $false }
-    for ($index = 0; $index -lt $Left.Length; $index++) { if ($Left[$index] -ne $Right[$index]) { return $false } }
-    $true
-}
-
-function ConvertTo-CanonicalBytes([object] $Value) {
-    $stream = [IO.MemoryStream]::new()
-    try {
-        $writer = [Text.Json.Utf8JsonWriter]::new($stream, [Text.Json.JsonWriterOptions]@{
-            Indented = $false
-            SkipValidation = $false
-            Encoder = [Text.Encodings.Web.JavaScriptEncoder]::UnsafeRelaxedJsonEscaping
-        })
-        try {
-            Write-CanonicalJsonValue -Writer $writer -Value $Value
-            $writer.Flush()
-            $json = $stream.ToArray()
-            $canonical = [byte[]]::new($json.Length + 1)
-            [Array]::Copy($json, $canonical, $json.Length)
-            $canonical[$json.Length] = 10
-            $canonical
-        } finally {
-            $writer.Dispose()
-        }
-    } finally {
-        $stream.Dispose()
-    }
-}
-
-function Write-CanonicalJsonValue {
-    param([Text.Json.Utf8JsonWriter] $Writer, [AllowNull()][object] $Value)
-
-    if ($null -eq $Value) { $Writer.WriteNullValue(); return }
-    if ($Value -is [string]) { $Writer.WriteStringValue([string]$Value); return }
-    if ($Value -is [bool]) { $Writer.WriteBooleanValue([bool]$Value); return }
-    if ($Value -is [byte] -or $Value -is [int16] -or $Value -is [int32] -or $Value -is [int64]) {
-        $Writer.WriteNumberValue([int64]$Value); return
-    }
-    if ($Value -is [uint16] -or $Value -is [uint32] -or $Value -is [uint64]) {
-        $Writer.WriteNumberValue([uint64]$Value); return
-    }
-    if ($Value -is [Collections.IDictionary]) {
-        $Writer.WriteStartObject()
-        foreach ($key in $Value.Keys) {
-            $Writer.WritePropertyName([string]$key)
-            Write-CanonicalJsonValue -Writer $Writer -Value $Value[$key]
-        }
-        $Writer.WriteEndObject()
-        return
-    }
-    if (($Value -is [Collections.IEnumerable]) -and -not ($Value -is [string])) {
-        $Writer.WriteStartArray()
-        foreach ($item in $Value) { Write-CanonicalJsonValue -Writer $Writer -Value $item }
-        $Writer.WriteEndArray()
-        return
-    }
-    $Writer.WriteStartObject()
-    foreach ($property in $Value.PSObject.Properties) {
-        $Writer.WritePropertyName($property.Name)
-        Write-CanonicalJsonValue -Writer $Writer -Value $property.Value
-    }
-    $Writer.WriteEndObject()
-}
-
-function Convert-JsonElement([Text.Json.JsonElement] $Element) {
-    switch ($Element.ValueKind) {
-        'Object' {
-            $result = [ordered]@{}
-            foreach ($property in $Element.EnumerateObject()) {
-                if ($result.Contains($property.Name)) { throw "Duplicate JSON key: $($property.Name)" }
-                $result[$property.Name] = Convert-JsonElement $property.Value
-            }
-            return $result
-        }
-        'Array' {
-            $items = [Collections.Generic.List[object]]::new()
-            foreach ($item in $Element.EnumerateArray()) { $items.Add((Convert-JsonElement $item)) }
-            return ,$items.ToArray()
-        }
-        'String' { return $Element.GetString() }
-        'Number' {
-            [int64]$number = 0
-            if (-not $Element.TryGetInt64([ref]$number)) { throw 'Only minimal signed 64-bit JSON integers are accepted.' }
-            return $number
-        }
-        'True' { return $true }
-        'False' { return $false }
-        'Null' { return $null }
-        default { throw "Unsupported JSON token: $($Element.ValueKind)" }
-    }
-}
-
 function Read-CanonicalJsonFile {
     param(
         [Parameter(Mandatory)][string] $Path,
@@ -2418,8 +2313,11 @@ function Invoke-RecoverMode {
 }
 
 # The repository probe starts at the committed helper's directory and never honors caller path selectors.
-$scriptPathRecord = Get-PathRecord $PSCommandPath
 $script:RepositoryProbeRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../..'))
+$canonicalHelperPath = Join-Path $script:RepositoryProbeRoot 'scripts/remediation/modules/canonical-json.ps1'
+. $canonicalHelperPath
+$canonicalHelperBefore = Assert-SafeExistingPath -Path $canonicalHelperPath -LeafType File
+$scriptPathRecord = Get-PathRecord $PSCommandPath
 $expectedScriptPath = [IO.Path]::GetFullPath((Join-Path $script:RepositoryProbeRoot 'scripts/remediation/update-integration-ref.ps1'))
 if ($scriptPathRecord.Path -cne $expectedScriptPath) { throw 'Helper must run from its canonical fixed repository path.' }
 $repoResult = Invoke-Git -Arguments @('rev-parse','--show-toplevel')
@@ -2430,6 +2328,10 @@ $commonDirectory = [IO.Path]::GetFullPath($commonResult.Stdout)
 $script:CommonDirectory = $commonDirectory
 Assert-SafeExistingPath -Path $repositoryRoot -LeafType Directory | Out-Null
 Assert-SafeExistingPath -Path $commonDirectory -LeafType Directory | Out-Null
+$canonicalHelperAfter = Assert-SafeExistingPath -Path $canonicalHelperPath -LeafType File
+if ($canonicalHelperBefore.Identity -cne $canonicalHelperAfter.Identity -or $canonicalHelperBefore.Owner -cne $canonicalHelperAfter.Owner -or $canonicalHelperBefore.AclSha256 -cne $canonicalHelperAfter.AclSha256) {
+    throw 'Canonical helper path identity, owner, or ACL changed during load.'
+}
 if ($Mode -eq 'Initialize' -and $Wave -cne 'wave0') {
     if ([Environment]::GetEnvironmentVariable('DYNAMO_REMEDIATION_TEST_MODE', 'Process') -cne '1') {
         throw 'Production Initialize is restricted to the wave0 integration ref.'
