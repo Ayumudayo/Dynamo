@@ -316,6 +316,7 @@ function Assert-SafeFailure {
 $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $launcherSource = Join-Path $sourceRoot 'scripts\perf\with-isolated-dashboard.ps1'
 $artifactHelperSource = Join-Path $sourceRoot 'scripts\perf\artifact-json.ps1'
+$runnerEvidenceHelperSource = Join-Path $sourceRoot 'scripts\perf\runner-evidence.ps1'
 $moduleSource = Join-Path $sourceRoot 'scripts\perf\isolated-process-job.psm1'
 $fixtureSource = Join-Path $sourceRoot 'tests\perf\fixtures\guild-detail-v1.json'
 
@@ -403,6 +404,7 @@ try {
         -Message 'application resolver junction fixture is removed'
     Copy-Item -LiteralPath $launcherSource -Destination (Join-Path $repository 'scripts\perf\with-isolated-dashboard.ps1')
     Copy-Item -LiteralPath $artifactHelperSource -Destination (Join-Path $repository 'scripts\perf\artifact-json.ps1')
+    Copy-Item -LiteralPath $runnerEvidenceHelperSource -Destination (Join-Path $repository 'scripts\perf\runner-evidence.ps1')
     Copy-Item -LiteralPath $moduleSource -Destination (Join-Path $repository 'scripts\perf\isolated-process-job.psm1')
     Copy-Item -LiteralPath $fixtureSource -Destination (Join-Path $repository 'tests\perf\fixtures\guild-detail-v1.json')
     Write-Utf8File -LiteralPath (Join-Path $repository '.gitignore') -Value "output/`ntarget/`n"

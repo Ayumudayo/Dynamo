@@ -45,6 +45,8 @@ function Throw-RunnerFailure {
 
 $artifactHelperPath = Join-Path $PSScriptRoot 'artifact-json.ps1'
 . $artifactHelperPath
+$runnerEvidenceHelperPath = Join-Path $PSScriptRoot 'runner-evidence.ps1'
+. $runnerEvidenceHelperPath
 
 function Get-RunnerFailureCode {
     param([Parameter(Mandatory)][System.Exception] $Exception)
@@ -421,53 +423,6 @@ function Invoke-Git {
         -FailureCode $FailureCode
 }
 
-function Get-SourceSnapshot {
-    param(
-        [Parameter(Mandatory)][string] $GitPath,
-        [Parameter(Mandatory)][string] $RepositoryRoot
-    )
-    $head = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('rev-parse', '--verify', 'HEAD') -FailureCode 'source-head-failed').Stdout.Trim()
-    if ($head -cnotmatch '^[0-9a-f]{40}$') { Throw-RunnerFailure 'source-head-invalid' }
-    $status = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('status', '--porcelain=v1', '-z', '--untracked-files=all') `
-        -FailureCode 'source-status-failed').Stdout
-    if ($status.Length -ne 0) { Throw-RunnerFailure 'source-not-clean' }
-    $flags = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('ls-files', '-v', '-z', '--') -FailureCode 'source-index-flags-failed').Stdout
-    foreach ($record in $flags.Split([char]0, [System.StringSplitOptions]::RemoveEmptyEntries)) {
-        if ($record.Length -lt 2) { Throw-RunnerFailure 'source-index-flags-invalid' }
-        $flag = $record[0]
-        if ([char]::IsLower($flag) -or $flag -ceq 'S') {
-            Throw-RunnerFailure 'source-hidden-index-state'
-        }
-    }
-    $worktreeDiff = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('diff', '--no-ext-diff', '--binary', 'HEAD', '--') `
-        -FailureCode 'source-diff-failed').Stdout
-    $cachedDiff = (Invoke-Git -GitPath $GitPath -RepositoryRoot $RepositoryRoot `
-        -Arguments @('diff', '--no-ext-diff', '--cached', '--binary', 'HEAD', '--') `
-        -FailureCode 'source-cached-diff-failed').Stdout
-    $canonical = "worktree`0$worktreeDiff`0cached`0$cachedDiff`0untracked`0"
-    return [ordered]@{
-        head = $head
-        clean = $true
-        diff_sha256 = Get-Sha256HexFromString -Value $canonical
-    }
-}
-
-function Assert-SnapshotEqual {
-    param(
-        [Parameter(Mandatory)][System.Collections.IDictionary] $Expected,
-        [Parameter(Mandatory)][System.Collections.IDictionary] $Actual
-    )
-    foreach ($key in @('head', 'clean', 'diff_sha256')) {
-        if ([string]$Expected[$key] -cne [string]$Actual[$key]) {
-            Throw-RunnerFailure 'source-state-drift'
-        }
-    }
-}
-
 function Get-EnvironmentIdentity {
     param(
         [Parameter(Mandatory)][bool] $ContractMode,
@@ -590,52 +545,6 @@ function Start-RunnerJob {
             catch { }
         }
         Throw-RunnerFailure 'child-launch-failed'
-    }
-}
-
-function Get-JobEvidenceRow {
-    param(
-        [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][string] $Phase,
-        [Parameter(Mandatory)][object] $Handle,
-        [AllowNull()][object] $Evidence
-    )
-    if ($null -eq $Evidence) { $Evidence = Get-DynamoIsolatedProcessEvidence -Process $Handle.Job }
-    if ($Evidence.ProcessId -ne $Handle.Job.ProcessId -or
-        $Evidence.CreationFileTimeUtc -ne $Handle.Job.CreationFileTimeUtc -or
-        $Evidence.ActiveProcessCount -lt 0 -or $Evidence.TotalProcessCount -lt 1) {
-        Throw-RunnerFailure 'job-evidence-invalid'
-    }
-    return [ordered]@{
-        name = $Name
-        phase = $Phase
-        direct_pid = $Handle.Job.ProcessId
-        creation_file_time_utc = [uint64]$Handle.Job.CreationFileTimeUtc
-        is_process_in_job = [bool]$Evidence.IsProcessInJob
-        active_processes = [int64]$Evidence.ActiveProcessCount
-        total_processes = [int64]$Evidence.TotalProcessCount
-        terminated_processes = [int64]$Evidence.TerminatedProcessCount
-        active_process_ids = @($Evidence.ActiveProcessIds | ForEach-Object { [uint64]$_ })
-    }
-}
-
-function Get-HarnessRssBytes {
-    param([Parameter(Mandatory)][object] $HarnessHandle)
-    try {
-        $process = [System.Diagnostics.Process]::GetProcessById($HarnessHandle.Job.ProcessId)
-        try {
-            $creation = [uint64]$process.StartTime.ToUniversalTime().ToFileTimeUtc()
-            $rss = [int64]$process.WorkingSet64
-            if ($creation -ne $HarnessHandle.Job.CreationFileTimeUtc -or $rss -le 0) {
-                Throw-RunnerFailure 'harness-rss-invalid'
-            }
-            return $rss
-        }
-        finally { $process.Dispose() }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'harness-rss-unavailable'
     }
 }
 
@@ -1418,13 +1327,14 @@ try {
     $sourceState = Get-SourceSnapshot -GitPath $gitPath -RepositoryRoot $repositoryRoot
 
     $artifactHelperPath = Join-Path $repositoryRoot 'scripts\perf\artifact-json.ps1'
+    $runnerEvidenceHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-evidence.ps1'
     $modulePath = Join-Path $repositoryRoot 'scripts\perf\isolated-process-job.psm1'
     $fixturePath = Join-Path $repositoryRoot 'tests\perf\fixtures\guild-detail-v1.json'
     $loadScriptPath = Join-Path $repositoryRoot 'scripts\perf\dashboard-load.cjs'
     $budgetScriptPath = Join-Path $repositoryRoot 'scripts\perf\assert-budgets.cjs'
     $budgetPath = Join-Path $repositoryRoot 'tests\perf\budgets\public-root.json'
     foreach ($leaf in @(
-        $artifactHelperPath, $modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath
+        $artifactHelperPath, $runnerEvidenceHelperPath, $modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath
     )) {
         [void](Assert-RegularPath -LiteralPath $leaf -Kind Leaf -FailureCode 'required-runner-file-invalid')
     }
@@ -1434,6 +1344,7 @@ try {
     foreach ($trackedRunnerPath in @(
         'scripts/perf/with-isolated-dashboard.ps1',
         'scripts/perf/artifact-json.ps1',
+        'scripts/perf/runner-evidence.ps1',
         'scripts/perf/isolated-process-job.psm1',
         'scripts/perf/dashboard-load.cjs',
         'scripts/perf/assert-budgets.cjs',
