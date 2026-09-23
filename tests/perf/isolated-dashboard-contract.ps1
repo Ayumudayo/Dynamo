@@ -11,6 +11,8 @@ if (-not $IsWindows) {
 $script:Assertions = 0
 $script:Utf8NoBom = [System.Text.UTF8Encoding]::new($false)
 $script:SecretSentinel = 'DYNAMO_CONTRACT_SECRET_47f0f945b09d4d53aee10ab130b49c84'
+$script:ExpectedFixtureVersion = 'guild-detail-v1'
+$script:ExpectedFixtureSha256 = '5f08c171827be0ad90f5a6b7c980b4ab21d938cd2e73137f03f5ac7360b64885'
 
 function Assert-True {
     param([Parameter(Mandatory)][bool] $Condition, [Parameter(Mandatory)][string] $Message)
@@ -134,6 +136,26 @@ function Assert-SafeDiagnosticLeaf {
 function Write-Utf8File {
     param([Parameter(Mandatory)][string] $LiteralPath, [Parameter(Mandatory)][string] $Value)
     [System.IO.File]::WriteAllText($LiteralPath, $Value, $script:Utf8NoBom)
+}
+
+function Assert-CanonicalJsonArtifact {
+    param(
+        [Parameter(Mandatory)][string] $LiteralPath,
+        [Parameter(Mandatory)][string] $Message
+    )
+    $bytes = [System.IO.File]::ReadAllBytes($LiteralPath)
+    Assert-True -Condition ($bytes.Length -ge 3) -Message "$Message is nonempty"
+    Assert-True -Condition (-not ($bytes[0] -eq 0xef -and $bytes[1] -eq 0xbb -and $bytes[2] -eq 0xbf)) `
+        -Message "$Message has no UTF-8 BOM"
+    $body = [System.IO.File]::ReadAllText($LiteralPath, $script:Utf8NoBom)
+    Assert-True -Condition ($body -match '^\{[^\r\n]*\}\n$') `
+        -Message "$Message is one compact JSON object with one trailing LF"
+    try {
+        [void]($body.TrimEnd("`n") | ConvertFrom-Json -Depth 32)
+    }
+    catch {
+        throw "contract assertion failed: $Message parses as JSON"
+    }
 }
 
 function Get-DescendantRecordPath {
@@ -293,8 +315,13 @@ function Assert-SafeFailure {
 
 $sourceRoot = [System.IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..'))
 $launcherSource = Join-Path $sourceRoot 'scripts\perf\with-isolated-dashboard.ps1'
+$artifactHelperSource = Join-Path $sourceRoot 'scripts\perf\artifact-json.ps1'
 $moduleSource = Join-Path $sourceRoot 'scripts\perf\isolated-process-job.psm1'
 $fixtureSource = Join-Path $sourceRoot 'tests\perf\fixtures\guild-detail-v1.json'
+
+$fixtureHash = (Get-FileHash -LiteralPath $fixtureSource -Algorithm SHA256).Hash.ToLowerInvariant()
+Assert-Equal -Actual $fixtureHash -Expected $script:ExpectedFixtureSha256 `
+    -Message 'source fixture has the pinned guild-detail-v1 SHA-256'
 
 $parseErrors = $null
 $launcherAst = [System.Management.Automation.Language.Parser]::ParseFile(
@@ -314,6 +341,10 @@ Assert-Equal -Actual $pathFunctionDefinitions.Count -Expected $pathFunctionNames
     -Message 'launcher path resolver function extraction'
 . ([scriptblock]::Create(($pathFunctionDefinitions -join "`n`n")))
 $launcherText = [System.IO.File]::ReadAllText($launcherSource, $script:Utf8NoBom)
+Assert-True -Condition $launcherText.Contains("`$script:FixtureVersion = '$($script:ExpectedFixtureVersion)'") `
+    -Message 'launcher declares the pinned fixture version'
+Assert-True -Condition $launcherText.Contains("`$script:FixtureSha256 = '$($script:ExpectedFixtureSha256)'") `
+    -Message 'launcher declares the pinned fixture SHA-256'
 foreach ($forbidden in @(
     'Start-Process',
     'Invoke-Expression',
@@ -371,6 +402,7 @@ try {
     Assert-True -Condition (-not (Test-Path -LiteralPath $linkedToolRoot)) `
         -Message 'application resolver junction fixture is removed'
     Copy-Item -LiteralPath $launcherSource -Destination (Join-Path $repository 'scripts\perf\with-isolated-dashboard.ps1')
+    Copy-Item -LiteralPath $artifactHelperSource -Destination (Join-Path $repository 'scripts\perf\artifact-json.ps1')
     Copy-Item -LiteralPath $moduleSource -Destination (Join-Path $repository 'scripts\perf\isolated-process-job.psm1')
     Copy-Item -LiteralPath $fixtureSource -Destination (Join-Path $repository 'tests\perf\fixtures\guild-detail-v1.json')
     Write-Utf8File -LiteralPath (Join-Path $repository '.gitignore') -Value "output/`ntarget/`n"
@@ -796,6 +828,7 @@ exit 0
     foreach ($path in @($published.result_path, $published.report_path, $published.summary_path)) {
         Assert-True -Condition (Test-Path -LiteralPath $path -PathType Leaf) `
             -Message "published artifact exists: $path"
+        Assert-CanonicalJsonArtifact -LiteralPath $path -Message "published artifact $([System.IO.Path]::GetFileName($path))"
     }
     $retainedResultBody = [System.IO.File]::ReadAllText(
         $published.result_path, $script:Utf8NoBom)
@@ -813,6 +846,22 @@ exit 0
     Assert-Equal -Actual $summary.exit_classification -Expected 'green' -Message 'summary is green'
     Assert-Equal -Actual $summary.workload.kind -Expected 'Load' -Message 'summary workload kind'
     Assert-Equal -Actual $summary.instance.fixture_mode -Expected 'Public' -Message 'summary fixture mode'
+    $resultItem = Get-Item -LiteralPath $published.result_path -Force
+    $reportItem = Get-Item -LiteralPath $published.report_path -Force
+    Assert-Equal -Actual $summary.result.leaf -Expected $resultItem.Name `
+        -Message 'summary result leaf binds the retained result artifact'
+    Assert-Equal -Actual $summary.result.sha256 `
+        -Expected ((Get-FileHash -LiteralPath $published.result_path -Algorithm SHA256).Hash.ToLowerInvariant()) `
+        -Message 'summary result SHA-256 matches retained result artifact'
+    Assert-Equal -Actual $summary.result.bytes -Expected $resultItem.Length `
+        -Message 'summary result byte count matches retained result artifact'
+    Assert-Equal -Actual $summary.report.leaf -Expected $reportItem.Name `
+        -Message 'summary report leaf binds the retained report artifact'
+    Assert-Equal -Actual $summary.report.sha256 `
+        -Expected ((Get-FileHash -LiteralPath $published.report_path -Algorithm SHA256).Hash.ToLowerInvariant()) `
+        -Message 'summary report SHA-256 matches retained report artifact'
+    Assert-Equal -Actual $summary.report.bytes -Expected $reportItem.Length `
+        -Message 'summary report byte count matches retained report artifact'
     Assert-Equal -Actual $summary.build_descendant_cleanup.terminated_allowlisted -Expected $false `
         -Message 'normal build needs no allowlisted helper cleanup'
     Assert-Equal -Actual @($summary.build_descendant_cleanup.helpers).Count -Expected 0 `
@@ -875,6 +924,14 @@ exit 0
     }
     $leaves = @(Get-ChildItem -LiteralPath $published.attempt_dir -Force)
     Assert-Equal -Actual $leaves.Count -Expected 4 -Message 'success attempt has exact four retained leaves'
+    Assert-Equal -Actual (@($leaves.Name | Sort-Object) -join '|') -Expected (
+        @(
+            '.dynamo-perf-attempt-v1.json',
+            'contract-public-budget.json',
+            'contract-public-result.json',
+            'contract-public-summary.json'
+        ) -join '|'
+    ) -Message 'success attempt retains only the expected artifact leaves'
     Assert-True -Condition (-not ($leaves.Name -match '\.tmp$')) `
         -Message 'success attempt retains no temporary file'
     $successAttemptCount = @(Get-ChildItem -LiteralPath (Join-Path $repository 'output\perf\attempts') `

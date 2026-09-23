@@ -43,52 +43,15 @@ function Throw-RunnerFailure {
     throw $errorRecord
 }
 
+$artifactHelperPath = Join-Path $PSScriptRoot 'artifact-json.ps1'
+. $artifactHelperPath
+
 function Get-RunnerFailureCode {
     param([Parameter(Mandatory)][System.Exception] $Exception)
     if ($Exception.Data.Contains('DynamoRunnerCode')) {
         return [string] $Exception.Data['DynamoRunnerCode']
     }
     return 'unexpected-runner-failure'
-}
-
-function Get-Sha256HexFromBytes {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][byte[]] $Bytes)
-    $hash = [System.Security.Cryptography.SHA256]::HashData($Bytes)
-    return [Convert]::ToHexString($hash).ToLowerInvariant()
-}
-
-function Get-Sha256HexFromString {
-    param([Parameter(Mandatory)][AllowEmptyString()][string] $Value)
-    return Get-Sha256HexFromBytes -Bytes $script:Utf8NoBom.GetBytes($Value)
-}
-
-function Get-FileSha256Hex {
-    param([Parameter(Mandatory)][string] $LiteralPath)
-    try {
-        $stream = [System.IO.FileStream]::new(
-            $LiteralPath,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::Read)
-        try {
-            return [Convert]::ToHexString(
-                [System.Security.Cryptography.SHA256]::HashData($stream)
-            ).ToLowerInvariant()
-        }
-        finally {
-            $stream.Dispose()
-        }
-    }
-    catch {
-        Throw-RunnerFailure 'artifact-hash-failed'
-    }
-}
-
-function Get-RandomHex {
-    param([ValidateRange(16, 128)][int] $ByteCount = 32)
-    $bytes = [byte[]]::new($ByteCount)
-    [System.Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
-    return [Convert]::ToHexString($bytes).ToLowerInvariant()
 }
 
 function New-ExclusiveDirectoryNative {
@@ -118,23 +81,6 @@ namespace Dynamo.Perf.Runner
     if ($errorCode -eq 0) { return $true }
     if ($errorCode -eq 183) { return $false }
     Throw-RunnerFailure 'attempt-allocation-failed'
-}
-
-function Assert-ExactJsonKeys {
-    param(
-        [Parameter(Mandatory)][object] $Value,
-        [Parameter(Mandatory)][string[]] $Keys,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    if ($null -eq $Value -or $Value -is [string] -or $Value -is [System.Collections.IEnumerable] -and $Value -isnot [pscustomobject]) {
-        Throw-RunnerFailure $FailureCode
-    }
-    $actual = @($Value.PSObject.Properties.Name | Sort-Object)
-    $expected = @($Keys | Sort-Object)
-    if ($actual.Count -ne $expected.Count) { Throw-RunnerFailure $FailureCode }
-    for ($index = 0; $index -lt $expected.Count; $index++) {
-        if ($actual[$index] -cne $expected[$index]) { Throw-RunnerFailure $FailureCode }
-    }
 }
 
 function Assert-RegularPath {
@@ -307,115 +253,6 @@ function Assert-DirectoryOwnedByCurrentUser {
         if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
         Throw-RunnerFailure $FailureCode
     }
-}
-
-function Write-ExclusiveJson {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [Parameter(Mandatory)][object] $Value
-    )
-    $parent = Split-Path -LiteralPath $LiteralPath
-    [void](Assert-RegularPath -LiteralPath $parent -Kind Container -FailureCode 'artifact-parent-invalid')
-    if (Test-Path -LiteralPath $LiteralPath) { Throw-RunnerFailure 'artifact-leaf-exists' }
-    $body = ($Value | ConvertTo-Json -Depth 32 -Compress) + "`n"
-    $temporary = Join-Path $parent ('.publish-' + (Get-RandomHex -ByteCount 16) + '.tmp')
-    $published = $false
-    try {
-        $stream = [System.IO.FileStream]::new(
-            $temporary,
-            [System.IO.FileMode]::CreateNew,
-            [System.IO.FileAccess]::Write,
-            [System.IO.FileShare]::None,
-            4096,
-            [System.IO.FileOptions]::WriteThrough)
-        try {
-            $bytes = $script:Utf8NoBom.GetBytes($body)
-            $stream.Write($bytes, 0, $bytes.Length)
-            $stream.Flush($true)
-        }
-        finally {
-            $stream.Dispose()
-        }
-        if ([System.IO.File]::ReadAllText($temporary, $script:Utf8NoBom) -cne $body) {
-            Throw-RunnerFailure 'artifact-temporary-readback-failed'
-        }
-        [System.IO.File]::Move($temporary, $LiteralPath, $false)
-        $published = $true
-        if ([System.IO.File]::ReadAllText($LiteralPath, $script:Utf8NoBom) -cne $body) {
-            Throw-RunnerFailure 'artifact-final-readback-failed'
-        }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'artifact-publication-failed'
-    }
-    finally {
-        if (-not $published -and (Test-Path -LiteralPath $temporary)) {
-            Remove-Item -LiteralPath $temporary -Force -ErrorAction SilentlyContinue
-        }
-    }
-}
-
-function Read-BoundedUtf8File {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [ValidateRange(1, 16777216)][int] $MaximumBytes = 2097152,
-        [switch] $AllowEmpty
-    )
-    try {
-        $item = Assert-RegularPath -LiteralPath $LiteralPath -Kind Leaf -FailureCode 'child-log-invalid'
-        if ($item.Length -gt $MaximumBytes -or (-not $AllowEmpty -and $item.Length -eq 0)) {
-            Throw-RunnerFailure 'child-log-size-invalid'
-        }
-        $stream = [System.IO.FileStream]::new(
-            $LiteralPath,
-            [System.IO.FileMode]::Open,
-            [System.IO.FileAccess]::Read,
-            [System.IO.FileShare]::ReadWrite)
-        try {
-            $reader = [System.IO.StreamReader]::new(
-                $stream,
-                $script:Utf8NoBom,
-                $true,
-                4096,
-                $true)
-            try { return $reader.ReadToEnd() }
-            finally { $reader.Dispose() }
-        }
-        finally { $stream.Dispose() }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure 'child-log-read-failed'
-    }
-}
-
-function Read-ExactJsonFile {
-    param(
-        [Parameter(Mandatory)][string] $LiteralPath,
-        [ValidateRange(1, 16777216)][int] $MaximumBytes = 2097152,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    try {
-        $item = Assert-RegularPath -LiteralPath $LiteralPath -Kind Leaf -FailureCode $FailureCode
-        if ($item.Length -le 0 -or $item.Length -gt $MaximumBytes) { Throw-RunnerFailure $FailureCode }
-        $body = [System.IO.File]::ReadAllText($LiteralPath, $script:Utf8NoBom)
-        return $body | ConvertFrom-Json -Depth 32
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
-}
-
-function ConvertFrom-ExactJsonLine {
-    param(
-        [Parameter(Mandatory)][string] $Body,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    if ($Body -notmatch '^\{[^\r\n]*\}\r?\n$') { Throw-RunnerFailure $FailureCode }
-    try { return $Body.TrimEnd("`r", "`n") | ConvertFrom-Json -Depth 32 }
-    catch { Throw-RunnerFailure $FailureCode }
 }
 
 function Get-MinimalChildEnvironment {
@@ -1580,12 +1417,15 @@ try {
 
     $sourceState = Get-SourceSnapshot -GitPath $gitPath -RepositoryRoot $repositoryRoot
 
+    $artifactHelperPath = Join-Path $repositoryRoot 'scripts\perf\artifact-json.ps1'
     $modulePath = Join-Path $repositoryRoot 'scripts\perf\isolated-process-job.psm1'
     $fixturePath = Join-Path $repositoryRoot 'tests\perf\fixtures\guild-detail-v1.json'
     $loadScriptPath = Join-Path $repositoryRoot 'scripts\perf\dashboard-load.cjs'
     $budgetScriptPath = Join-Path $repositoryRoot 'scripts\perf\assert-budgets.cjs'
     $budgetPath = Join-Path $repositoryRoot 'tests\perf\budgets\public-root.json'
-    foreach ($leaf in @($modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath)) {
+    foreach ($leaf in @(
+        $artifactHelperPath, $modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath
+    )) {
         [void](Assert-RegularPath -LiteralPath $leaf -Kind Leaf -FailureCode 'required-runner-file-invalid')
     }
     if ((Get-FileSha256Hex -LiteralPath $fixturePath) -cne $script:FixtureSha256) {
@@ -1593,6 +1433,7 @@ try {
     }
     foreach ($trackedRunnerPath in @(
         'scripts/perf/with-isolated-dashboard.ps1',
+        'scripts/perf/artifact-json.ps1',
         'scripts/perf/isolated-process-job.psm1',
         'scripts/perf/dashboard-load.cjs',
         'scripts/perf/assert-budgets.cjs',
