@@ -51,6 +51,8 @@ $runnerValidationHelperPath = Join-Path $PSScriptRoot 'runner-validation.ps1'
 . $runnerValidationHelperPath
 $runnerCleanupHelperPath = Join-Path $PSScriptRoot 'runner-cleanup.ps1'
 . $runnerCleanupHelperPath
+$runnerExecutionHelperPath = Join-Path $PSScriptRoot 'runner-execution.ps1'
+. $runnerExecutionHelperPath
 
 function Get-RunnerFailureCode {
     param([Parameter(Mandatory)][System.Exception] $Exception)
@@ -261,22 +263,6 @@ function Assert-DirectoryOwnedByCurrentUser {
     }
 }
 
-function Get-MinimalChildEnvironment {
-    $environment = [ordered]@{}
-    foreach ($name in @(
-        'SystemRoot', 'WINDIR', 'ComSpec', 'PATH', 'PATHEXT', 'TEMP', 'TMP',
-        'USERPROFILE', 'HOME', 'LOCALAPPDATA', 'APPDATA', 'PROGRAMDATA',
-        'NUMBER_OF_PROCESSORS', 'PROCESSOR_ARCHITECTURE', 'CARGO_HOME',
-        'RUSTUP_HOME', 'RUSTUP_TOOLCHAIN', 'PLAYWRIGHT_BROWSERS_PATH', 'CI'
-    )) {
-        $value = [System.Environment]::GetEnvironmentVariable($name, 'Process')
-        if ($null -ne $value -and $value.Length -gt 0) { $environment[$name] = [string]$value }
-    }
-    $environment['NO_COLOR'] = '1'
-    $environment['CARGO_TERM_COLOR'] = 'never'
-    return $environment
-}
-
 function Resolve-ReparseFreeApplicationPath {
     param(
         [Parameter(Mandatory)][string] $LiteralPath,
@@ -330,82 +316,6 @@ function Resolve-ReparseFreeApplicationPath {
         if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
         Throw-RunnerFailure $FailureCode
     }
-}
-
-function Resolve-Executable {
-    param(
-        [Parameter(Mandatory)][string] $Name,
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    try {
-        $command = Get-Command -Name $Name -CommandType Application -ErrorAction Stop | Select-Object -First 1
-        $path = [System.IO.Path]::GetFullPath([string]$command.Source)
-        return Resolve-ReparseFreeApplicationPath -LiteralPath $path -FailureCode $FailureCode
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
-}
-
-function Invoke-DirectBoundedProcess {
-    param(
-        [Parameter(Mandatory)][string] $ExecutablePath,
-        [Parameter(Mandatory)][AllowEmptyCollection()][string[]] $ArgumentList,
-        [Parameter(Mandatory)][string] $WorkingDirectory,
-        [ValidateRange(100, 120000)][int] $TimeoutMilliseconds = 30000,
-        [int[]] $AllowedExitCodes = @(0),
-        [Parameter(Mandatory)][string] $FailureCode
-    )
-    $start = [System.Diagnostics.ProcessStartInfo]::new()
-    $start.FileName = $ExecutablePath
-    $start.WorkingDirectory = $WorkingDirectory
-    $start.UseShellExecute = $false
-    $start.CreateNoWindow = $true
-    $start.RedirectStandardInput = $true
-    $start.RedirectStandardOutput = $true
-    $start.RedirectStandardError = $true
-    $start.StandardOutputEncoding = $script:Utf8NoBom
-    $start.StandardErrorEncoding = $script:Utf8NoBom
-    $start.Environment.Clear()
-    foreach ($entry in (Get-MinimalChildEnvironment).GetEnumerator()) {
-        $start.Environment[[string]$entry.Key] = [string]$entry.Value
-    }
-    $start.Environment['GIT_OPTIONAL_LOCKS'] = '0'
-    foreach ($argument in $ArgumentList) { [void]$start.ArgumentList.Add($argument) }
-    $process = [System.Diagnostics.Process]::new()
-    $process.StartInfo = $start
-    try {
-        if (-not $process.Start()) { Throw-RunnerFailure $FailureCode }
-        $process.StandardInput.Close()
-        $stdoutTask = $process.StandardOutput.ReadToEndAsync()
-        $stderrTask = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit($TimeoutMilliseconds)) {
-            $killError = $null
-            try {
-                if (-not $process.HasExited) { $process.Kill($true) }
-            }
-            catch { $killError = $_.Exception }
-            $terminated = $process.WaitForExit(5000)
-            if (-not $terminated) { Throw-RunnerFailure 'direct-process-cleanup-failed' }
-            Throw-RunnerFailure $FailureCode
-        }
-        [void][System.Threading.Tasks.Task]::WaitAll(@($stdoutTask, $stderrTask), 5000)
-        if ($stdoutTask.Result.Length -gt 33554432 -or $stderrTask.Result.Length -gt 4194304) {
-            Throw-RunnerFailure $FailureCode
-        }
-        if ($AllowedExitCodes -notcontains $process.ExitCode) { Throw-RunnerFailure $FailureCode }
-        return [pscustomobject]@{
-            ExitCode = $process.ExitCode
-            Stdout = $stdoutTask.Result
-            Stderr = $stderrTask.Result
-        }
-    }
-    catch {
-        if ($_.Exception.Data.Contains('DynamoRunnerCode')) { throw }
-        Throw-RunnerFailure $FailureCode
-    }
-    finally { $process.Dispose() }
 }
 
 function Invoke-Git {
@@ -836,13 +746,14 @@ try {
     $runnerEvidenceHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-evidence.ps1'
     $runnerValidationHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-validation.ps1'
     $runnerCleanupHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-cleanup.ps1'
+    $runnerExecutionHelperPath = Join-Path $repositoryRoot 'scripts\perf\runner-execution.ps1'
     $modulePath = Join-Path $repositoryRoot 'scripts\perf\isolated-process-job.psm1'
     $fixturePath = Join-Path $repositoryRoot 'tests\perf\fixtures\guild-detail-v1.json'
     $loadScriptPath = Join-Path $repositoryRoot 'scripts\perf\dashboard-load.cjs'
     $budgetScriptPath = Join-Path $repositoryRoot 'scripts\perf\assert-budgets.cjs'
     $budgetPath = Join-Path $repositoryRoot 'tests\perf\budgets\public-root.json'
     foreach ($leaf in @(
-        $artifactHelperPath, $runnerEvidenceHelperPath, $runnerValidationHelperPath, $runnerCleanupHelperPath, $modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath
+        $artifactHelperPath, $runnerEvidenceHelperPath, $runnerValidationHelperPath, $runnerCleanupHelperPath, $runnerExecutionHelperPath, $modulePath, $fixturePath, $loadScriptPath, $budgetScriptPath, $budgetPath
     )) {
         [void](Assert-RegularPath -LiteralPath $leaf -Kind Leaf -FailureCode 'required-runner-file-invalid')
     }
@@ -855,6 +766,7 @@ try {
         'scripts/perf/runner-evidence.ps1',
         'scripts/perf/runner-validation.ps1',
         'scripts/perf/runner-cleanup.ps1',
+        'scripts/perf/runner-execution.ps1',
         'scripts/perf/isolated-process-job.psm1',
         'scripts/perf/dashboard-load.cjs',
         'scripts/perf/assert-budgets.cjs',

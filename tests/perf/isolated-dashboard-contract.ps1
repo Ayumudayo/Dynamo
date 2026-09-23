@@ -319,6 +319,7 @@ $artifactHelperSource = Join-Path $sourceRoot 'scripts\perf\artifact-json.ps1'
 $runnerEvidenceHelperSource = Join-Path $sourceRoot 'scripts\perf\runner-evidence.ps1'
 $runnerValidationHelperSource = Join-Path $sourceRoot 'scripts\perf\runner-validation.ps1'
 $runnerCleanupHelperSource = Join-Path $sourceRoot 'scripts\perf\runner-cleanup.ps1'
+$runnerExecutionHelperSource = Join-Path $sourceRoot 'scripts\perf\runner-execution.ps1'
 $moduleSource = Join-Path $sourceRoot 'scripts\perf\isolated-process-job.psm1'
 $fixtureSource = Join-Path $sourceRoot 'tests\perf\fixtures\guild-detail-v1.json'
 
@@ -347,6 +348,7 @@ $launcherText = [System.IO.File]::ReadAllText($launcherSource, $script:Utf8NoBom
 $runnerEvidenceHelperText = [System.IO.File]::ReadAllText($runnerEvidenceHelperSource, $script:Utf8NoBom)
 $runnerValidationHelperText = [System.IO.File]::ReadAllText($runnerValidationHelperSource, $script:Utf8NoBom)
 $runnerCleanupHelperText = [System.IO.File]::ReadAllText($runnerCleanupHelperSource, $script:Utf8NoBom)
+$runnerExecutionHelperText = [System.IO.File]::ReadAllText($runnerExecutionHelperSource, $script:Utf8NoBom)
 Assert-True -Condition $launcherText.Contains("`$script:FixtureVersion = '$($script:ExpectedFixtureVersion)'") `
     -Message 'launcher declares the pinned fixture version'
 Assert-True -Condition $launcherText.Contains("`$script:FixtureSha256 = '$($script:ExpectedFixtureSha256)'") `
@@ -370,7 +372,7 @@ foreach ($required in @(
     'DYNAMO_PERF_BUILD_REVISION', 'x-dynamo-perf-control',
     'provider_guild_lookups', 'repository_reads', 'denied_requests'
 )) {
-    Assert-True -Condition (($launcherText + "`n" + $runnerEvidenceHelperText + "`n" + $runnerValidationHelperText + "`n" + $runnerCleanupHelperText).Contains($required)) `
+    Assert-True -Condition (($launcherText + "`n" + $runnerEvidenceHelperText + "`n" + $runnerValidationHelperText + "`n" + $runnerCleanupHelperText + "`n" + $runnerExecutionHelperText).Contains($required)) `
         -Message "runner control sources contain required isolation contract $required"
 }
 
@@ -412,6 +414,7 @@ try {
     Copy-Item -LiteralPath $runnerEvidenceHelperSource -Destination (Join-Path $repository 'scripts\perf\runner-evidence.ps1')
     Copy-Item -LiteralPath $runnerValidationHelperSource -Destination (Join-Path $repository 'scripts\perf\runner-validation.ps1')
     Copy-Item -LiteralPath $runnerCleanupHelperSource -Destination (Join-Path $repository 'scripts\perf\runner-cleanup.ps1')
+    Copy-Item -LiteralPath $runnerExecutionHelperSource -Destination (Join-Path $repository 'scripts\perf\runner-execution.ps1')
     Copy-Item -LiteralPath $moduleSource -Destination (Join-Path $repository 'scripts\perf\isolated-process-job.psm1')
     Copy-Item -LiteralPath $fixtureSource -Destination (Join-Path $repository 'tests\perf\fixtures\guild-detail-v1.json')
     Write-Utf8File -LiteralPath (Join-Path $repository '.gitignore') -Value "output/`ntarget/`n"
