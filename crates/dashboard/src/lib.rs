@@ -1569,10 +1569,10 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn selector_refreshes_revoked_and_new_guild_access() {
+    async fn selector_uses_cached_guilds_but_detail_rechecks_revoked_access() {
         let guilds = r#"[{"id":"99","name":"New Guild","icon":null,"permissions":"32"}]"#;
         let (discord_api_base, requests) =
-            spawn_discord_guilds_server(StatusCode::OK, guilds, StdDuration::ZERO, 3).await;
+            spawn_discord_guilds_server(StatusCode::OK, guilds, StdDuration::ZERO, 2).await;
         let state = test_dashboard_state_with_discord(
             Persistence::default(),
             discord_api_base,
@@ -1591,18 +1591,22 @@ mod tests {
             .await
             .expect("bounded selector body");
         let rendered = String::from_utf8(selector_body.to_vec()).expect("UTF-8 selector page");
-        assert!(rendered.contains("New Guild"));
-        assert!(!rendered.contains("Guild ID <code>42</code>"));
+        assert!(rendered.contains("Guild"));
+        assert!(!rendered.contains("New Guild"));
 
         let denied = app
             .oneshot(authenticated_request("GET", "/guild/42", "test-session"))
             .await
             .expect("guild denial response");
         assert_eq!(denied.status(), StatusCode::FORBIDDEN);
-        assert_eq!(requests.load(Ordering::SeqCst), 3);
+        assert_eq!(requests.load(Ordering::SeqCst), 2);
         assert!(session_can_manage_guild(
             &state.sessions.read().await["test-session"],
             99
+        ));
+        assert!(!session_can_manage_guild(
+            &state.sessions.read().await["test-session"],
+            42
         ));
     }
 
@@ -1628,7 +1632,7 @@ mod tests {
             .oneshot(authenticated_request("GET", "/selector", "test-session"))
             .await
             .expect("selector unavailable response");
-        assert_eq!(selector.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(selector.status(), StatusCode::OK);
         let guild = app
             .oneshot(authenticated_request("GET", "/guild/42", "test-session"))
             .await
@@ -1637,7 +1641,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn invalid_read_guild_authorization_fails_closed() {
+    async fn invalid_guild_authorization_fails_closed_on_detail_page() {
         let (discord_api_base, _) = spawn_discord_guilds_server(
             StatusCode::OK,
             r#"{"unexpected":"response"}"#,
@@ -1654,9 +1658,9 @@ mod tests {
         let app = build_dashboard_router(state);
 
         let response = app
-            .oneshot(authenticated_request("GET", "/selector", "test-session"))
+            .oneshot(authenticated_request("GET", "/guild/42", "test-session"))
             .await
-            .expect("selector invalid authorization response");
+            .expect("guild detail invalid authorization response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
     }
 

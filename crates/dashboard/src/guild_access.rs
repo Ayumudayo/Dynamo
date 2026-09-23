@@ -31,9 +31,14 @@ pub(crate) async fn load_guild_cards(
         .filter(|guild| user_can_manage_guild(guild))
         .cloned()
         .collect::<Vec<_>>();
+    let manageable_count = manageable.len();
+    let lookup_started_at = std::time::Instant::now();
 
     let mut cards = stream::iter(manageable.into_iter().map(|guild| async move {
+        let started_at = std::time::Instant::now();
+        let guild_id = guild.id;
         let bot_presence = bot_is_in_guild(state, guild.id).await;
+        tracing::info!(guild_id, elapsed_ms = started_at.elapsed().as_millis() as u64, presence = ?bot_presence, "dashboard selector guild bot-presence lookup completed");
         GuildCard {
             id: guild.id,
             name: guild.name.clone(),
@@ -46,7 +51,16 @@ pub(crate) async fn load_guild_cards(
     .buffer_unordered(8)
     .collect::<Vec<_>>()
     .await;
+    let lookup_elapsed_ms = lookup_started_at.elapsed().as_millis() as u64;
+    let sort_started_at = std::time::Instant::now();
     sort_guild_cards(&mut cards);
+    tracing::info!(
+        guilds = manageable_count,
+        concurrency_limit = 8,
+        lookup_elapsed_ms,
+        sort_elapsed_ms = sort_started_at.elapsed().as_millis() as u64,
+        "dashboard selector guild cards assembled"
+    );
     cards
 }
 

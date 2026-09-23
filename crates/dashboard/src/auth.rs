@@ -147,13 +147,19 @@ pub(crate) async fn refresh_session_guilds(
         .http
         .get(format!("{}/users/@me/guilds", state.discord_api_base))
         .header(reqwest::header::AUTHORIZATION, &bearer);
+    let refresh_started_at = std::time::Instant::now();
     let guilds_response = send_dashboard_http(state, guilds_request)
         .await
         .map_err(|error| {
-            warn!(?error, "Discord guild authorization refresh request failed");
+            warn!(
+                ?error,
+                elapsed_ms = refresh_started_at.elapsed().as_millis() as u64,
+                "Discord guild authorization refresh request failed"
+            );
             RefreshSessionGuildsError::Unavailable
         })?;
     if guilds_response.status() == StatusCode::UNAUTHORIZED {
+        warn!(status = %guilds_response.status(), elapsed_ms = refresh_started_at.elapsed().as_millis() as u64, "Discord guild authorization refresh requires login");
         let mut sessions = state.sessions.write().await;
         if sessions
             .get(session_id)
@@ -164,25 +170,45 @@ pub(crate) async fn refresh_session_guilds(
         return Err(RefreshSessionGuildsError::Unauthorized);
     }
     if !guilds_response.status().is_success() {
-        warn!(status = %guilds_response.status(), "Discord guild authorization refresh was unavailable");
+        warn!(status = %guilds_response.status(), elapsed_ms = refresh_started_at.elapsed().as_millis() as u64, "Discord guild authorization refresh was unavailable");
         return Err(RefreshSessionGuildsError::Unavailable);
     }
     let guilds: Vec<DashboardGuild> = guilds_response.json().await.map_err(|error| {
         warn!(
             ?error,
+            elapsed_ms = refresh_started_at.elapsed().as_millis() as u64,
             "Discord guild authorization refresh response was invalid"
         );
         RefreshSessionGuildsError::Unavailable
     })?;
+    let response_elapsed_ms = refresh_started_at.elapsed().as_millis() as u64;
+    let guild_count = guilds.len();
 
+    let update_started_at = std::time::Instant::now();
     let mut sessions = state.sessions.write().await;
     let Some(session) = sessions.get_mut(session_id) else {
+        warn!(
+            response_elapsed_ms,
+            session_update_elapsed_ms = update_started_at.elapsed().as_millis() as u64,
+            "Discord guild authorization refresh discarded because the session expired"
+        );
         return Ok(None);
     };
     if session.access_token != access_token {
+        warn!(
+            response_elapsed_ms,
+            session_update_elapsed_ms = update_started_at.elapsed().as_millis() as u64,
+            "Discord guild authorization refresh discarded because the session changed"
+        );
         return Ok(None);
     }
     session.guilds = guilds;
+    tracing::info!(
+        response_elapsed_ms,
+        guilds = guild_count,
+        session_update_elapsed_ms = update_started_at.elapsed().as_millis() as u64,
+        "Discord guild authorization refresh completed"
+    );
     Ok(Some(session.clone()))
 }
 

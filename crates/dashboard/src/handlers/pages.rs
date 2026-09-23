@@ -119,30 +119,40 @@ pub(crate) async fn logout(jar: CookieJar, State(state): State<Arc<DashboardStat
 }
 
 pub(crate) async fn selector(jar: CookieJar, State(state): State<Arc<DashboardState>>) -> Response {
-    let Some(existing_session) = load_session(&state, &jar).await else {
+    let started_at = std::time::Instant::now();
+    let Some(session) = load_session(&state, &jar).await else {
+        tracing::info!(
+            elapsed_ms = started_at.elapsed().as_millis() as u64,
+            outcome = "login_required",
+            "dashboard selector request completed"
+        );
         return Redirect::to("/login?redirect=%2Fselector").into_response();
     };
-    let session = match refresh_read_session(&state, &jar).await {
-        Ok(session) => session,
-        Err(ReadGuildAuthorizationError::LoginRequired) => {
-            return Redirect::to("/login?redirect=%2Fselector").into_response();
-        }
-        Err(ReadGuildAuthorizationError::Unavailable) => {
-            return (
-                StatusCode::SERVICE_UNAVAILABLE,
-                Html(render_error_page(
-                    &state,
-                    Some(&existing_session),
-                    "Guild Access Unavailable",
-                    "Discord could not verify your current server access. Please try again.",
-                )),
-            )
-                .into_response();
-        }
-    };
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        guilds = session.guilds.len(),
+        "dashboard selector using cached guild snapshot"
+    );
 
+    let cards_started_at = std::time::Instant::now();
     let guild_cards = load_guild_cards(&state, &session).await;
-    Html(render_selector_page(&state, &session, &guild_cards)).into_response()
+    tracing::info!(
+        elapsed_ms = cards_started_at.elapsed().as_millis() as u64,
+        guild_cards = guild_cards.len(),
+        "dashboard selector guild status lookups completed"
+    );
+    let render_started_at = std::time::Instant::now();
+    let response = Html(render_selector_page(&state, &session, &guild_cards)).into_response();
+    tracing::info!(
+        elapsed_ms = render_started_at.elapsed().as_millis() as u64,
+        "dashboard selector HTML rendered"
+    );
+    tracing::info!(
+        elapsed_ms = started_at.elapsed().as_millis() as u64,
+        outcome = "success",
+        "dashboard selector request completed"
+    );
+    response
 }
 
 pub(crate) async fn deployment_page(
