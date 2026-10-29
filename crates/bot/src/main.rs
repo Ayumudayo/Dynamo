@@ -91,6 +91,7 @@ async fn main() -> Result<(), Error> {
                 );
                 spawn_exchange_rate_refresh_loop(app_state.clone());
                 spawn_giveaway_poll_loop(ctx.clone(), app_state.clone());
+                dynamo_module_gameinfo::spawn_maintenance_poll_loop();
 
                 build_bot_runtime_report(
                     &discord_config,

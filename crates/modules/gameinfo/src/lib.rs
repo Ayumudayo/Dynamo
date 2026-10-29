@@ -11,4 +11,5 @@ mod translate;
 #[cfg(test)]
 mod tests;
 
+pub use maintenance::spawn_maintenance_poll_loop;
 pub use module::GameInfoModule;
