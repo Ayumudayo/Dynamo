@@ -30,20 +30,34 @@ impl GiveawaysRepository for MongoPersistence {
         document.map(GiveawayDocument::into_domain).transpose()
     }
 
-    async fn save(&self, record: GiveawayRecord) -> Result<GiveawayRecord, Error> {
-        let document = GiveawayDocument::from_domain(record);
-        self.giveaways
-            .replace_one(
-                doc! {
-                    "guild_id": &document.guild_id,
-                    "message_id": &document.message_id,
-                },
-                document.clone(),
-            )
-            .upsert(true)
-            .await?;
-
-        document.into_domain()
+    async fn compare_and_save(
+        &self,
+        record: GiveawayRecord,
+    ) -> Result<Option<GiveawayRecord>, Error> {
+        let mut document = GiveawayDocument::from_domain(record);
+        let expected_revision = document.revision;
+        document.revision = expected_revision
+            .checked_add(1)
+            .ok_or_else(|| anyhow::anyhow!("giveaway revision overflow"))?;
+        let mut filter = doc! {
+            "guild_id": &document.guild_id,
+            "message_id": &document.message_id,
+        };
+        if expected_revision == 0 {
+            filter.insert(
+                "$or",
+                mongodb::bson::bson!([
+                    { "revision": 0 }, { "revision": { "$exists": false } }
+                ]),
+            );
+        } else {
+            filter.insert("revision", expected_revision);
+        }
+        let result = self.giveaways.replace_one(filter, document.clone()).await?;
+        if result.matched_count == 0 {
+            return Ok(None);
+        }
+        Ok(Some(document.into_domain()?))
     }
 
     async fn list_by_guild(&self, guild_id: u64) -> Result<Vec<GiveawayRecord>, Error> {
@@ -66,8 +80,11 @@ impl GiveawaysRepository for MongoPersistence {
         let mut cursor = self
             .giveaways
             .find(doc! {
-                "status": "ACTIVE",
-                "ends_at": { "$lte": BsonDateTime::from_millis(timestamp.timestamp_millis()) },
+                "$or": [
+                    { "status": "ACTIVE", "ends_at": { "$lte": BsonDateTime::from_millis(timestamp.timestamp_millis()) } },
+                    { "message_sync_pending": true },
+                    { "announcement_pending": true },
+                ],
             })
             .await?;
 

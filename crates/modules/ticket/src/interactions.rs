@@ -142,7 +142,9 @@ async fn handle_ticket_close(
     }
 
     let settings = load_settings(data, Some(channel.guild_id.get())).await?;
-    let result = close_ticket_channel(ctx, &channel, &component.user.name, &settings, None).await?;
+    let result = close_ticket_channel(ctx, &channel, &component.user.name, &settings, None)
+        .await
+        .unwrap_or_else(|error| error.to_string());
     component
         .edit_response(ctx, EditInteractionResponse::new().content(result))
         .await?;

@@ -28,6 +28,7 @@ jobs:
           $stage = Join-Path $PWD "output/rpi-aarch64"
           New-Item -ItemType Directory -Force -Path (Join-Path $stage "scripts/lib") | Out-Null
           Copy-Item scripts/lib/secure-env.sh (Join-Path $stage "scripts/lib/secure-env.sh")
+          Copy-Item scripts/lib/rpi-artifact.cjs (Join-Path $stage "scripts/lib/rpi-artifact.cjs")
           foreach ($name in @("prod-bootstrap.sh", "prod-dashboard.sh", "prod-bot.sh", "remote-rpi-postdeploy.sh")) {
             Copy-Item (Join-Path "scripts" $name) (Join-Path $stage "scripts/$name")
           }
@@ -36,6 +37,9 @@ jobs:
               chmod +x $_.FullName
             }
           }
+
+      - name: Verify artifact and running-process validation
+        run: node --test scripts/tests/rpi-artifact.test.cjs
 
       - name: Verify secure environment creation and Bash bundle contracts
         if: runner.os == 'Linux'

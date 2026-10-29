@@ -71,6 +71,11 @@ if [[ ! -d "$STAGE_DIR" ]]; then
   echo "Missing staged bundle at $STAGE_DIR. Run build-rpi-aarch64 first." >&2
   exit 1
 fi
+if [[ "$SKIP_BUILD" == "true" ]]; then
+  echo 'SkipBuild: deploying the previously built artifact shown below, not rebuilding current source.'
+fi
+command -v node >/dev/null || { echo 'Node.js is required to verify the deployment bundle.' >&2; exit 1; }
+node "$ROOT_DIR/scripts/lib/rpi-artifact.cjs" verify "$STAGE_DIR"
 
 SSH_ARGS=(-p "$RPI_PORT")
 SCP_ARGS=(-P "$RPI_PORT")

@@ -58,7 +58,13 @@ pub trait SuggestionsRepository: Send + Sync {
         guild_id: u64,
         message_id: u64,
     ) -> Result<Option<SuggestionRecord>, Error>;
-    async fn save(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error>;
+    /// Replace the original message's document only if its review state is unchanged.
+    /// A moved message must never be upserted under its new message ID.
+    async fn replace_if_unchanged(
+        &self,
+        expected: &SuggestionRecord,
+        record: SuggestionRecord,
+    ) -> Result<Option<SuggestionRecord>, Error>;
 }
 
 #[async_trait]
@@ -69,7 +75,11 @@ pub trait GiveawaysRepository: Send + Sync {
         guild_id: u64,
         message_id: u64,
     ) -> Result<Option<GiveawayRecord>, Error>;
-    async fn save(&self, record: GiveawayRecord) -> Result<GiveawayRecord, Error>;
+    /// Replace only the revision that the caller read; None means a concurrent update won.
+    async fn compare_and_save(
+        &self,
+        record: GiveawayRecord,
+    ) -> Result<Option<GiveawayRecord>, Error>;
     async fn list_by_guild(&self, guild_id: u64) -> Result<Vec<GiveawayRecord>, Error>;
     async fn list_due_before(
         &self,
@@ -99,7 +109,12 @@ pub trait MemberStatsRepository: Send + Sync {
         guild_id: u64,
         member_id: u64,
     ) -> Result<MemberStatsRecord, Error>;
-    async fn save(&self, record: MemberStatsRecord) -> Result<MemberStatsRecord, Error>;
+    async fn apply_delta(
+        &self,
+        guild_id: u64,
+        member_id: u64,
+        delta: dynamo_domain_stats::MemberStatsDelta,
+    ) -> Result<dynamo_domain_stats::MemberStatsUpdate, Error>;
 }
 
 #[async_trait]

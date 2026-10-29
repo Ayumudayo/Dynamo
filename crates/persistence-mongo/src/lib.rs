@@ -15,6 +15,9 @@ type Error = anyhow::Error;
 #[cfg(test)]
 mod tests {
     mod dashboard_audit;
+    mod giveaways;
+    mod stats;
+    mod suggestions;
     mod support;
 
     use self::support::{

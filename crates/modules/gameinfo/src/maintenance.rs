@@ -54,6 +54,37 @@ fn default_maintenance_scope() -> String {
     "전 월드".to_string()
 }
 
+/// Persist the cancelled event, rather than only the notice URL. Follow-ups
+/// have different URLs and must not allow the original schedule to reappear.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct MaintenanceCancellation {
+    pub(crate) notice_url: String,
+    pub(crate) original_url: Option<String>,
+    pub(crate) scope: String,
+    pub(crate) start_stamp: Option<i64>,
+    pub(crate) start_date: Option<String>,
+}
+
+impl MaintenanceCancellation {
+    pub(crate) fn matches(&self, info: &MaintInfo) -> bool {
+        if self.notice_url == info.url || self.original_url.as_deref() == Some(&info.url) {
+            return true;
+        }
+        if self.scope != info.scope {
+            return false;
+        }
+        if let Some(start) = self.start_stamp {
+            return start == info.start_stamp;
+        }
+        self.start_date.as_ref().is_some_and(|date| {
+            Tokyo
+                .timestamp_opt(info.start_stamp, 0)
+                .single()
+                .is_some_and(|start| start.format("%Y-%m-%d").to_string() == *date)
+        })
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum MaintenanceNoticeKind {
     Regular,
@@ -112,13 +143,19 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
     let cache_store = GameInfoCacheStore::new();
     let now = Utc::now().timestamp();
     let client = lodestone_client()?;
-    let cached = cache_store.load_maintinfo().await?;
+    let (mut cached, mut cancellations) = cache_store.load_maintenance_state().await?;
     let wants_translation = translate_api_key().is_some();
 
     let list_html = fetch_lodestone_html(&client, MAINTENANCE_LIST_URL).await?;
 
     let candidates = parse_maintenance_candidates(&list_html);
     for candidate in candidates.into_iter().take(MAX_MAINTENANCE_CANDIDATES) {
+        if cancellations.iter().any(|entry| {
+            entry.notice_url == candidate.url
+                || entry.original_url.as_deref() == Some(&candidate.url)
+        }) {
+            continue;
+        }
         if !should_recheck_notice_detail(&candidate.url, cached.as_ref(), now) {
             // The listing is newest first. Preserve this cached notice rather
             // than replacing it with an older original notice below it.
@@ -140,26 +177,30 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
             && is_japan_maintenance_title(&title)
             && is_cancelled_maintenance_notice(&title, &body)
         {
-            COMPLETED_NOTICES
-                .get_or_init(|| Mutex::new(HashSet::new()))
-                .lock()
-                .await
-                .insert(candidate.url.clone());
-            let related = cached.as_ref().is_none_or(|info| {
-                info.id == candidate.url
-                    || (info.scope == maintenance_scope(&title, &body)
-                        && cancellation_mentions_start_date(info, &body))
-            });
-            if related {
-                cache_store.clear_maintinfo().await?;
-                return Ok(None);
+            let cancellation =
+                cancellation_from_notice(&candidate.url, &title, &body, cached.as_ref())?;
+            // Persist both the tombstone and removal atomically before marking
+            // anything processed. A failed write must retry the cancellation.
+            cache_store
+                .save_maintenance_cancellation(&cancellation)
+                .await?;
+            clear_cancelled_snapshot(&shared_info(), &cancellation).await;
+            if cached
+                .as_ref()
+                .is_some_and(|info| cancellation.matches(info))
+            {
+                cached = None;
             }
+            cancellations.push(cancellation);
             continue;
         }
 
         let Some(mut next) = parse_maintenance_detail(&candidate.url, &detail_html)? else {
             anyhow::bail!("maintenance detail could not be parsed: {}", candidate.url);
         };
+        if cancellations.iter().any(|entry| entry.matches(&next)) {
+            continue;
+        }
         if should_skip_historical_notice(&next, cached.as_ref(), now) {
             COMPLETED_NOTICES
                 .get_or_init(|| Mutex::new(HashSet::new()))
@@ -218,7 +259,7 @@ pub(crate) fn should_skip_historical_notice(
     // This does not require repeatedly fetching its expired detail page.
     !info.end_time_unknown
         && !is_cache_usable(info, now)
-        && !cached.is_some_and(|cached| cached.url == info.url)
+        && cached.is_none_or(|cached| cached.url != info.url)
 }
 
 pub(crate) fn should_recheck_notice_detail(
@@ -379,6 +420,58 @@ fn cancellation_mentions_start_date(info: &MaintInfo, body: &str) -> bool {
             date.day()
         ))
     })
+}
+
+fn cancellation_from_notice(
+    url: &str,
+    title: &str,
+    body: &str,
+    cached: Option<&MaintInfo>,
+) -> Result<MaintenanceCancellation, Error> {
+    let scope = maintenance_scope(title, body).to_string();
+    let parsed_start = parse_maintenance_start_stamp(body)?;
+    let matched = cached.filter(|info| {
+        info.url == url
+            || (info.scope == scope
+                && match parsed_start {
+                    Some(start) => info.start_stamp == start,
+                    None => cancellation_mentions_start_date(info, body),
+                })
+    });
+    let start_stamp = parsed_start.or_else(|| matched.map(|info| info.start_stamp));
+    let date_pattern = Regex::new(r"(?P<y>\d{4})年(?P<m>\d{1,2})月(?P<d>\d{1,2})日")
+        .expect("valid cancellation date regex");
+    let start_date = date_pattern.captures(body).and_then(|capture| {
+        NaiveDate::from_ymd_opt(
+            capture["y"].parse().ok()?,
+            capture["m"].parse().ok()?,
+            capture["d"].parse().ok()?,
+        )
+        .map(|date| date.format("%Y-%m-%d").to_string())
+    });
+    if matched.is_none() && start_stamp.is_none() && start_date.is_none() {
+        anyhow::bail!("cannot associate maintenance cancellation with an event: {url}");
+    }
+    Ok(MaintenanceCancellation {
+        notice_url: url.to_string(),
+        original_url: matched.map(|info| info.url.clone()),
+        scope,
+        start_stamp,
+        start_date,
+    })
+}
+
+async fn clear_cancelled_snapshot(
+    state: &RwLock<Option<MaintInfo>>,
+    cancellation: &MaintenanceCancellation,
+) {
+    let mut snapshot = state.write().await;
+    if snapshot
+        .as_ref()
+        .is_some_and(|info| cancellation.matches(info))
+    {
+        *snapshot = None;
+    }
 }
 
 pub(crate) fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
@@ -627,4 +720,80 @@ pub(crate) fn format_maintenance_title(
     };
 
     format!("{prefix} ({range})")
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_invalidates_snapshot_before_later_poll_errors() {
+        let html = "<article><h1>全ワールド メンテナンス作業のお知らせ</h1><div class='news__detail__wrapper'>2026年10月20日(火) 13:00より19:00頃まで</div></article>";
+        let original = parse_maintenance_detail("original", html).unwrap().unwrap();
+        let later_event = cancellation_from_notice(
+            "cancel-later",
+            "全ワールド メンテナンス作業 中止",
+            "2026年10月20日(火) 18:00より19:00頃まで 中止",
+            Some(&original),
+        )
+        .unwrap();
+        assert!(later_event.original_url.is_none());
+        assert!(!later_event.matches(&original));
+        let state = RwLock::new(Some(original.clone()));
+        clear_cancelled_snapshot(&state, &later_event).await;
+        assert!(state.read().await.is_some());
+        let entry = cancellation_from_notice(
+            "cancel",
+            "全ワールド メンテナンス作業 中止",
+            "2026年10月20日(火) 13:00より19:00頃まで 中止",
+            Some(&original),
+        )
+        .unwrap();
+        clear_cancelled_snapshot(&state, &entry).await;
+        // The outer loop's error path only marks an existing value stale.
+        // It cannot resurrect the event after a later candidate fetch fails.
+        if let Some(info) = state.write().await.as_mut() {
+            info.stale = true;
+        }
+        assert!(state.read().await.is_none());
+    }
+
+    #[test]
+    fn cancellation_without_cached_original_matches_event_not_other_windows() {
+        let entry = cancellation_from_notice(
+            "cancel",
+            "全ワールド メンテナンス作業 中止のお知らせ",
+            "下記の作業を中止します。日時：2026年10月20日(火) 13:00より19:00頃まで",
+            None,
+        )
+        .unwrap();
+        let original_html = "<article><h1>全ワールド メンテナンス作業のお知らせ</h1><div class='news__detail__wrapper'>2026年10月20日(火) 13:00より19:00頃まで</div></article>";
+        let original = parse_maintenance_detail("original", original_html)
+            .unwrap()
+            .unwrap();
+        assert!(entry.matches(&original));
+        let mut different = original.clone();
+        different.start_stamp += 3600;
+        assert!(!entry.matches(&different));
+        different = original.clone();
+        different.scope = "일본 DC 한정".into();
+        assert!(!entry.matches(&different));
+        let mut followup = original;
+        followup.url = "followup".into();
+        followup.end_stamp -= 300;
+        assert!(entry.matches(&followup));
+    }
+
+    #[test]
+    fn cancellation_with_no_event_evidence_remains_retryable() {
+        assert!(
+            cancellation_from_notice(
+                "cancel",
+                "全ワールド メンテナンス作業 中止のお知らせ",
+                "メンテナンス作業を中止します。",
+                None
+            )
+            .is_err()
+        );
+    }
 }

@@ -1,4 +1,4 @@
-use std::{collections::BTreeMap, fmt};
+use std::{collections::BTreeMap, fmt, io::IsTerminal};
 
 use dynamo_enablement::{resolve_command_states, resolve_module_states};
 use dynamo_module_kit::{CommandCatalog, GatewayIntents, ModuleCatalog};
@@ -15,7 +15,7 @@ pub fn init_tracing() {
 
     let _ = tracing_subscriber::fmt()
         .compact()
-        .without_time()
+        .with_ansi(std::io::stderr().is_terminal())
         .with_writer(
             std::io::stderr
                 .with_min_level(Level::WARN)
@@ -32,7 +32,28 @@ fn log_filter_directives(env_value: Option<&str>) -> String {
         .unwrap_or(DEFAULT_LOG_FILTER);
 
     if EnvFilter::try_new(candidate).is_ok() {
-        candidate.to_string()
+        let has_global_level = candidate.split(',').any(|directive| {
+            matches!(
+                directive.trim(),
+                "off"
+                    | "error"
+                    | "warn"
+                    | "info"
+                    | "debug"
+                    | "trace"
+                    | "0"
+                    | "1"
+                    | "2"
+                    | "3"
+                    | "4"
+                    | "5"
+            )
+        });
+        if has_global_level {
+            candidate.to_string()
+        } else {
+            format!("warn,{candidate}")
+        }
     } else {
         DEFAULT_LOG_FILTER.to_string()
     }
@@ -587,12 +608,57 @@ mod tests {
     fn log_filter_uses_valid_env_filter() {
         assert_eq!(
             log_filter_directives(Some("dynamo_bot=debug,poise=warn")),
-            "dynamo_bot=debug,poise=warn"
+            "warn,dynamo_bot=debug,poise=warn"
         );
     }
 
     #[test]
     fn log_filter_falls_back_to_info_when_env_filter_is_invalid() {
         assert_eq!(log_filter_directives(Some("[")), "info");
+    }
+
+    #[test]
+    fn explicit_global_filter_is_respected() {
+        assert_eq!(
+            log_filter_directives(Some("off,dynamo_bot=info")),
+            "off,dynamo_bot=info"
+        );
+    }
+
+    #[test]
+    fn module_warning_is_visible_with_legacy_target_only_environment() {
+        use std::{
+            io::Write,
+            sync::{Arc, Mutex},
+        };
+        #[derive(Clone)]
+        struct Buffer(Arc<Mutex<Vec<u8>>>);
+        impl Write for Buffer {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0.lock().unwrap().extend_from_slice(bytes);
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let buffer = Buffer(Arc::new(Mutex::new(Vec::new())));
+        let output = buffer.0.clone();
+        let subscriber = tracing_subscriber::fmt()
+            .with_ansi(false)
+            .with_env_filter(tracing_subscriber::EnvFilter::new(log_filter_directives(
+                Some("dynamo_bot=info,poise=info"),
+            )))
+            .with_writer(move || buffer.clone())
+            .finish();
+        tracing::subscriber::with_default(subscriber, || {
+            tracing::warn!(target: "dynamo_module_gameinfo::maintenance", "cache-retry-visible");
+            tracing::info!(target: "dynamo_module_gameinfo::maintenance", "quiet-background-detail");
+        });
+        let text = String::from_utf8(output.lock().unwrap().clone()).unwrap();
+        assert!(text.contains("cache-retry-visible"));
+        assert!(!text.contains("quiet-background-detail"));
+        // Default tracing formatter includes an ISO timestamp; do not disable it for files.
+        assert!(text.as_bytes().get(4) == Some(&b'-'));
     }
 }

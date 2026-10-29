@@ -5,7 +5,7 @@ use std::{
 };
 
 use dynamo_access::module_access_for_app;
-use dynamo_domain_stats::MemberStatsRecord;
+use dynamo_domain_stats::MemberStatsDelta;
 use dynamo_module_kit::{
     DiscordCommand, GatewayIntents, Module, ModuleCategory, ModuleManifest, SettingsField,
     SettingsFieldKind, SettingsSchema, SettingsSection,
@@ -139,30 +139,35 @@ pub async fn handle_message(
         return Ok(());
     };
 
-    let mut record = repo
-        .get_or_create(guild_id.get(), message.author.id.get())
+    let xp = if should_award_xp(guild_id.get(), message.author.id.get()).await {
+        xp_to_add()
+    } else {
+        0
+    };
+    let update = repo
+        .apply_delta(
+            guild_id.get(),
+            message.author.id.get(),
+            MemberStatsDelta {
+                messages: 1,
+                xp,
+                ..Default::default()
+            },
+        )
         .await?;
-    record.messages += 1;
-
-    if should_award_xp(guild_id.get(), message.author.id.get()).await {
-        record.xp += xp_to_add();
-        if maybe_level_up(&mut record) {
-            let content = render_level_up_message(
-                &settings.xp.message,
-                ctx,
-                guild_id,
-                message.author.id.get(),
-                record.level,
-            );
-            let channel_id = settings.xp.channel_id.unwrap_or(message.channel_id.get());
-            let _ = ChannelId::new(channel_id)
-                .send_message(ctx, CreateMessage::new().content(content))
-                .await;
-        }
+    if update.leveled_up {
+        let content = render_level_up_message(
+            &settings.xp.message,
+            ctx,
+            guild_id,
+            message.author.id.get(),
+            update.record.level,
+        );
+        let channel_id = settings.xp.channel_id.unwrap_or(message.channel_id.get());
+        let _ = ChannelId::new(channel_id)
+            .send_message(ctx, CreateMessage::new().content(content))
+            .await;
     }
-
-    record.updated_at = chrono::Utc::now();
-    repo.save(record).await?;
     Ok(())
 }
 
@@ -206,20 +211,22 @@ pub async fn handle_interaction(
     let Some(repo) = data.persistence.member_stats.clone() else {
         return Ok(());
     };
-    let mut record = repo.get_or_create(guild_id, member_id).await?;
+    let mut delta = MemberStatsDelta::default();
 
     if let Interaction::Command(command) = interaction {
         if command.data.kind == poise::serenity_prelude::CommandType::ChatInput {
-            record.commands.slash += 1;
+            delta.slash_commands = 1;
         } else if command.data.kind == poise::serenity_prelude::CommandType::Message {
-            record.contexts.message += 1;
+            delta.message_contexts = 1;
         } else if command.data.kind == poise::serenity_prelude::CommandType::User {
-            record.contexts.user += 1;
+            delta.user_contexts = 1;
+        } else {
+            return Ok(());
         }
+    } else {
+        return Ok(());
     }
-
-    record.updated_at = chrono::Utc::now();
-    repo.save(record).await?;
+    repo.apply_delta(guild_id, member_id, delta).await?;
     Ok(())
 }
 
@@ -270,10 +277,15 @@ pub async fn handle_voice_state_update(
     let now = now_unix();
 
     if old_channel.is_none() && new_channel.is_some() {
-        let mut record = repo.get_or_create(guild_id.get(), member_id).await?;
-        record.voice.connections += 1;
-        record.updated_at = chrono::Utc::now();
-        repo.save(record).await?;
+        repo.apply_delta(
+            guild_id.get(),
+            member_id,
+            MemberStatsDelta {
+                voice_connections: 1,
+                ..Default::default()
+            },
+        )
+        .await?;
         voice_sessions().lock().await.insert(key, now);
         return Ok(());
     }
@@ -314,16 +326,6 @@ async fn should_award_xp(guild_id: u64, member_id: u64) -> bool {
         cache.insert(key, now);
     }
     should_award
-}
-
-fn maybe_level_up(record: &mut MemberStatsRecord) -> bool {
-    let needed = record.level as u64 * record.level as u64 * 100;
-    if record.xp <= needed {
-        return false;
-    }
-    record.level += 1;
-    record.xp -= needed;
-    true
 }
 
 fn render_level_up_message(
@@ -370,16 +372,20 @@ async fn accumulate_voice_time(
     now: i64,
 ) -> Result<(), Error> {
     let mut sessions = voice_sessions().lock().await;
-    let Some(started_at) = sessions.remove(key) else {
+    let Some(&started_at) = sessions.get(key) else {
         return Ok(());
     };
-    drop(sessions);
-
-    let mut record = repo.get_or_create(guild_id, member_id).await?;
-    let elapsed = now.saturating_sub(started_at);
-    record.voice.time_seconds += elapsed as u64;
-    record.updated_at = chrono::Utc::now();
-    repo.save(record).await?;
+    let elapsed = now.saturating_sub(started_at).max(0) as u64;
+    repo.apply_delta(
+        guild_id,
+        member_id,
+        MemberStatsDelta {
+            voice_seconds: elapsed,
+            ..Default::default()
+        },
+    )
+    .await?;
+    sessions.remove(key);
     Ok(())
 }
 
@@ -429,8 +435,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    use super::{StatsSettings, maybe_level_up};
-    use dynamo_domain_stats::MemberStatsRecord;
+    use super::StatsSettings;
+    use dynamo_domain_stats::{MemberStatsDelta, MemberStatsRecord};
 
     #[test]
     fn stats_settings_accepts_nested_xp_shape() {
@@ -458,7 +464,18 @@ mod tests {
             updated_at: chrono::Utc::now(),
         };
 
-        assert!(maybe_level_up(&mut record));
+        record.xp = 140;
+        assert!(
+            record
+                .apply_delta(
+                    MemberStatsDelta {
+                        xp: 10,
+                        ..Default::default()
+                    },
+                    chrono::Utc::now()
+                )
+                .unwrap()
+        );
         assert_eq!(record.level, 2);
         assert_eq!(record.xp, 50);
     }

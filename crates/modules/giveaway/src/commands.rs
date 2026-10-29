@@ -5,11 +5,12 @@ use poise::serenity_prelude::{ChannelId, CreateEmbed, CreateMessage, User};
 
 use crate::constants::DEFAULT_BUTTON_LABEL;
 use crate::lifecycle::{
-    choose_winners, finalize_giveaway, format_winners, load_giveaway, sync_message,
+    choose_winners, deliver_saved_message, finalize_giveaway, format_winners, giveaway_lock,
+    load_giveaway, save_if_current,
 };
 use crate::render::{build_embed, entry_button};
 use crate::settings::load_settings;
-use crate::validation::parse_role_ids;
+use crate::validation::{parse_message_id, parse_role_ids};
 
 /// Manage giveaway lifecycle actions for this guild.
 #[poise::command(
@@ -75,7 +76,11 @@ async fn giveaway_start(
     } else {
         settings.button_label.clone()
     };
+    ctx.defer().await?;
     let draft = GiveawayRecord {
+        revision: 0,
+        message_sync_pending: false,
+        announcement_pending: false,
         guild_id: guild_id.get(),
         channel_id: target_channel,
         message_id: 0,
@@ -175,6 +180,9 @@ async fn giveaway_end(
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
+    ctx.defer().await?;
+    let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
+    let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
         ctx.say("Unable to find that giveaway.").await?;
         return Ok(());
@@ -206,6 +214,9 @@ async fn giveaway_pause(
         ctx.say("Giveaway repository is not configured.").await?;
         return Ok(());
     };
+    ctx.defer().await?;
+    let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
+    let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
         ctx.say("Unable to find that giveaway.").await?;
         return Ok(());
@@ -217,8 +228,17 @@ async fn giveaway_pause(
     record.status = GiveawayStatus::Paused;
     record.paused_at = Some(Utc::now());
     record.updated_at = Utc::now();
-    let record = repo.save(record).await?;
-    sync_message(ctx.serenity_context().http.as_ref(), &record).await?;
+    record.message_sync_pending = true;
+    let record = save_if_current(repo.as_ref(), record).await?;
+    if let Err(error) = deliver_saved_message(
+        repo.as_ref(),
+        ctx.serenity_context().http.as_ref(),
+        record.clone(),
+    )
+    .await
+    {
+        tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
+    }
     ctx.say("The giveaway has been paused.").await?;
     Ok(())
 }
@@ -241,6 +261,9 @@ async fn giveaway_resume(
         ctx.say("Giveaway repository is not configured.").await?;
         return Ok(());
     };
+    ctx.defer().await?;
+    let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
+    let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
         ctx.say("Unable to find that giveaway.").await?;
         return Ok(());
@@ -254,8 +277,17 @@ async fn giveaway_resume(
     record.status = GiveawayStatus::Active;
     record.paused_at = None;
     record.updated_at = Utc::now();
-    let record = repo.save(record).await?;
-    sync_message(ctx.serenity_context().http.as_ref(), &record).await?;
+    record.message_sync_pending = true;
+    let record = save_if_current(repo.as_ref(), record).await?;
+    if let Err(error) = deliver_saved_message(
+        repo.as_ref(),
+        ctx.serenity_context().http.as_ref(),
+        record.clone(),
+    )
+    .await
+    {
+        tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
+    }
     ctx.say("The giveaway has been resumed.").await?;
     Ok(())
 }
@@ -279,6 +311,9 @@ async fn giveaway_reroll(
         ctx.say("Giveaway repository is not configured.").await?;
         return Ok(());
     };
+    ctx.defer().await?;
+    let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
+    let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
         ctx.say("Unable to find that giveaway.").await?;
         return Ok(());
@@ -287,13 +322,29 @@ async fn giveaway_reroll(
         ctx.say("Only ended giveaways can be rerolled.").await?;
         return Ok(());
     }
+    if record.announcement_pending {
+        ctx.say(
+            "The previous winner announcement is still pending. Retry after delivery completes.",
+        )
+        .await?;
+        return Ok(());
+    }
     if let Some(winner_count) = winners {
         record.winner_count = winner_count.max(1) as u64;
     }
     record.winner_ids = choose_winners(&record.entries, record.winner_count);
     record.updated_at = Utc::now();
-    let record = repo.save(record).await?;
-    sync_message(ctx.serenity_context().http.as_ref(), &record).await?;
+    record.message_sync_pending = true;
+    let record = save_if_current(repo.as_ref(), record).await?;
+    if let Err(error) = deliver_saved_message(
+        repo.as_ref(),
+        ctx.serenity_context().http.as_ref(),
+        record.clone(),
+    )
+    .await
+    {
+        tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
+    }
     ctx.say(format!(
         "Giveaway rerolled. Winners: {}",
         format_winners(&record.winner_ids)
@@ -323,6 +374,9 @@ async fn giveaway_edit(
         ctx.say("Giveaway repository is not configured.").await?;
         return Ok(());
     };
+    ctx.defer().await?;
+    let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
+    let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
         ctx.say("Unable to find that giveaway.").await?;
         return Ok(());
@@ -341,8 +395,17 @@ async fn giveaway_edit(
         record.winner_count = winners.max(1) as u64;
     }
     record.updated_at = Utc::now();
-    let record = repo.save(record).await?;
-    sync_message(ctx.serenity_context().http.as_ref(), &record).await?;
+    record.message_sync_pending = true;
+    let record = save_if_current(repo.as_ref(), record).await?;
+    if let Err(error) = deliver_saved_message(
+        repo.as_ref(),
+        ctx.serenity_context().http.as_ref(),
+        record.clone(),
+    )
+    .await
+    {
+        tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
+    }
     ctx.say("Giveaway updated.").await?;
     Ok(())
 }

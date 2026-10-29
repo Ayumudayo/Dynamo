@@ -8,6 +8,10 @@ use crate::{Error, documents::parse_snowflake};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct MemberStatsDocument {
+    #[serde(rename = "_id", default, skip_serializing_if = "Option::is_none")]
+    pub(crate) id: Option<mongodb::bson::Bson>,
+    #[serde(default)]
+    pub(crate) revision: u64,
     pub(crate) guild_id: String,
     pub(crate) member_id: String,
     messages: u64,
@@ -23,6 +27,8 @@ pub(crate) struct MemberStatsDocument {
 impl MemberStatsDocument {
     pub(crate) fn from_domain(value: MemberStatsRecord) -> Self {
         Self {
+            id: None,
+            revision: 0,
             guild_id: value.guild_id.to_string(),
             member_id: value.member_id.to_string(),
             messages: value.messages,

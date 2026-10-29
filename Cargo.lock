@@ -957,16 +957,20 @@ name = "dynamo-module-giveaway"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dynamo-access",
  "dynamo-domain-giveaway",
  "dynamo-module-kit",
+ "dynamo-repositories",
  "dynamo-runtime-api",
  "humantime",
  "poise",
  "rand 0.8.5",
  "serde",
  "serde_json",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
@@ -1071,6 +1075,8 @@ dependencies = [
 name = "dynamo-module-suggestion"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "chrono",
  "dynamo-access",
  "dynamo-domain-suggestion",
@@ -1081,6 +1087,7 @@ dependencies = [
  "poise",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]
@@ -1095,6 +1102,7 @@ dependencies = [
  "poise",
  "serde",
  "serde_json",
+ "tokio",
 ]
 
 [[package]]

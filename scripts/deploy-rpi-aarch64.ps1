@@ -35,6 +35,10 @@ if (-not $SkipBuild) {
 if (-not (Test-Path $StageDir)) {
   throw "Missing staged bundle at $StageDir. Run build-rpi-aarch64 first."
 }
+if ($SkipBuild) { Write-Host 'SkipBuild: deploying the previously built artifact shown below, not rebuilding current source.' }
+if (-not (Get-Command node -ErrorAction SilentlyContinue)) { throw 'Node.js is required to verify the deployment bundle.' }
+& node (Join-Path $RepoRoot 'scripts\lib\rpi-artifact.cjs') verify $StageDir
+if ($LASTEXITCODE -ne 0) { throw 'Deployment bundle verification failed; rebuild before deploying.' }
 
 $Target = "$RemoteUser@$RemoteHost"
 $SshArgs = @("-p", "$Port")
