@@ -377,6 +377,7 @@ pub(crate) fn verify_mutation_request_security(
     Ok(())
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) async fn require_elevated_api_owner(
     state: &DashboardState,
     jar: &CookieJar,
@@ -430,6 +431,7 @@ pub(crate) async fn require_elevated_api_owner(
     }
 }
 
+#[allow(clippy::result_large_err)]
 pub(crate) async fn require_fresh_action_totp(
     state: &DashboardState,
     code: &str,

@@ -609,7 +609,7 @@ pub(crate) async fn deployment_page(
                         sync_state: sync_store.guild(guild.id).cloned(),
                     })
                     .collect::<Vec<_>>();
-                rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+                rows.sort_by_key(|a| a.name.to_lowercase());
                 render_owner_servers_tab(&rows, locale)
             }
             "notices" => {
