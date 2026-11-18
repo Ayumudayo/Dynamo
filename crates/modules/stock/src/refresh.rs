@@ -104,13 +104,19 @@ pub(crate) async fn initialize_session_loop(
 
             consecutive_failures = 0;
             let terminal_after_edit = response.stop_reason.is_some() || update_count >= max_updates;
+            let disable_button_after_edit = if terminal_after_edit {
+                let state = session.lock().await;
+                state.manual_refresh_count >= crate::constants::MAX_MANUAL_REFRESHES
+            } else {
+                true
+            };
 
             if edit_message(
                 &http,
                 channel_id,
                 message_id,
                 response.embed.clone(),
-                !terminal_after_edit,
+                disable_button_after_edit,
             )
             .await
             .is_err()

@@ -1,7 +1,12 @@
+use std::num::NonZeroU64;
+
 use chrono::{Duration as ChronoDuration, Utc};
 use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
 use dynamo_runtime_api::{Context, Error};
-use poise::serenity_prelude::{ChannelId, CreateEmbed, CreateMessage, User};
+use poise::{
+    CreateReply,
+    serenity_prelude::{ChannelId, CreateEmbed, CreateMessage, User},
+};
 
 use crate::constants::DEFAULT_BUTTON_LABEL;
 use crate::lifecycle::{
@@ -11,6 +16,10 @@ use crate::lifecycle::{
 use crate::render::{build_embed, entry_button};
 use crate::settings::load_settings;
 use crate::validation::{parse_message_id, parse_role_ids};
+
+const MIN_GIVEAWAY_SECONDS: u64 = 10;
+const MAX_GIVEAWAY_SECONDS: u64 = 90 * 24 * 60 * 60;
+const MAX_GIVEAWAY_WINNERS: i32 = 50;
 
 /// Manage giveaway lifecycle actions for this guild.
 #[poise::command(
@@ -26,6 +35,7 @@ use crate::validation::{parse_message_id, parse_role_ids};
         "giveaway_reroll",
         "giveaway_edit"
     ),
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 pub(crate) async fn giveaway(_ctx: Context<'_>) -> Result<(), Error> {
@@ -37,13 +47,14 @@ pub(crate) async fn giveaway(_ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     guild_only,
     rename = "start",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_start(
     ctx: Context<'_>,
     #[description = "Duration like 30m, 1h, or 2d"] duration: String,
     #[description = "Prize shown in the giveaway message"] prize: String,
-    #[description = "Number of winners"] winners: i32,
+    #[description = "Number of winners (1-50)"] winners: i32,
     #[description = "Optional giveaway channel; omit to use module settings"] channel: Option<
         ChannelId,
     >,
@@ -56,17 +67,32 @@ async fn giveaway_start(
         return Ok(());
     };
     let Some(repo) = ctx.data().persistence.giveaways.clone() else {
-        ctx.say("Giveaway repository is not configured.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Giveaway repository is not configured.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     let settings = load_settings(ctx.data(), guild_id.get()).await?;
     let target_channel = channel
         .map(|value| value.get())
         .or(settings.default_channel)
+        .and_then(NonZeroU64::new)
+        .map(ChannelId::from)
         .ok_or_else(|| anyhow::anyhow!("Giveaway channel not configured."))?;
-    let winner_count = winners.max(1) as u64;
+    anyhow::ensure!(
+        (1..=MAX_GIVEAWAY_WINNERS).contains(&winners),
+        "Winner count must be between 1 and {MAX_GIVEAWAY_WINNERS}."
+    );
+    let winner_count = winners as u64;
     let duration = humantime::parse_duration(&duration)
         .map_err(|error| anyhow::anyhow!("Invalid duration: {error}"))?;
+    anyhow::ensure!(
+        (MIN_GIVEAWAY_SECONDS..=MAX_GIVEAWAY_SECONDS).contains(&duration.as_secs()),
+        "Duration must be between 10s and 90d."
+    );
     let allowed_role_ids = parse_role_ids(allowed_roles.as_deref())?;
     let start_at = Utc::now();
     let ends_at = start_at + ChronoDuration::from_std(duration)?;
@@ -76,13 +102,13 @@ async fn giveaway_start(
     } else {
         settings.button_label.clone()
     };
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let draft = GiveawayRecord {
         revision: 0,
         message_sync_pending: false,
         announcement_pending: false,
         guild_id: guild_id.get(),
-        channel_id: target_channel,
+        channel_id: target_channel.get(),
         message_id: 0,
         prize: prize.clone(),
         winner_count,
@@ -98,7 +124,7 @@ async fn giveaway_start(
         created_at: start_at,
         updated_at: start_at,
     };
-    let message = ChannelId::new(target_channel)
+    let message = target_channel
         .send_message(
             ctx.serenity_context(),
             CreateMessage::new()
@@ -109,11 +135,15 @@ async fn giveaway_start(
     let mut record = draft;
     record.message_id = message.id.get();
     repo.create(record).await?;
-    ctx.say(format!(
-        "Giveaway started in <#{}> with message `{}`.",
-        target_channel,
-        message.id.get()
-    ))
+    ctx.send(
+        CreateReply::default()
+            .content(format!(
+                "Giveaway started in <#{}> with message `{}`.",
+                target_channel.get(),
+                message.id.get()
+            ))
+            .ephemeral(true),
+    )
     .await?;
     Ok(())
 }
@@ -123,6 +153,7 @@ async fn giveaway_start(
     slash_command,
     guild_only,
     rename = "list",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_list(ctx: Context<'_>) -> Result<(), Error> {
@@ -130,14 +161,23 @@ async fn giveaway_list(ctx: Context<'_>) -> Result<(), Error> {
         return Ok(());
     };
     let Some(repo) = ctx.data().persistence.giveaways.clone() else {
-        ctx.say("Giveaway repository is not configured.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Giveaway repository is not configured.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     let mut giveaways = repo.list_by_guild(guild_id.get()).await?;
     giveaways.sort_by_key(|record| std::cmp::Reverse(record.created_at.timestamp()));
     if giveaways.is_empty() {
-        ctx.say("There are no giveaways tracked in this guild.")
-            .await?;
+        ctx.send(
+            CreateReply::default()
+                .content("There are no giveaways tracked in this guild.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
     let description = giveaways
@@ -156,11 +196,13 @@ async fn giveaway_list(ctx: Context<'_>) -> Result<(), Error> {
         .collect::<Vec<_>>()
         .join("\n");
     ctx.send(
-        poise::CreateReply::default().embed(
-            CreateEmbed::new()
-                .title("Tracked Giveaways")
-                .description(description),
-        ),
+        CreateReply::default()
+            .embed(
+                CreateEmbed::new()
+                    .title("Tracked Giveaways")
+                    .description(description),
+            )
+            .ephemeral(true),
     )
     .await?;
     Ok(())
@@ -171,28 +213,44 @@ async fn giveaway_list(ctx: Context<'_>) -> Result<(), Error> {
     slash_command,
     guild_only,
     rename = "end",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_end(
     ctx: Context<'_>,
-    #[description = "Giveaway message ID"] message_id: String,
+    #[description = "Giveaway message ID or URL"] message_id: String,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
     let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
-        ctx.say("Unable to find that giveaway.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Unable to find that giveaway.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     if record.status == GiveawayStatus::Ended {
-        ctx.say("That giveaway has already ended.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("That giveaway has already ended.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
     finalize_giveaway(ctx.serenity_context(), ctx.data(), &mut record).await?;
-    ctx.say("The giveaway has been ended.").await?;
+    ctx.send(
+        CreateReply::default()
+            .content("The giveaway has been ended.")
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }
 
@@ -201,28 +259,44 @@ async fn giveaway_end(
     slash_command,
     guild_only,
     rename = "pause",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_pause(
     ctx: Context<'_>,
-    #[description = "Giveaway message ID"] message_id: String,
+    #[description = "Giveaway message ID or URL"] message_id: String,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
     let Some(repo) = ctx.data().persistence.giveaways.clone() else {
-        ctx.say("Giveaway repository is not configured.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Giveaway repository is not configured.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
     let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
-        ctx.say("Unable to find that giveaway.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Unable to find that giveaway.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     if record.status != GiveawayStatus::Active {
-        ctx.say("Only active giveaways can be paused.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Only active giveaways can be paused.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
     record.status = GiveawayStatus::Paused;
@@ -239,7 +313,12 @@ async fn giveaway_pause(
     {
         tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
     }
-    ctx.say("The giveaway has been paused.").await?;
+    ctx.send(
+        CreateReply::default()
+            .content("The giveaway has been paused.")
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }
 
@@ -248,28 +327,44 @@ async fn giveaway_pause(
     slash_command,
     guild_only,
     rename = "resume",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_resume(
     ctx: Context<'_>,
-    #[description = "Giveaway message ID"] message_id: String,
+    #[description = "Giveaway message ID or URL"] message_id: String,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
     let Some(repo) = ctx.data().persistence.giveaways.clone() else {
-        ctx.say("Giveaway repository is not configured.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Giveaway repository is not configured.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
-    ctx.defer().await?;
+    ctx.defer_ephemeral().await?;
     let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
     let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
-        ctx.say("Unable to find that giveaway.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Unable to find that giveaway.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     if record.status != GiveawayStatus::Paused {
-        ctx.say("Only paused giveaways can be resumed.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Only paused giveaways can be resumed.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
     let paused_at = record.paused_at.unwrap_or(record.updated_at);
@@ -288,7 +383,12 @@ async fn giveaway_resume(
     {
         tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
     }
-    ctx.say("The giveaway has been resumed.").await?;
+    ctx.send(
+        CreateReply::default()
+            .content("The giveaway has been resumed.")
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }
 
@@ -297,44 +397,86 @@ async fn giveaway_resume(
     slash_command,
     guild_only,
     rename = "reroll",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_reroll(
     ctx: Context<'_>,
-    #[description = "Giveaway message ID"] message_id: String,
-    #[description = "Optional override winner count"] winners: Option<i32>,
+    #[description = "Giveaway message ID or URL"] message_id: String,
+    #[description = "Optional override winner count (1-50)"] winners: Option<i32>,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
     let Some(repo) = ctx.data().persistence.giveaways.clone() else {
-        ctx.say("Giveaway repository is not configured.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Giveaway repository is not configured.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
-    ctx.defer().await?;
+    if let Some(winner_count) = winners {
+        anyhow::ensure!(
+            (1..=MAX_GIVEAWAY_WINNERS).contains(&winner_count),
+            "Winner count must be between 1 and {MAX_GIVEAWAY_WINNERS}."
+        );
+    }
+    ctx.defer_ephemeral().await?;
     let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
     let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
-        ctx.say("Unable to find that giveaway.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Unable to find that giveaway.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     if record.status != GiveawayStatus::Ended {
-        ctx.say("Only ended giveaways can be rerolled.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Only ended giveaways can be rerolled.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
     if record.announcement_pending {
-        ctx.say(
-            "The previous winner announcement is still pending. Retry after delivery completes.",
+        ctx.send(
+            CreateReply::default()
+                .content(
+                    "The previous winner announcement is still pending. Retry after delivery completes.",
+                )
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+    let remaining_pool = record
+        .entries
+        .iter()
+        .copied()
+        .filter(|entry| !record.winner_ids.contains(entry))
+        .collect::<Vec<_>>();
+    if remaining_pool.is_empty() {
+        ctx.send(
+            CreateReply::default()
+                .content("No other eligible entrants remain to reroll.")
+                .ephemeral(true),
         )
         .await?;
         return Ok(());
     }
     if let Some(winner_count) = winners {
-        record.winner_count = winner_count.max(1) as u64;
+        record.winner_count = winner_count as u64;
     }
-    record.winner_ids = choose_winners(&record.entries, record.winner_count);
+    record.winner_ids = choose_winners(&remaining_pool, record.winner_count);
     record.updated_at = Utc::now();
     record.message_sync_pending = true;
+    record.announcement_pending = true;
     let record = save_if_current(repo.as_ref(), record).await?;
     if let Err(error) = deliver_saved_message(
         repo.as_ref(),
@@ -345,10 +487,14 @@ async fn giveaway_reroll(
     {
         tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
     }
-    ctx.say(format!(
-        "Giveaway rerolled. Winners: {}",
-        format_winners(&record.winner_ids)
-    ))
+    ctx.send(
+        CreateReply::default()
+            .content(format!(
+                "Giveaway rerolled. Winners: {}",
+                format_winners(&record.winner_ids)
+            ))
+            .ephemeral(true),
+    )
     .await?;
     Ok(())
 }
@@ -358,31 +504,53 @@ async fn giveaway_reroll(
     slash_command,
     guild_only,
     rename = "edit",
+    default_member_permissions = "MANAGE_MESSAGES",
     required_permissions = "MANAGE_MESSAGES"
 )]
 async fn giveaway_edit(
     ctx: Context<'_>,
-    #[description = "Giveaway message ID"] message_id: String,
+    #[description = "Giveaway message ID or URL"] message_id: String,
     #[description = "Optional minutes to add"] add_minutes: Option<i64>,
     #[description = "Optional new prize"] new_prize: Option<String>,
-    #[description = "Optional new winner count"] new_winners: Option<i32>,
+    #[description = "Optional new winner count (1-50)"] new_winners: Option<i32>,
 ) -> Result<(), Error> {
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(());
     };
     let Some(repo) = ctx.data().persistence.giveaways.clone() else {
-        ctx.say("Giveaway repository is not configured.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Giveaway repository is not configured.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
-    ctx.defer().await?;
+    if let Some(winner_count) = new_winners {
+        anyhow::ensure!(
+            (1..=MAX_GIVEAWAY_WINNERS).contains(&winner_count),
+            "Winner count must be between 1 and {MAX_GIVEAWAY_WINNERS}."
+        );
+    }
+    ctx.defer_ephemeral().await?;
     let lock = giveaway_lock(guild_id.get(), parse_message_id(&message_id)?);
     let _guard = lock.lock().await;
     let Some(mut record) = load_giveaway(ctx.data(), guild_id.get(), &message_id).await? else {
-        ctx.say("Unable to find that giveaway.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Unable to find that giveaway.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     };
     if record.status == GiveawayStatus::Ended {
-        ctx.say("Ended giveaways cannot be edited.").await?;
+        ctx.send(
+            CreateReply::default()
+                .content("Ended giveaways cannot be edited.")
+                .ephemeral(true),
+        )
+        .await?;
         return Ok(());
     }
     if let Some(minutes) = add_minutes {
@@ -392,7 +560,7 @@ async fn giveaway_edit(
         record.prize = prize;
     }
     if let Some(winners) = new_winners {
-        record.winner_count = winners.max(1) as u64;
+        record.winner_count = winners as u64;
     }
     record.updated_at = Utc::now();
     record.message_sync_pending = true;
@@ -406,6 +574,11 @@ async fn giveaway_edit(
     {
         tracing::warn!(%error, "giveaway update saved; Discord delivery will be retried");
     }
-    ctx.say("Giveaway updated.").await?;
+    ctx.send(
+        CreateReply::default()
+            .content("Giveaway updated.")
+            .ephemeral(true),
+    )
+    .await?;
     Ok(())
 }

@@ -1,6 +1,6 @@
 use crate::{constants::MAX_STORED_SESSIONS, session::StockSession};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     future::Future,
     sync::{
         Arc, OnceLock,
@@ -30,15 +30,21 @@ impl SessionEntry {
     }
 }
 
+#[derive(Default)]
+struct RegistryState {
+    sessions: HashMap<u64, Arc<SessionEntry>>,
+    order: VecDeque<u64>,
+}
+
 pub(crate) struct SessionRegistry {
-    sessions: RwLock<HashMap<u64, Arc<SessionEntry>>>,
+    state: RwLock<RegistryState>,
     max_sessions: usize,
 }
 
 impl SessionRegistry {
     pub(crate) fn new(max_sessions: usize) -> Self {
         Self {
-            sessions: RwLock::new(HashMap::new()),
+            state: RwLock::new(RegistryState::default()),
             max_sessions,
         }
     }
@@ -50,21 +56,33 @@ impl SessionRegistry {
     ) -> Arc<SessionEntry> {
         let entry = Arc::new(SessionEntry::new(message_id, session));
         let obsolete = {
-            let mut sessions = self.sessions.write().await;
+            let mut state = self.state.write().await;
             let mut obsolete = Vec::with_capacity(2);
 
-            if let Some(replaced) = sessions.remove(&message_id) {
+            if let Some(replaced) = state.sessions.remove(&message_id) {
+                state.order.retain(|id| *id != message_id);
                 obsolete.push(replaced);
             }
 
-            if sessions.len() >= self.max_sessions
-                && let Some(oldest) = sessions.keys().next().copied()
-                && let Some(evicted) = sessions.remove(&oldest)
-            {
-                obsolete.push(evicted);
+            if state.sessions.len() >= self.max_sessions && self.max_sessions > 0 {
+                let inactive_id = state.order.iter().copied().find(|id| {
+                    state.sessions.get(id).is_some_and(|candidate| {
+                        candidate.session.try_lock().is_ok_and(|session| {
+                            !session.active && !session.manual_restart_in_progress
+                        })
+                    })
+                });
+                let victim_id = inactive_id.or_else(|| state.order.pop_front());
+                if let Some(victim_id) = victim_id {
+                    state.order.retain(|id| *id != victim_id);
+                    if let Some(evicted) = state.sessions.remove(&victim_id) {
+                        obsolete.push(evicted);
+                    }
+                }
             }
 
-            sessions.insert(message_id, entry.clone());
+            state.sessions.insert(message_id, entry.clone());
+            state.order.push_back(message_id);
             obsolete
         };
 
@@ -76,33 +94,40 @@ impl SessionRegistry {
     }
 
     pub(crate) async fn get(&self, message_id: u64) -> Option<Arc<SessionEntry>> {
-        self.sessions.read().await.get(&message_id).cloned()
+        self.state.read().await.sessions.get(&message_id).cloned()
     }
 
     #[cfg(test)]
     pub(crate) async fn remove(&self, message_id: u64) {
-        let removed = self.sessions.write().await.remove(&message_id);
+        let removed = {
+            let mut state = self.state.write().await;
+            state.order.retain(|id| *id != message_id);
+            state.sessions.remove(&message_id)
+        };
         if let Some(entry) = removed {
             Self::cancel_and_join(entry).await;
         }
     }
 
     pub(crate) async fn is_current(&self, entry: &Arc<SessionEntry>) -> bool {
-        self.sessions
+        self.state
             .read()
             .await
+            .sessions
             .get(&entry.message_id)
             .is_some_and(|current| Arc::ptr_eq(current, entry))
     }
 
     pub(crate) async fn remove_if_current(&self, entry: &Arc<SessionEntry>) {
         let removed = {
-            let mut sessions = self.sessions.write().await;
-            if sessions
+            let mut state = self.state.write().await;
+            if state
+                .sessions
                 .get(&entry.message_id)
                 .is_some_and(|current| Arc::ptr_eq(current, entry))
             {
-                sessions.remove(&entry.message_id)
+                state.order.retain(|id| *id != entry.message_id);
+                state.sessions.remove(&entry.message_id)
             } else {
                 None
             }
@@ -178,4 +203,67 @@ pub(crate) async fn register_session(
 
 pub(crate) async fn session_for_message(message_id: u64) -> Option<Arc<SessionEntry>> {
     stock_sessions().get(message_id).await
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::Arc;
+
+    use async_trait::async_trait;
+    use dynamo_domain_stock::StockQuote;
+    use dynamo_service_stock::{Error as StockError, StockQuoteService};
+    use tokio::sync::Mutex;
+
+    use super::SessionRegistry;
+    use crate::{
+        session::{SessionKind, StockSession},
+        settings::StockSettings,
+    };
+
+    struct DummyStockService;
+
+    #[async_trait]
+    impl StockQuoteService for DummyStockService {
+        async fn fetch_quote(&self, _symbol: &str) -> Result<Option<StockQuote>, StockError> {
+            Ok(None)
+        }
+
+        async fn fetch_quotes(
+            &self,
+            _symbols: &[String],
+        ) -> Result<Vec<Result<StockQuote, String>>, StockError> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn make_session(active: bool) -> Arc<Mutex<StockSession>> {
+        let mut session = StockSession::new(
+            SessionKind::Stock {
+                symbol: "NVDA".to_string(),
+            },
+            Arc::new(DummyStockService),
+            StockSettings::default().refresh_schedule(),
+        );
+        session.active = active;
+        Arc::new(Mutex::new(session))
+    }
+
+    #[tokio::test]
+    async fn registry_evicts_inactive_sessions_before_active_and_falls_back_to_fifo() {
+        let registry = SessionRegistry::new(2);
+        registry.register(1, make_session(true)).await;
+        registry.register(2, make_session(false)).await;
+
+        // Session 2 is inactive so it should be evicted even though session 1 is older.
+        registry.register(3, make_session(true)).await;
+        assert!(registry.get(1).await.is_some());
+        assert!(registry.get(2).await.is_none());
+        assert!(registry.get(3).await.is_some());
+
+        // When all sessions are active, FIFO oldest (session 1) is evicted.
+        registry.register(4, make_session(true)).await;
+        assert!(registry.get(1).await.is_none());
+        assert!(registry.get(3).await.is_some());
+        assert!(registry.get(4).await.is_some());
+    }
 }

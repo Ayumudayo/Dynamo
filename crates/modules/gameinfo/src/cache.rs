@@ -79,6 +79,10 @@ impl GameInfoCacheStore {
         self.update(|cache| {
             if !cache.cancellations.iter().any(|old| old == entry) {
                 cache.cancellations.push(entry.clone());
+                if cache.cancellations.len() > 64 {
+                    let excess = cache.cancellations.len() - 64;
+                    cache.cancellations.drain(0..excess);
+                }
             }
             if parse_optional::<MaintInfo>(cache.maintinfo.clone())
                 .is_some_and(|info| entry.matches(&info))

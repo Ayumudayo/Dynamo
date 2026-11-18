@@ -1,8 +1,9 @@
-use dynamo_runtime_api::{AppState, Error};
+use dynamo_runtime_api::{
+    AppState, Error, decode_module_configuration, deserialize_optional_snowflake,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::constants::{DEFAULT_BUTTON_LABEL, MODULE_ID};
-use crate::validation::deserialize_optional_snowflake;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -28,11 +29,11 @@ pub(crate) async fn load_settings(
     data: &AppState,
     guild_id: u64,
 ) -> Result<GiveawaySettings, Error> {
-    let guild_settings = data.persistence.guild_settings_or_default(guild_id).await?;
+    let guild_settings = data.guild_settings_cached(guild_id).await?;
     let settings = guild_settings
         .modules
         .get(MODULE_ID)
-        .map(|module| serde_json::from_value::<GiveawaySettings>(module.configuration.clone()))
+        .map(|module| decode_module_configuration::<GiveawaySettings>(&module.configuration))
         .transpose()?
         .unwrap_or_default();
     Ok(settings)

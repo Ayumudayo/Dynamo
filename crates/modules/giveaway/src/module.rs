@@ -16,7 +16,7 @@ impl Module<AppState, Error> for GiveawayModule {
             "Optional first-party giveaway workflow with persisted entry tracking.",
             ModuleCategory::Giveaway,
             false,
-            GatewayIntents::GUILDS | GatewayIntents::GUILD_MEMBERS,
+            GatewayIntents::GUILDS,
         )
     }
 
@@ -33,10 +33,10 @@ impl Module<AppState, Error> for GiveawayModule {
                 fields: vec![
                     SettingsField {
                         key: "default_channel",
-                        label: "Default channel ID",
+                        label: "Default channel",
                         help_text: Some("Primary channel for giveaway announcements."),
                         required: false,
-                        kind: SettingsFieldKind::Text,
+                        kind: SettingsFieldKind::Channel,
                     },
                     SettingsField {
                         key: "button_label",

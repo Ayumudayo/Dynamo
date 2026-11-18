@@ -1,29 +1,55 @@
 use crate::{
-    constants::{MODULE_ID, STOCK_REFRESH_BUTTON_ID},
+    constants::STOCK_REFRESH_BUTTON_ID,
     render::{build_etf_response, build_stock_response, refresh_components},
     settings::{load_effective_etf_tickers_for_settings, load_settings, normalize_symbol},
     state::{SessionKind, StockSession, initialize_session_loop, register_session},
 };
-use dynamo_access::module_access_for_context;
 use dynamo_runtime_api::{Context, Error};
 use std::sync::Arc;
 use tokio::sync::Mutex;
+
+const POPULAR_SYMBOLS: &[&str] = &[
+    "NVDA", "AAPL", "MSFT", "TSLA", "AMZN", "GOOGL", "META", "AMD", "AVGO", "SPY", "QQQ", "VOO",
+    "SOXL", "TQQQ", "005930", "000660",
+];
+
+async fn autocomplete_symbol(ctx: Context<'_>, partial: &str) -> Vec<String> {
+    let partial_upper = partial.trim().to_ascii_uppercase();
+    let mut candidates = Vec::new();
+    if let Ok(settings) = load_settings(ctx).await {
+        if !settings.default_symbol.trim().is_empty() {
+            candidates.push(normalize_symbol(settings.default_symbol.clone()));
+        }
+        if let Ok(tickers) = load_effective_etf_tickers_for_settings(ctx, &settings).await {
+            for ticker in tickers {
+                if !candidates.contains(&ticker) {
+                    candidates.push(ticker);
+                }
+            }
+        }
+    }
+    for &symbol in POPULAR_SYMBOLS {
+        let s = symbol.to_string();
+        if !candidates.contains(&s) {
+            candidates.push(s);
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|symbol| partial_upper.is_empty() || symbol.contains(&partial_upper))
+        .take(25)
+        .collect()
+}
 
 /// Show a quote for one stock symbol and keep it refreshable for a short time.
 #[poise::command(slash_command, guild_only, category = "Stock")]
 pub(crate) async fn stock(
     ctx: Context<'_>,
-    #[description = "Symbol of the stock"] symbol: Option<String>,
+    #[description = "Symbol of the stock"]
+    #[autocomplete = "autocomplete_symbol"]
+    symbol: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
-
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
-        .await?
-        .denial_reason
-    {
-        ctx.say(reason).await?;
-        return Ok(());
-    }
 
     let Some(service) = ctx.data().services.stock_quotes.clone() else {
         ctx.say("The stock data service is not available in this deployment.")
@@ -86,14 +112,6 @@ pub(crate) async fn stock(
 #[poise::command(slash_command, guild_only, category = "Stock")]
 pub(crate) async fn etf(ctx: Context<'_>) -> Result<(), Error> {
     ctx.defer().await?;
-
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
-        .await?
-        .denial_reason
-    {
-        ctx.say(reason).await?;
-        return Ok(());
-    }
 
     let Some(service) = ctx.data().services.stock_quotes.clone() else {
         ctx.say("The stock data service is not available in this deployment.")

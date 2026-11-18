@@ -18,16 +18,13 @@ impl MarketCalendarCache {
         now: DateTime<Utc>,
         service: &TossInvestMarketCalendarService,
     ) -> Result<crate::models::TossMarketCalendarRaw, Error> {
-        {
-            let entry = self.entry.lock().await;
-            if let Some(cached) = entry.as_ref().filter(|cached| cached.expires_at > now) {
-                return Ok(cached.calendar.clone());
-            }
+        let mut entry = self.entry.lock().await;
+        if let Some(cached) = entry.as_ref().filter(|cached| cached.expires_at > now) {
+            return Ok(cached.calendar.clone());
         }
 
         let calendar = service.fetch_today().await?;
         let expires_at = now.checked_add_signed(MARKET_CALENDAR_TTL).unwrap_or(now);
-        let mut entry = self.entry.lock().await;
         *entry = Some(CachedMarketCalendar {
             calendar: calendar.clone(),
             expires_at,

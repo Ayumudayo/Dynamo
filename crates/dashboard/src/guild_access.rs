@@ -107,6 +107,11 @@ pub(crate) async fn bot_is_in_guild(state: &DashboardState, guild_id: u64) -> Bo
         };
     }
 
+    #[cfg(feature = "local-preview")]
+    if let Some(preview) = state.local_preview.as_ref() {
+        return preview.bot_presence(guild_id);
+    }
+
     let request = state
         .http
         .get(format!("{}/guilds/{guild_id}", state.discord_api_base))
@@ -199,6 +204,11 @@ pub(crate) async fn require_current_api_guild_access(
     jar: &CookieJar,
     guild_id: u64,
 ) -> Result<DashboardSession, Response> {
+    #[cfg(feature = "local-preview")]
+    if state.local_preview.is_some() {
+        return require_api_guild_access(state, jar, guild_id).await;
+    }
+
     let session_id = session_cookie_value(jar).ok_or_else(|| {
         (
             StatusCode::UNAUTHORIZED,

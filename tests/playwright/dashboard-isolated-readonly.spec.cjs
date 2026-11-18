@@ -49,7 +49,7 @@ test.describe('isolated dashboard read-only baseline', () => {
     const navigation = await beginColdUiNavigation(page, '/', '.hero h1');
     await expect(page.getByTestId('dashboard-shell')).toBeVisible();
     await expect(page.locator('main')).toBeVisible();
-    await expect(page.locator('.hero h1')).toContainText('Manage Dynamo');
+    await expect(page.locator('.hero h1')).toContainText('Configure');
     await page.evaluate(() => {
       if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     });
@@ -94,7 +94,7 @@ test.describe('isolated dashboard read-only baseline', () => {
 
     await page.getByTestId('page-tab-commands').click();
     await expect(page.getByTestId('guild-commands-section')).toBeVisible();
-    const stocksTab = page.getByTestId('command-tab-stocks');
+    const stocksTab = page.getByTestId('command-tab-stock');
     await expect(stocksTab).toBeVisible();
     await stocksTab.click();
     const commandFilter = page.getByTestId('command-filter');

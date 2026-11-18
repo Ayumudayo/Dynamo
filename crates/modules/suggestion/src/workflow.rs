@@ -2,10 +2,14 @@ use chrono::Utc;
 use dynamo_domain_suggestion::{SuggestionRecord, SuggestionStatus, SuggestionStatusUpdate};
 use dynamo_repositories::SuggestionsRepository;
 use dynamo_runtime_api::{AppState, Error};
-use poise::serenity_prelude::{ChannelId, CreateMessage, Member, Message, Permissions};
+use poise::serenity_prelude::{
+    ChannelId, CreateMessage, Error as SerenityError, GuildId, HttpError, Member, Message,
+    Permissions, UserId,
+};
 use std::{
     collections::HashMap,
     future::Future,
+    num::NonZeroU64,
     sync::{Arc, OnceLock, Weak},
 };
 use tokio::sync::Mutex;
@@ -103,11 +107,8 @@ async fn refresh_review_message(
     record: &SuggestionRecord,
 ) -> Result<Option<String>, Error> {
     let last_update = record.status_updates.last();
-    let reviewer = if let Some(update) = last_update {
-        poise::serenity_prelude::UserId::new(update.user_id)
-            .to_user(ctx)
-            .await
-            .ok()
+    let reviewer = if let Some(user_id) = last_update.and_then(|u| NonZeroU64::new(u.user_id)) {
+        UserId::from(user_id).to_user(ctx).await.ok()
     } else {
         None
     };
@@ -187,7 +188,11 @@ pub(crate) async fn transition_suggestion(
         });
     }
 
-    let stats = vote_stats(source_message);
+    let stats = if record.status == SuggestionStatus::Pending {
+        vote_stats(source_message)
+    } else {
+        record.stats.clone()
+    };
     record.status = next_status;
     record.stats = stats;
     record.status_updates.push(SuggestionStatusUpdate {
@@ -213,10 +218,12 @@ pub(crate) async fn transition_suggestion(
     let buttons = moderation_buttons(next_status);
 
     let cleanup_warning;
-    if let Some(target_channel_id) =
-        target_channel_id.filter(|id| *id != source_message.channel_id.get())
+    if let Some(target_channel_id) = target_channel_id
+        .filter(|id| *id != source_message.channel_id.get())
+        .and_then(NonZeroU64::new)
+        .map(ChannelId::from)
     {
-        let sent = ChannelId::new(target_channel_id)
+        let sent = target_channel_id
             .send_message(
                 ctx,
                 CreateMessage::new()
@@ -258,7 +265,7 @@ pub(crate) async fn transition_suggestion(
         return Ok(warning);
     }
 
-    let deployment = data.persistence.deployment_settings_or_default().await?;
+    let deployment = data.deployment_settings_cached().await?;
     let response = if deployment
         .modules
         .get(MODULE_ID)
@@ -313,17 +320,31 @@ pub(crate) async fn delete_suggestion(
         }
     }
     // Keep the original message available for retry if persistence fails.
-    source_message.delete(ctx).await?;
+    match source_message.delete(ctx).await {
+        Ok(()) => {}
+        Err(SerenityError::Http(HttpError::UnsuccessfulRequest(resp)))
+            if resp.error.code == 10008 => {}
+        Err(error) => return Err(error.into()),
+    }
 
     Ok("Suggestion deleted.".to_string())
 }
 
-pub(crate) fn has_moderation_permissions(member: &Member, settings: &SuggestionSettings) -> bool {
-    if member
+pub(crate) fn has_moderation_permissions(
+    ctx: &poise::serenity_prelude::Context,
+    guild_id: GuildId,
+    member: &Member,
+    settings: &SuggestionSettings,
+) -> bool {
+    let perms = member
         .permissions
-        .unwrap_or_else(Permissions::empty)
-        .manage_guild()
-    {
+        .or_else(|| {
+            ctx.cache
+                .guild(guild_id)
+                .map(|guild| guild.member_permissions(member))
+        })
+        .unwrap_or_else(Permissions::empty);
+    if perms.manage_guild() || perms.administrator() {
         return true;
     }
 

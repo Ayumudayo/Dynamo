@@ -2,6 +2,7 @@ use crate::lodestone::decode_html_entities;
 use dynamo_runtime_api::Error;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
+use tracing::warn;
 
 const GOOGLE_TRANSLATE_API_URL: &str = "https://translation.googleapis.com/language/translate/v2";
 
@@ -42,10 +43,15 @@ pub(crate) async fn translate_optional_text(client: &Client, text: Option<&str>)
         return None;
     }
 
-    translate_texts(client, &[text.to_string()])
-        .await
-        .ok()
-        .and_then(|mut values| values.pop())
+    match translate_texts(client, &[text.to_string()]).await {
+        Ok(mut values) => values.pop(),
+        Err(error) => {
+            if translate_api_key().is_some() {
+                warn!(?error, "failed to translate text with Google Translate API");
+            }
+            None
+        }
+    }
 }
 
 pub(crate) async fn translate_text_list(client: &Client, texts: &[String]) -> Vec<String> {
@@ -60,7 +66,15 @@ pub(crate) async fn translate_text_list(client: &Client, texts: &[String]) -> Ve
         return Vec::new();
     }
 
-    translate_texts(client, &cleaned).await.unwrap_or_default()
+    match translate_texts(client, &cleaned).await {
+        Ok(values) => values,
+        Err(error) => {
+            if translate_api_key().is_some() {
+                warn!(?error, "failed to translate list with Google Translate API");
+            }
+            Vec::new()
+        }
+    }
 }
 
 async fn translate_texts(client: &Client, texts: &[String]) -> Result<Vec<String>, Error> {
@@ -78,7 +92,7 @@ async fn translate_texts(client: &Client, texts: &[String]) -> Result<Vec<String
     };
     let response = client
         .post(GOOGLE_TRANSLATE_API_URL)
-        .query(&[("key", key.as_str())])
+        .header("X-Goog-Api-Key", key)
         .json(&request)
         .send()
         .await?

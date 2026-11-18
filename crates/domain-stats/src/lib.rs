@@ -11,7 +11,6 @@ pub struct VoiceStatsRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct CommandUsageStats {
-    pub prefix: u64,
     pub slash: u64,
 }
 
@@ -48,6 +47,13 @@ pub struct MemberStatsDelta {
     pub xp: u64,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StatsLeaderboardMetric {
+    Xp,
+    Messages,
+    VoiceSeconds,
+}
+
 #[derive(Debug, Clone)]
 pub struct MemberStatsUpdate {
     pub record: MemberStatsRecord,
@@ -55,6 +61,11 @@ pub struct MemberStatsUpdate {
 }
 
 impl MemberStatsRecord {
+    pub fn xp_needed_for_level(level: u32) -> u64 {
+        let level = u64::from(level.max(1));
+        level.saturating_mul(level).saturating_mul(100)
+    }
+
     pub fn apply_delta(
         &mut self,
         delta: MemberStatsDelta,
@@ -73,18 +84,79 @@ impl MemberStatsRecord {
         add(&mut self.contexts.message, delta.message_contexts)?;
         add(&mut self.contexts.user, delta.user_contexts)?;
         add(&mut self.xp, delta.xp)?;
-        let needed = u64::from(self.level)
-            .saturating_mul(u64::from(self.level))
-            .saturating_mul(100);
-        let leveled_up = delta.xp > 0 && self.xp > needed;
-        if leveled_up {
-            self.level = self
-                .level
-                .checked_add(1)
-                .ok_or("member stats level overflow")?;
-            self.xp -= needed;
+        if self.level == 0 {
+            self.level = 1;
+        }
+        let mut leveled_up = false;
+        if delta.xp > 0 {
+            loop {
+                let needed = Self::xp_needed_for_level(self.level);
+                if self.xp < needed {
+                    break;
+                }
+                self.level = self
+                    .level
+                    .checked_add(1)
+                    .ok_or("member stats level overflow")?;
+                self.xp -= needed;
+                leveled_up = true;
+            }
         }
         self.updated_at = updated_at;
         Ok(leveled_up)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+
+    use super::{MemberStatsDelta, MemberStatsRecord};
+
+    fn base_record(level: u32, xp: u64) -> MemberStatsRecord {
+        let now = Utc::now();
+        MemberStatsRecord {
+            guild_id: 1,
+            member_id: 2,
+            messages: 0,
+            voice: Default::default(),
+            commands: Default::default(),
+            contexts: Default::default(),
+            xp,
+            level,
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    #[test]
+    fn levels_up_on_exact_threshold_and_supports_multi_level_jump() {
+        let mut exact = base_record(1, 90);
+        let leveled = exact
+            .apply_delta(
+                MemberStatsDelta {
+                    xp: 10,
+                    ..Default::default()
+                },
+                Utc::now(),
+            )
+            .expect("delta succeeds");
+        assert!(leveled);
+        assert_eq!(exact.level, 2);
+        assert_eq!(exact.xp, 0);
+
+        let mut jump = base_record(1, 0);
+        let leveled_multi = jump
+            .apply_delta(
+                MemberStatsDelta {
+                    xp: 500,
+                    ..Default::default()
+                },
+                Utc::now(),
+            )
+            .expect("multi-level delta succeeds");
+        assert!(leveled_multi);
+        assert_eq!(jump.level, 3);
+        assert_eq!(jump.xp, 0);
     }
 }

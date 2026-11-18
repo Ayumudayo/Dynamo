@@ -350,3 +350,46 @@ async fn oauth_send_authenticated_returns_429_and_propagates_shared_cooldown() {
         .unwrap();
     assert!(remaining >= std::time::Duration::from_secs(5));
 }
+
+#[tokio::test]
+async fn oauth_send_authenticated_retries_short_429_once_for_get() {
+    let client = TossInvestClient::new(test_config("client-id-send-retry-short-429"));
+    client
+        .test_set_cached_token(
+            "cached-token",
+            "Bearer",
+            Utc::now() + TimeDelta::seconds(3600),
+        )
+        .await;
+
+    let attempts = Arc::new(AtomicUsize::new(0));
+    let attempts_for_execute = attempts.clone();
+    let response = client
+        .send_authenticated_with(
+            TossRateLimitGroup::MarketData,
+            Method::GET,
+            "/api/v1/prices",
+            move |_| {
+                let attempt = attempts_for_execute.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if attempt == 0 {
+                        Ok(TossInvestResponse::test_with_headers(
+                            StatusCode::TOO_MANY_REQUESTS,
+                            r#"{"error":{"code":"too-many-requests","message":"slow down","requestId":"req-1"}}"#,
+                            &[("x-ratelimit-reset", "0")],
+                        ))
+                    } else {
+                        Ok(TossInvestResponse::test_json(
+                            StatusCode::OK,
+                            r#"{"result":{"ok":true}}"#,
+                        ))
+                    }
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(attempts.load(Ordering::SeqCst), 2);
+}

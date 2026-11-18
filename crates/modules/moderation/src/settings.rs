@@ -1,7 +1,9 @@
 use dynamo_module_kit::{
     SettingOption, SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection,
 };
-use dynamo_runtime_api::{Context, Error};
+use dynamo_runtime_api::{
+    Context, Error, decode_module_configuration, deserialize_optional_snowflake,
+};
 use serde::{Deserialize, Serialize};
 
 use crate::module::MODULE_ID;
@@ -15,10 +17,10 @@ pub(crate) fn settings_schema() -> SettingsSchema {
             fields: vec![
                 SettingsField {
                     key: "modlog_channel_id",
-                    label: "Modlog channel ID",
+                    label: "Modlog channel",
                     help_text: Some("Optional channel for moderation action embeds."),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::Channel,
                 },
                 SettingsField {
                     key: "max_warn.limit",
@@ -26,8 +28,8 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                     help_text: Some("Auto-action threshold for warnings. Set 0 to disable."),
                     required: false,
                     kind: SettingsFieldKind::Integer {
-                        min: None,
-                        max: None,
+                        min: Some(0),
+                        max: Some(50),
                     },
                 },
                 SettingsField {
@@ -98,42 +100,11 @@ pub(crate) async fn load_settings(ctx: Context<'_>) -> Result<ModerationSettings
     let Some(guild_id) = ctx.guild_id() else {
         return Ok(ModerationSettings::default());
     };
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
+    let guild_settings = ctx.data().guild_settings_cached(guild_id.get()).await?;
     Ok(guild_settings
         .modules
         .get(MODULE_ID)
-        .map(|module| serde_json::from_value::<ModerationSettings>(module.configuration.clone()))
+        .map(|module| decode_module_configuration::<ModerationSettings>(&module.configuration))
         .transpose()?
         .unwrap_or_default())
-}
-
-pub(crate) fn deserialize_optional_snowflake<'de, D>(
-    deserializer: D,
-) -> Result<Option<u64>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    let Some(value) = value else {
-        return Ok(None);
-    };
-    match value {
-        serde_json::Value::Null => Ok(None),
-        serde_json::Value::String(value) if value.trim().is_empty() => Ok(None),
-        serde_json::Value::String(value) => value
-            .parse::<u64>()
-            .map(Some)
-            .map_err(serde::de::Error::custom),
-        serde_json::Value::Number(value) => value
-            .as_u64()
-            .ok_or_else(|| serde::de::Error::custom("snowflake number must be an unsigned integer"))
-            .map(Some),
-        other => Err(serde::de::Error::custom(format!(
-            "snowflake must be a string or number, got {other}"
-        ))),
-    }
 }

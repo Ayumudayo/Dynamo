@@ -85,6 +85,7 @@ impl InviteRepository for MongoPersistence {
                 .to_string();
             let invites = document
                 .get_i64("invites")
+                .or_else(|_| document.get_i32("invites").map(i64::from))
                 .map_err(|error| anyhow::anyhow!("invite leaderboard invites missing: {error}"))?;
             entries.push(InviteLeaderboardEntry { member_id, invites });
         }

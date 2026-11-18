@@ -15,6 +15,7 @@ pub type Error = anyhow::Error;
 #[async_trait]
 pub trait GuildSettingsRepository: Send + Sync {
     async fn get(&self, guild_id: u64) -> Result<Option<GuildSettings>, Error>;
+    async fn list_all(&self) -> Result<Vec<GuildSettings>, Error>;
     async fn upsert_module_settings(
         &self,
         guild_id: u64,
@@ -27,6 +28,12 @@ pub trait GuildSettingsRepository: Send + Sync {
         command_id: &str,
         settings: GuildCommandSettings,
     ) -> Result<GuildSettings, Error>;
+    async fn upsert_announcement_channel(
+        &self,
+        guild_id: u64,
+        channel_id: Option<u64>,
+    ) -> Result<GuildSettings, Error>;
+    async fn reset_guild(&self, guild_id: u64) -> Result<(), Error>;
 }
 
 #[async_trait]
@@ -41,6 +48,11 @@ pub trait DeploymentSettingsRepository: Send + Sync {
         &self,
         command_id: &str,
         settings: DeploymentCommandSettings,
+    ) -> Result<DeploymentSettings, Error>;
+    async fn upsert_operational_settings(
+        &self,
+        blocked_guild_ids: Vec<u64>,
+        module_notices: std::collections::BTreeMap<String, String>,
     ) -> Result<DeploymentSettings, Error>;
 }
 
@@ -115,6 +127,12 @@ pub trait MemberStatsRepository: Send + Sync {
         member_id: u64,
         delta: dynamo_domain_stats::MemberStatsDelta,
     ) -> Result<dynamo_domain_stats::MemberStatsUpdate, Error>;
+    async fn leaderboard(
+        &self,
+        guild_id: u64,
+        metric: dynamo_domain_stats::StatsLeaderboardMetric,
+        limit: u32,
+    ) -> Result<Vec<MemberStatsRecord>, Error>;
 }
 
 #[async_trait]

@@ -1,11 +1,10 @@
 use crate::{
-    channels::{current_guild_channel, is_ticket_channel, ticket_channels},
+    channels::{current_guild_channel, is_ticket_channel, parse_ticket_details, ticket_channels},
     components::ticket_create_components,
-    constants::{CREATE_EMBED_COLOR, MIN_LIMIT, MODULE_ID},
+    constants::{CREATE_EMBED_COLOR, MIN_LIMIT},
     settings::{load_settings, save_settings},
-    workflow::close_ticket_channel,
+    workflow::{can_manage_or_close_ticket, close_ticket_channel},
 };
-use dynamo_access::module_access_for_context;
 use dynamo_runtime_api::{Context, Error};
 use poise::serenity_prelude::{
     ChannelId, CreateEmbed, CreateEmbedFooter, CreateMessage, PermissionOverwrite,
@@ -46,19 +45,6 @@ async fn ticket_setup(
     #[description = "Optional embed footer"] footer: Option<String>,
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
-
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
-        .await?
-        .denial_reason
-    {
-        ctx.send(
-            poise::CreateReply::default()
-                .content(reason)
-                .ephemeral(true),
-        )
-        .await?;
-        return Ok(());
-    }
 
     let mut settings = load_settings(ctx.data(), ctx.guild_id().map(|id| id.get())).await?;
     settings.setup_title = title.unwrap_or_else(|| settings.setup_title.clone());
@@ -191,6 +177,25 @@ async fn ticket_close(
     }
 
     let settings = load_settings(ctx.data(), Some(guild_channel.guild_id.get())).await?;
+    let caller_member = ctx.author_member().await;
+    if !can_manage_or_close_ticket(
+        ctx.serenity_context(),
+        guild_channel.guild_id,
+        ctx.author().id,
+        caller_member.as_deref(),
+        &guild_channel,
+        &settings,
+        true,
+    ) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("You do not have permission to close this ticket.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let result = close_ticket_channel(
         ctx.serenity_context(),
         &guild_channel,
@@ -253,12 +258,7 @@ async fn ticket_closeall(ctx: Context<'_>) -> Result<(), Error> {
 }
 
 /// Grant a user or role access to the current ticket channel.
-#[poise::command(
-    slash_command,
-    guild_only,
-    rename = "add",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, rename = "add")]
 async fn ticket_add(
     ctx: Context<'_>,
     #[description = "User ID, role ID, or mention to add to the current ticket"] target_id: String,
@@ -280,6 +280,26 @@ async fn ticket_add(
         ctx.send(
             poise::CreateReply::default()
                 .content("This command can only be used in ticket channels.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
+    let settings = load_settings(ctx.data(), Some(channel.guild_id.get())).await?;
+    let caller_member = ctx.author_member().await;
+    if !can_manage_or_close_ticket(
+        ctx.serenity_context(),
+        channel.guild_id,
+        ctx.author().id,
+        caller_member.as_deref(),
+        &channel,
+        &settings,
+        false,
+    ) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("You do not have permission to manage access for this ticket.")
                 .ephemeral(true),
         )
         .await?;
@@ -311,12 +331,7 @@ async fn ticket_add(
 }
 
 /// Remove a user or role from the current ticket channel.
-#[poise::command(
-    slash_command,
-    guild_only,
-    rename = "remove",
-    required_permissions = "MANAGE_GUILD"
-)]
+#[poise::command(slash_command, guild_only, rename = "remove")]
 async fn ticket_remove(
     ctx: Context<'_>,
     #[description = "User ID, role ID, or mention to remove from the current ticket"]
@@ -345,8 +360,55 @@ async fn ticket_remove(
         return Ok(());
     }
 
+    let settings = load_settings(ctx.data(), Some(channel.guild_id.get())).await?;
+    let caller_member = ctx.author_member().await;
+    if !can_manage_or_close_ticket(
+        ctx.serenity_context(),
+        channel.guild_id,
+        ctx.author().id,
+        caller_member.as_deref(),
+        &channel,
+        &settings,
+        false,
+    ) {
+        ctx.send(
+            poise::CreateReply::default()
+                .content("You do not have permission to manage access for this ticket.")
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+
     let overwrite =
         resolve_permission_target(ctx.serenity_context(), channel.guild_id, &target_id).await?;
+    if let Some((opened_by, category_name)) = parse_ticket_details(&channel) {
+        let protected = match overwrite {
+            PermissionOverwriteType::Member(user_id) => {
+                user_id == ctx.serenity_context().cache.current_user().id
+                    || user_id.get() == opened_by
+            }
+            PermissionOverwriteType::Role(role_id) => {
+                role_id.get() == channel.guild_id.get()
+                    || settings
+                        .categories
+                        .iter()
+                        .find(|category| category.name == category_name)
+                        .is_some_and(|category| category.staff_role_ids.contains(&role_id.get()))
+            }
+            _ => false,
+        };
+        if protected {
+            ctx.send(
+                poise::CreateReply::default()
+                    .content("Cannot remove the ticket opener, bot, @everyone, or configured staff roles from this ticket.")
+                    .ephemeral(true),
+            )
+            .await?;
+            return Ok(());
+        }
+    }
+
     channel
         .create_permission(
             ctx.serenity_context(),
@@ -390,7 +452,12 @@ pub(crate) fn extract_target_id(input: &str) -> Result<u64, Error> {
         .trim_start_matches("&")
         .trim_start_matches("!")
         .trim_end_matches('>');
-    digits
+    let target_id = digits
         .parse::<u64>()
-        .map_err(|error| anyhow::anyhow!("Invalid user/role identifier `{input}`: {error}"))
+        .map_err(|error| anyhow::anyhow!("Invalid user/role identifier `{input}`: {error}"))?;
+    anyhow::ensure!(
+        target_id != 0,
+        "Invalid user/role identifier `{input}`: ID cannot be zero"
+    );
+    Ok(target_id)
 }

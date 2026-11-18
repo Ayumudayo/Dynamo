@@ -2,18 +2,72 @@ use chrono::Utc;
 use dynamo_domain_giveaway::{GiveawayRecord, GiveawayStatus};
 use dynamo_repositories::GiveawaysRepository;
 use dynamo_runtime_api::{AppState, Error};
-use poise::serenity_prelude::{ChannelId, CreateMessage, EditMessage, Nonce};
+use poise::serenity_prelude::{
+    ChannelId, CreateMessage, EditMessage, Error as SerenityError, Http, HttpError, Nonce,
+};
 use rand::{seq::SliceRandom, thread_rng};
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
+    num::NonZeroU64,
     sync::{Arc, Mutex, OnceLock, Weak},
+    time::Duration,
 };
 use tokio::sync::Mutex as AsyncMutex;
 
 use crate::render::{build_embed, entry_button};
 use crate::validation::parse_message_id;
 
+const MAX_DISPLAYED_WINNERS: usize = 35;
 type GiveawayLocks = Mutex<HashMap<(u64, u64), Weak<AsyncMutex<()>>>>;
+
+pub(crate) fn schedule_debounced_sync(
+    repo: Arc<dyn GiveawaysRepository>,
+    http: Arc<Http>,
+    guild_id: u64,
+    message_id: u64,
+) {
+    static SCHEDULED: OnceLock<Mutex<HashSet<(u64, u64)>>> = OnceLock::new();
+    {
+        let mut set = SCHEDULED
+            .get_or_init(Default::default)
+            .lock()
+            .expect("giveaway debounced sync registry poisoned");
+        if !set.insert((guild_id, message_id)) {
+            return;
+        }
+    }
+    tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(2)).await;
+        if let Some(scheduled) = SCHEDULED.get() {
+            scheduled
+                .lock()
+                .expect("giveaway debounced sync registry poisoned")
+                .remove(&(guild_id, message_id));
+        }
+        let lock = giveaway_lock(guild_id, message_id);
+        let _guard = lock.lock().await;
+        if let Ok(Some(record)) = repo.get_by_message(guild_id, message_id).await
+            && let Err(error) = deliver_saved_message(repo.as_ref(), http.as_ref(), record).await
+        {
+            tracing::warn!(
+                guild_id,
+                message_id,
+                ?error,
+                "debounced giveaway message refresh failed"
+            );
+        }
+    });
+}
+
+fn is_permanent_discord_missing(error: &Error) -> bool {
+    error.downcast_ref::<SerenityError>().is_some_and(|err| {
+        matches!(
+            err,
+            SerenityError::Http(HttpError::UnsuccessfulRequest(resp))
+                if matches!(resp.error.code, 10003 | 10008)
+        )
+    })
+}
 
 pub(crate) fn giveaway_lock(guild_id: u64, message_id: u64) -> Arc<AsyncMutex<()>> {
     static LOCKS: OnceLock<GiveawayLocks> = OnceLock::new();
@@ -171,9 +225,24 @@ struct DiscordDelivery<'a>(&'a poise::serenity_prelude::Http);
 #[async_trait::async_trait]
 impl GiveawayDelivery for DiscordDelivery<'_> {
     async fn sync(&self, record: &GiveawayRecord) -> Result<(), Error> {
-        sync_message(self.0, record).await
+        if let Err(error) = sync_message(self.0, record).await {
+            if is_permanent_discord_missing(&error) {
+                tracing::warn!(
+                    guild_id = record.guild_id,
+                    message_id = record.message_id,
+                    ?error,
+                    "giveaway channel or message missing on Discord; clearing pending sync flag"
+                );
+                return Ok(());
+            }
+            return Err(error);
+        }
+        Ok(())
     }
     async fn announce(&self, record: &GiveawayRecord) -> Result<(), Error> {
+        let Some(channel_id) = NonZeroU64::new(record.channel_id).map(ChannelId::from) else {
+            return Ok(());
+        };
         let message = if record.winner_ids.is_empty() {
             format!(
                 "Giveaway `{}` ended with no eligible winners.",
@@ -186,15 +255,31 @@ impl GiveawayDelivery for DiscordDelivery<'_> {
                 format_winners(&record.winner_ids)
             )
         };
-        ChannelId::new(record.channel_id)
+        if let Err(error) = channel_id
             .send_message(
                 self.0,
                 CreateMessage::new()
                     .content(message)
-                    .nonce(Nonce::String(record.message_id.to_string()))
+                    .nonce(Nonce::String(format!(
+                        "{:x}:{}",
+                        record.message_id, record.revision
+                    )))
                     .enforce_nonce(true),
             )
-            .await?;
+            .await
+        {
+            let wrapped = Error::from(error);
+            if is_permanent_discord_missing(&wrapped) {
+                tracing::warn!(
+                    guild_id = record.guild_id,
+                    message_id = record.message_id,
+                    ?wrapped,
+                    "giveaway channel missing on Discord; clearing pending announcement flag"
+                );
+                return Ok(());
+            }
+            return Err(wrapped);
+        }
         Ok(())
     }
 }
@@ -229,7 +314,10 @@ pub(crate) async fn sync_message(
     http: &poise::serenity_prelude::Http,
     record: &GiveawayRecord,
 ) -> Result<(), Error> {
-    ChannelId::new(record.channel_id)
+    let Some(channel_id) = NonZeroU64::new(record.channel_id).map(ChannelId::from) else {
+        return Ok(());
+    };
+    channel_id
         .edit_message(
             http,
             record.message_id,
@@ -253,12 +341,23 @@ pub(crate) fn choose_winners(entries: &[u64], winner_count: u64) -> Vec<u64> {
 pub(crate) fn format_winners(winner_ids: &[u64]) -> String {
     if winner_ids.is_empty() {
         "No winners".to_string()
-    } else {
+    } else if winner_ids.len() <= MAX_DISPLAYED_WINNERS {
         winner_ids
             .iter()
-            .map(|winner_id| format!("<@{}>", winner_id))
+            .map(|winner_id| format!("<@{winner_id}>"))
             .collect::<Vec<_>>()
             .join(", ")
+    } else {
+        let shown = winner_ids
+            .iter()
+            .take(MAX_DISPLAYED_WINNERS)
+            .map(|winner_id| format!("<@{winner_id}>"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            "{shown} ... and {} more",
+            winner_ids.len() - MAX_DISPLAYED_WINNERS
+        )
     }
 }
 

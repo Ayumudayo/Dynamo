@@ -1,8 +1,11 @@
 use async_trait::async_trait;
+use futures_util::TryStreamExt;
 use mongodb::bson::{doc, to_document};
 
 use crate::{Error, MongoPersistence, documents::MemberStatsDocument};
-use dynamo_domain_stats::{MemberStatsDelta, MemberStatsRecord, MemberStatsUpdate};
+use dynamo_domain_stats::{
+    MemberStatsDelta, MemberStatsRecord, MemberStatsUpdate, StatsLeaderboardMetric,
+};
 use dynamo_repositories::MemberStatsRepository;
 
 impl MongoPersistence {
@@ -11,6 +14,10 @@ impl MongoPersistence {
         guild_id: u64,
         member_id: u64,
     ) -> Result<MemberStatsDocument, Error> {
+        let id = format!("stats:{guild_id}:{member_id}");
+        if let Some(document) = self.member_stats.find_one(doc! { "_id": &id }).await? {
+            return Ok(document);
+        }
         let filter = doc! { "guild_id": guild_id.to_string(), "member_id": member_id.to_string() };
         if let Some(document) = self.member_stats.find_one(filter.clone()).await? {
             return Ok(document);
@@ -30,7 +37,6 @@ impl MongoPersistence {
         });
         // The built-in unique _id index makes concurrent first events create
         // one row. Legacy rows retain their existing ObjectId and are read above.
-        let id = format!("stats:{guild_id}:{member_id}");
         let insertion = self
             .member_stats
             .update_one(
@@ -99,5 +105,29 @@ impl MemberStatsRepository for MongoPersistence {
             // Another event committed first; reapply to its newer state.
         }
         anyhow::bail!("member stats update contention exceeded retry limit")
+    }
+
+    async fn leaderboard(
+        &self,
+        guild_id: u64,
+        metric: StatsLeaderboardMetric,
+        limit: u32,
+    ) -> Result<Vec<MemberStatsRecord>, Error> {
+        let sort = match metric {
+            StatsLeaderboardMetric::Xp => doc! { "level": -1, "xp": -1 },
+            StatsLeaderboardMetric::Messages => doc! { "messages": -1 },
+            StatsLeaderboardMetric::VoiceSeconds => doc! { "voice.time_seconds": -1 },
+        };
+        let mut cursor = self
+            .member_stats
+            .find(doc! { "guild_id": guild_id.to_string() })
+            .sort(sort)
+            .limit(i64::from(limit))
+            .await?;
+        let mut entries = Vec::new();
+        while let Some(document) = cursor.try_next().await? {
+            entries.push(document.into_domain()?);
+        }
+        Ok(entries)
     }
 }

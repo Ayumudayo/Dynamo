@@ -82,7 +82,7 @@ test.describe('dashboard guild smoke', () => {
 
     await page.getByTestId('page-tab-commands').click();
     await expect(page.getByTestId('guild-commands-section')).toBeVisible();
-    const stocksTab = page.getByTestId('command-tab-stocks');
+    const stocksTab = page.getByTestId('command-tab-stock');
     if (await stocksTab.count()) {
       await stocksTab.click();
     }

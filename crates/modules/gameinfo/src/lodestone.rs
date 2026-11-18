@@ -13,6 +13,7 @@ const LODESTONE_BROWSER_USER_AGENT: &str = "Mozilla/5.0 (Windows NT 10.0; Win64;
 pub(crate) struct LodestoneLink {
     pub(crate) title: String,
     pub(crate) url: String,
+    pub(crate) published_at: Option<i64>,
 }
 
 pub(crate) fn lodestone_client() -> Result<Client, Error> {
@@ -48,6 +49,7 @@ pub(crate) async fn fetch_lodestone_html(client: &Client, url: &str) -> Result<S
 pub(crate) fn parse_detail_links(html: &str, selector: &str) -> Vec<LodestoneLink> {
     let document = Html::parse_document(html);
     let selector = Selector::parse(selector).expect("valid selector");
+    let time_script_selector = Selector::parse("time script").expect("valid selector");
     let mut links = Vec::new();
     let mut seen = std::collections::HashSet::new();
 
@@ -85,7 +87,19 @@ pub(crate) fn parse_detail_links(html: &str, selector: &str) -> Vec<LodestoneLin
             continue;
         }
 
-        links.push(LodestoneLink { title, url });
+        // Lodestone renders the date in JavaScript, but the Unix time is
+        // already present in the HTML even when the display only shows a date.
+        let published_at = node.select(&time_script_selector).find_map(|script| {
+            let source = script.text().next()?;
+            let (_, arguments) = source.split_once("ldst_strftime(")?;
+            let (stamp, _) = arguments.split_once(',')?;
+            stamp.trim().parse().ok()
+        });
+        links.push(LodestoneLink {
+            title,
+            url,
+            published_at,
+        });
     }
 
     links

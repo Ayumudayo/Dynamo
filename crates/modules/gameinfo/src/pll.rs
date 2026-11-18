@@ -1,6 +1,6 @@
 use crate::{
     cache::GameInfoCacheStore,
-    constants::{ERROR_EMBED_COLOR, GAMEINFO_THUMBNAIL_URL, SUCCESS_EMBED_COLOR},
+    constants::{ERROR_EMBED_COLOR, SUCCESS_EMBED_COLOR},
     lodestone::{
         absolutize_lodestone_url, extract_first_heading, extract_text, fetch_lodestone_html,
         lodestone_client, parse_article_title_and_body, parse_detail_links,
@@ -15,10 +15,16 @@ use poise::serenity_prelude::{CreateActionRow, CreateButton, CreateEmbed, Timest
 use regex::Regex;
 use scraper::{ElementRef, Html, Selector};
 use serde::{Deserialize, Serialize};
+use std::sync::OnceLock;
+use tokio::sync::Mutex;
 
 const TOPICS_LIST_URL: &str = "https://jp.finalfantasyxiv.com/lodestone/topics/";
 const PLL_CACHE_DURATION_SECONDS: i64 = 12 * 60 * 60;
+const PLL_MEMORY_CACHE_TTL_SECONDS: i64 = 15 * 60;
 const MAX_PLL_PAGES: usize = 3;
+
+static PLL_MEMORY_CACHE: OnceLock<Mutex<Option<(i64, PllInfo)>>> = OnceLock::new();
+static PLL_FETCH_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct PllInfo {
@@ -47,8 +53,47 @@ struct PllSections {
 }
 
 pub(crate) async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
-    let cache_store = GameInfoCacheStore::new();
     let now = Utc::now().timestamp();
+    if let Some((fetched_at, info)) = PLL_MEMORY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .await
+        .as_ref()
+        .filter(|(fetched_at, _)| now.saturating_sub(*fetched_at) < PLL_MEMORY_CACHE_TTL_SECONDS)
+        .cloned()
+    {
+        let _ = fetched_at;
+        if pll_is_live_or_unknown(info.start_stamp, now) || allow_past_pll_debug() {
+            return Ok(Some(info));
+        }
+    }
+
+    let _singleflight = PLL_FETCH_LOCK.get_or_init(|| Mutex::new(())).lock().await;
+    let now = Utc::now().timestamp();
+    if let Some((_, info)) = PLL_MEMORY_CACHE
+        .get_or_init(|| Mutex::new(None))
+        .lock()
+        .await
+        .as_ref()
+        .filter(|(fetched_at, _)| now.saturating_sub(*fetched_at) < PLL_MEMORY_CACHE_TTL_SECONDS)
+        .cloned()
+        && (pll_is_live_or_unknown(info.start_stamp, now) || allow_past_pll_debug())
+    {
+        return Ok(Some(info));
+    }
+
+    let result = fetch_pll_info_uncached(now).await?;
+    if let Some(ref info) = result {
+        *PLL_MEMORY_CACHE
+            .get_or_init(|| Mutex::new(None))
+            .lock()
+            .await = Some((now, info.clone()));
+    }
+    Ok(result)
+}
+
+async fn fetch_pll_info_uncached(now: i64) -> Result<Option<PllInfo>, Error> {
+    let cache_store = GameInfoCacheStore::new();
     let cached = cache_store.load_pllinfo().await?;
     let client = lodestone_client()?;
     let wants_translation = translate_api_key().is_some();
@@ -87,6 +132,15 @@ pub(crate) async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
                 continue;
             };
 
+            if !is_valid_pll_schedule(&next) {
+                continue;
+            }
+
+            let is_live = pll_is_live_or_unknown(next.start_stamp, now);
+            if !is_live && (!allow_past_pll_debug() || debug_past_candidate.is_some()) {
+                continue;
+            }
+
             let sections = parse_pll_sections(&detail_html);
             next.stream_links = sections.stream_links;
 
@@ -97,11 +151,7 @@ pub(crate) async fn fetch_pll_info() -> Result<Option<PllInfo>, Error> {
                     translate_text_list(&client, &sections.content_items_ja).await;
             }
 
-            if !is_valid_pll_schedule(&next) {
-                continue;
-            }
-
-            if !pll_is_live_or_unknown(next.start_stamp, now) {
+            if !is_live {
                 if allow_past_pll_debug() && debug_past_candidate.is_none() {
                     debug_past_candidate = Some(next);
                 }
@@ -180,12 +230,21 @@ fn parse_pll_detail(url: &str, html: &str) -> Result<Option<PllInfo>, Error> {
     }))
 }
 
+fn truncate_chars(text: &str, max_chars: usize) -> String {
+    if text.chars().count() <= max_chars {
+        text.to_string()
+    } else {
+        let mut truncated: String = text.chars().take(max_chars.saturating_sub(3)).collect();
+        truncated.push_str("...");
+        truncated
+    }
+}
+
 pub(crate) fn build_pll_embed(info: &PllInfo) -> CreateEmbed {
     let mut embed = CreateEmbed::new()
         .title(&info.fixed_title)
         .url(&info.url)
         .color(SUCCESS_EMBED_COLOR)
-        .thumbnail(GAMEINFO_THUMBNAIL_URL)
         .timestamp(Timestamp::now())
         .field(
             "방송 시작",
@@ -205,17 +264,17 @@ pub(crate) fn build_pll_embed(info: &PllInfo) -> CreateEmbed {
     if let Some(description) = info.translated_description.as_deref()
         && !description.trim().is_empty()
     {
-        embed = embed.description(description);
+        embed = embed.description(truncate_chars(description.trim(), 4000));
     }
 
     if !info.translated_contents.is_empty() {
-        let value = info
+        let raw_value = info
             .translated_contents
             .iter()
             .map(|item| format!("• {item}"))
             .collect::<Vec<_>>()
             .join("\n");
-        embed = embed.field("방송 내용", value, false);
+        embed = embed.field("방송 내용", truncate_chars(&raw_value, 1024), false);
     }
 
     embed
@@ -226,24 +285,24 @@ pub(crate) fn build_pll_stream_buttons(info: &PllInfo) -> Vec<CreateActionRow> {
         .stream_links
         .iter()
         .filter_map(|link| {
-            to_valid_url(&link.url).map(|url| CreateButton::new_link(url).label(&link.label))
+            to_valid_url(&link.url)
+                .map(|url| CreateButton::new_link(url).label(truncate_chars(&link.label, 80)))
         })
         .collect::<Vec<_>>();
 
-    if buttons.is_empty() {
-        Vec::new()
-    } else {
-        vec![CreateActionRow::Buttons(buttons)]
-    }
+    buttons
+        .chunks(5)
+        .take(5)
+        .map(|chunk| CreateActionRow::Buttons(chunk.to_vec()))
+        .collect()
 }
 
 pub(crate) fn create_pll_error_embed() -> CreateEmbed {
     CreateEmbed::new()
-        .title("No PLL Info")
+        .title("PLL 정보를 불러올 수 없습니다")
         .description("PLL 관련 정보를 찾을 수 없습니다.")
         .url("https://jp.finalfantasyxiv.com/lodestone")
         .color(ERROR_EMBED_COLOR)
-        .thumbnail(GAMEINFO_THUMBNAIL_URL)
 }
 
 fn is_pll_title(input: &str) -> bool {

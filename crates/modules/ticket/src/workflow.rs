@@ -1,5 +1,7 @@
 use crate::{
-    channels::{existing_ticket_channel, parse_ticket_details, ticket_channels},
+    channels::{
+        existing_ticket_channel, next_ticket_number, parse_ticket_details, ticket_channels,
+    },
     components::ticket_close_components,
     constants::{CLOSE_EMBED_COLOR, CREATE_EMBED_COLOR},
     settings::TicketSettings,
@@ -7,19 +9,81 @@ use crate::{
 use anyhow::Context as _;
 use dynamo_runtime_api::Error;
 use poise::serenity_prelude::{
-    ChannelId, ChannelType, CreateAttachment, CreateChannel, CreateEmbed, CreateEmbedFooter,
-    CreateMessage, GetMessages, GuildChannel, PermissionOverwrite, PermissionOverwriteType,
-    Permissions, RoleId,
+    ChannelId, ChannelType, CreateAllowedMentions, CreateAttachment, CreateChannel, CreateEmbed,
+    CreateEmbedFooter, CreateMessage, GetMessages, GuildChannel, GuildId, Member,
+    PermissionOverwrite, PermissionOverwriteType, Permissions, RoleId, UserId,
 };
 use std::{
     collections::HashMap,
     future::Future,
+    num::NonZeroU64,
     sync::{Arc, Mutex, OnceLock, Weak},
 };
 use tokio::sync::Mutex as AsyncMutex;
 
 const MAX_TRANSCRIPT_MESSAGES: usize = 10_000;
 const MAX_TRANSCRIPT_BYTES: usize = 8 * 1024 * 1024;
+
+pub(crate) fn can_manage_or_close_ticket(
+    ctx: &poise::serenity_prelude::Context,
+    guild_id: GuildId,
+    caller_id: UserId,
+    caller_member: Option<&Member>,
+    channel: &GuildChannel,
+    settings: &TicketSettings,
+    allow_opener: bool,
+) -> bool {
+    let Some((opened_by, category_name)) = parse_ticket_details(channel) else {
+        return false;
+    };
+    if allow_opener && opened_by == caller_id.get() {
+        return true;
+    }
+
+    let Some(member) = caller_member else {
+        return false;
+    };
+
+    let perms = member
+        .permissions
+        .or_else(|| {
+            ctx.cache
+                .guild(guild_id)
+                .map(|guild| guild.member_permissions(member))
+        })
+        .unwrap_or_else(Permissions::empty);
+    if perms.administrator() || perms.manage_channels() || perms.manage_guild() {
+        return true;
+    }
+
+    settings
+        .categories
+        .iter()
+        .find(|category| category.name == category_name)
+        .is_some_and(|category| {
+            member
+                .roles
+                .iter()
+                .any(|role_id| category.staff_role_ids.contains(&role_id.get()))
+        })
+}
+
+fn build_ticket_channel_create(
+    ticket_number: u64,
+    opened_by: u64,
+    category_name: &str,
+    overwrites: Vec<PermissionOverwrite>,
+    parent_category: Option<ChannelId>,
+) -> CreateChannel<'_> {
+    let mut builder = CreateChannel::new(format!("ticket-{ticket_number}"))
+        .kind(ChannelType::Text)
+        .topic(format!("ticket|{opened_by}|{category_name}"))
+        .permissions(overwrites);
+    if let Some(category_channel_id) = parent_category {
+        builder = builder.category(category_channel_id);
+    }
+    builder
+}
 
 fn guild_workflow_lock(guild_id: u64) -> Arc<AsyncMutex<()>> {
     static LOCKS: OnceLock<Mutex<HashMap<u64, Weak<AsyncMutex<()>>>>> = OnceLock::new();
@@ -84,7 +148,9 @@ pub(crate) async fn create_ticket_channel(
         PermissionOverwrite {
             allow: Permissions::VIEW_CHANNEL
                 | Permissions::SEND_MESSAGES
-                | Permissions::READ_MESSAGE_HISTORY,
+                | Permissions::READ_MESSAGE_HISTORY
+                | Permissions::ATTACH_FILES
+                | Permissions::EMBED_LINKS,
             deny: Permissions::empty(),
             kind: PermissionOverwriteType::Member(component.user.id),
         },
@@ -92,38 +158,60 @@ pub(crate) async fn create_ticket_channel(
             allow: Permissions::VIEW_CHANNEL
                 | Permissions::SEND_MESSAGES
                 | Permissions::READ_MESSAGE_HISTORY
-                | Permissions::MANAGE_CHANNELS,
+                | Permissions::MANAGE_CHANNELS
+                | Permissions::MANAGE_ROLES
+                | Permissions::EMBED_LINKS
+                | Permissions::ATTACH_FILES,
             deny: Permissions::empty(),
             kind: PermissionOverwriteType::Member(ctx.cache.current_user().id),
         },
     ];
 
+    let mut mentioned_staff_roles = Vec::new();
     if let Some(category) = category {
         for role_id in &category.staff_role_ids {
+            let Some(role_id) = NonZeroU64::new(*role_id).map(RoleId::from) else {
+                continue;
+            };
+            mentioned_staff_roles.push(role_id);
             permission_overwrites.push(PermissionOverwrite {
                 allow: Permissions::VIEW_CHANNEL
                     | Permissions::SEND_MESSAGES
-                    | Permissions::READ_MESSAGE_HISTORY,
+                    | Permissions::READ_MESSAGE_HISTORY
+                    | Permissions::ATTACH_FILES
+                    | Permissions::EMBED_LINKS,
                 deny: Permissions::empty(),
-                kind: PermissionOverwriteType::Role(RoleId::new(*role_id)),
+                kind: PermissionOverwriteType::Role(role_id),
             });
         }
     }
 
-    let ticket_number = channels.len() + 1;
-    let channel = guild_id
-        .create_channel(
-            ctx,
-            CreateChannel::new(format!("ticket-{ticket_number}"))
-                .kind(ChannelType::Text)
-                .topic(format!(
-                    "ticket|{}|{}",
-                    component.user.id.get(),
-                    category_name
-                ))
-                .permissions(permission_overwrites),
-        )
-        .await?;
+    let ticket_number = next_ticket_number(&channels);
+    let parent_category = settings
+        .category_id
+        .and_then(NonZeroU64::new)
+        .map(ChannelId::from);
+    let create_builder = build_ticket_channel_create(
+        ticket_number,
+        component.user.id.get(),
+        &category_name,
+        permission_overwrites.clone(),
+        parent_category,
+    );
+    let channel = match guild_id.create_channel(ctx, create_builder).await {
+        Ok(channel) => channel,
+        Err(_) if parent_category.is_some() => {
+            let fallback_builder = build_ticket_channel_create(
+                ticket_number,
+                component.user.id.get(),
+                &category_name,
+                permission_overwrites,
+                None,
+            );
+            guild_id.create_channel(ctx, fallback_builder).await?
+        }
+        Err(error) => return Err(error.into()),
+    };
 
     let welcome_embed = CreateEmbed::new()
         .title(format!("Ticket #{ticket_number}"))
@@ -141,12 +229,21 @@ pub(crate) async fn create_ticket_channel(
             "You may close your ticket at any time using the button below.",
         ));
 
+    let mut content_mentions = vec![format!("<@{}>", component.user.id.get())];
+    for role_id in &mentioned_staff_roles {
+        content_mentions.push(format!("<@&{}>", role_id.get()));
+    }
+    let allowed_mentions = CreateAllowedMentions::new()
+        .users([component.user.id])
+        .roles(mentioned_staff_roles);
+
     let sent = channel
         .id
         .send_message(
             ctx,
             CreateMessage::new()
-                .content(format!("<@{}>", component.user.id.get()))
+                .content(content_mentions.join(" "))
+                .allowed_mentions(allowed_mentions)
                 .embed(welcome_embed)
                 .components(ticket_close_components()),
         )
@@ -182,13 +279,17 @@ pub(crate) async fn close_ticket_channel(
 
     archive_then_delete(
         || async {
-            if let Some(log_channel_id) = settings.log_channel_id {
+            if let Some(log_channel_id) = settings
+                .log_channel_id
+                .and_then(NonZeroU64::new)
+                .map(ChannelId::from)
+            {
                 anyhow::ensure!(
-                    log_channel_id != channel.id.get(),
+                    log_channel_id != channel.id,
                     "The ticket cannot be its own transcript log channel."
                 );
                 let transcript = fetch_ticket_transcript(ctx, channel).await?;
-                ChannelId::new(log_channel_id)
+                log_channel_id
                     .send_message(
                         ctx,
                         CreateMessage::new().embed(embed.clone()).add_file(
@@ -196,6 +297,18 @@ pub(crate) async fn close_ticket_channel(
                         ),
                     )
                     .await?;
+            } else if let Some(opener_id) = NonZeroU64::new(opened_by).map(UserId::from)
+                && let Ok(transcript) = fetch_ticket_transcript(ctx, channel).await
+                && let Ok(dm_channel) = opener_id.create_dm_channel(ctx).await
+            {
+                let _ = dm_channel
+                    .send_message(
+                        ctx,
+                        CreateMessage::new().embed(embed.clone()).add_file(
+                            CreateAttachment::bytes(transcript.as_bytes(), transcript_name),
+                        ),
+                    )
+                    .await;
             }
             Ok(())
         },

@@ -14,6 +14,7 @@ dynamo-module-kit = { path = "../../module-kit" }
 dynamo-repositories = { path = "../../repositories" }
 dynamo-runtime-api = { path = "../../runtime-api" }
 poise.workspace = true
+rand.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

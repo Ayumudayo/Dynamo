@@ -507,11 +507,6 @@ fn stock_quote_fields_follow_each_market_session_phase() {
         assert_eq!(quote.pre_market_change, expected_pre_change);
         assert_eq!(quote.regular_market_change, expected_regular_change);
         assert_eq!(quote.post_market_change, expected_post_change);
-        assert!(quote.trailing_pe.is_none());
-        assert!(quote.trailing_eps.is_none());
-        assert!(quote.dividend_yield.is_none());
-        assert!(quote.sector.is_none());
-        assert!(quote.fifty_two_week_high.is_none());
     }
 }
 

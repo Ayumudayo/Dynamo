@@ -1,14 +1,17 @@
+use std::num::NonZeroU64;
+
 use chrono::Utc;
-use dynamo_access::module_access_for_context;
 use dynamo_domain_suggestion::{SuggestionRecord, SuggestionStats, SuggestionStatus};
 use dynamo_runtime_api::{Context, Error};
 use poise::serenity_prelude::{ChannelId, CreateMessage, ReactionType};
 
 use crate::{
-    constants::{DOWNVOTE_EMOJI, MODULE_ID, UPVOTE_EMOJI},
+    constants::{DOWNVOTE_EMOJI, UPVOTE_EMOJI},
     render::{create_pending_embed, moderation_buttons},
     settings::load_settings,
 };
+
+const MAX_SUGGESTION_CHARS: usize = 3500;
 
 /// Submit a new suggestion to the guild suggestion board.
 #[poise::command(slash_command, guild_only, category = "Suggestion")]
@@ -18,18 +21,28 @@ pub(crate) async fn suggest(
 ) -> Result<(), Error> {
     ctx.defer_ephemeral().await?;
 
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
-        .await?
-        .denial_reason
-    {
+    let trimmed = suggestion.trim();
+    if trimmed.is_empty() {
         ctx.send(
             poise::CreateReply::default()
-                .content(reason)
+                .content("Suggestion text cannot be empty.")
                 .ephemeral(true),
         )
         .await?;
         return Ok(());
     }
+    if trimmed.chars().count() > MAX_SUGGESTION_CHARS {
+        ctx.send(
+            poise::CreateReply::default()
+                .content(format!(
+                    "Suggestion text must be {MAX_SUGGESTION_CHARS} characters or fewer."
+                ))
+                .ephemeral(true),
+        )
+        .await?;
+        return Ok(());
+    }
+    let suggestion = trimmed.to_string();
 
     let Some(repo) = ctx.data().persistence.suggestions.clone() else {
         ctx.send(
@@ -42,7 +55,11 @@ pub(crate) async fn suggest(
     };
 
     let settings = load_settings(ctx.data(), ctx.guild_id().map(|id| id.get())).await?;
-    let Some(channel_id) = settings.channel_id else {
+    let Some(channel_id) = settings
+        .channel_id
+        .and_then(NonZeroU64::new)
+        .map(ChannelId::from)
+    else {
         ctx.send(
             poise::CreateReply::default()
                 .content("Suggestion channel not configured.")
@@ -59,7 +76,7 @@ pub(crate) async fn suggest(
     let author = ctx.author();
     let embed = create_pending_embed(&suggestion, author.id.get(), &author.name, author.face());
 
-    let message = ChannelId::new(channel_id)
+    let message = channel_id
         .send_message(
             ctx.serenity_context(),
             CreateMessage::new()

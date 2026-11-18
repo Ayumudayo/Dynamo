@@ -28,7 +28,7 @@ async fn dashboard_audit_logs_round_trip_body(store: MongoPersistence) -> anyhow
 
     let page = store
         .list(DashboardAuditLogQuery {
-            scope: DashboardAuditScope::Guild,
+            scope: Some(DashboardAuditScope::Guild),
             guild_id: Some(42),
             entity_type: Some(DashboardAuditEntityType::Command),
             action: Some(DashboardAuditAction::SaveSettings),
@@ -38,6 +38,9 @@ async fn dashboard_audit_logs_round_trip_body(store: MongoPersistence) -> anyhow
         .await?;
 
     assert!(page.entries.iter().any(|row| row.entity_id == marker));
+
+    let all_page = store.list(DashboardAuditLogQuery::all()).await?;
+    assert!(all_page.entries.iter().any(|row| row.entity_id == marker));
     Ok(())
 }
 

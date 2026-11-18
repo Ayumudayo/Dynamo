@@ -1,11 +1,12 @@
 use crate::{
-    constants::{MAX_MANUAL_REFRESHES, STOCK_REFRESH_BUTTON_ID},
+    constants::{MAX_MANUAL_REFRESHES, MODULE_ID, STOCK_REFRESH_BUTTON_ID},
     state::{
         ManualRestartStart, edit_message, edit_refresh_components, fetch_response_for_session,
         initialize_session_loop, session_for_message, try_begin_manual_restart,
     },
 };
-use dynamo_runtime_api::Error;
+use dynamo_access::module_access_for_app;
+use dynamo_runtime_api::{AppState, Error};
 use poise::serenity_prelude::{
     ComponentInteraction, CreateInteractionResponse, CreateInteractionResponseMessage,
     EditInteractionResponse, Interaction,
@@ -14,6 +15,7 @@ use poise::serenity_prelude::{
 pub async fn handle(
     ctx: &poise::serenity_prelude::Context,
     interaction: &Interaction,
+    data: &AppState,
 ) -> Result<bool, Error> {
     let Interaction::Component(component) = interaction else {
         return Ok(false);
@@ -21,6 +23,24 @@ pub async fn handle(
 
     if component.data.custom_id != STOCK_REFRESH_BUTTON_ID {
         return Ok(false);
+    }
+
+    if let Some(reason) =
+        module_access_for_app(data, MODULE_ID, component.guild_id.map(|id| id.get()))
+            .await?
+            .denial_reason
+    {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(reason)
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(true);
     }
 
     handle_refresh_button(ctx, component).await?;
@@ -35,6 +55,7 @@ async fn handle_refresh_button(
     let entry = session_for_message(message_id).await;
 
     let Some(entry) = entry else {
+        let _ = edit_refresh_components(&ctx.http, component.channel_id, message_id, true).await;
         component
             .create_response(
                 ctx,
@@ -85,6 +106,8 @@ async fn handle_refresh_button(
             return Ok(());
         }
         ManualRestartStart::LimitReached => {
+            let _ =
+                edit_refresh_components(&ctx.http, component.channel_id, message_id, true).await;
             component
                 .create_response(
                     ctx,
@@ -145,12 +168,18 @@ async fn handle_refresh_button(
         return Ok(());
     };
 
+    let will_exhaust_limit = {
+        let state = session.lock().await;
+        state.manual_refresh_count + 1 >= MAX_MANUAL_REFRESHES
+    };
+    let disable_after_edit = response.stop_reason.is_none() || will_exhaust_limit;
+
     if let Err(error) = edit_message(
         &ctx.http,
         component.channel_id,
         message_id,
         response.embed.clone(),
-        response.stop_reason.is_none(),
+        disable_after_edit,
     )
     .await
     {

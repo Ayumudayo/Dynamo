@@ -1,9 +1,12 @@
+use std::collections::BTreeMap;
+
 use async_trait::async_trait;
 use dynamo_repositories::{DeploymentSettingsRepository, GuildSettingsRepository};
 use dynamo_settings::{
     DeploymentCommandSettings, DeploymentModuleSettings, DeploymentSettings, GuildCommandSettings,
     GuildModuleSettings, GuildSettings,
 };
+use futures_util::TryStreamExt;
 use mongodb::{
     bson::{Bson, Document, doc, to_bson},
     options::ReturnDocument,
@@ -69,6 +72,15 @@ impl GuildSettingsRepository for MongoPersistence {
         document.map(GuildSettingsDocument::into_domain).transpose()
     }
 
+    async fn list_all(&self) -> Result<Vec<GuildSettings>, Error> {
+        let mut cursor = self.guild_settings.find(doc! {}).await?;
+        let mut results = Vec::new();
+        while let Some(document) = cursor.try_next().await? {
+            results.push(document.into_domain()?);
+        }
+        Ok(results)
+    }
+
     async fn upsert_module_settings(
         &self,
         guild_id: u64,
@@ -110,6 +122,40 @@ impl GuildSettingsRepository for MongoPersistence {
             .ok_or_else(|| anyhow::anyhow!("guild command settings upsert returned no document"))?;
         document.into_domain()
     }
+
+    async fn upsert_announcement_channel(
+        &self,
+        guild_id: u64,
+        channel_id: Option<u64>,
+    ) -> Result<GuildSettings, Error> {
+        let id = guild_document_id(guild_id);
+        let update = match channel_id {
+            Some(channel_id) => doc! {
+                "$setOnInsert": settings_set_on_insert(&id, None),
+                "$set": { "announcement_channel_id": channel_id.to_string() },
+            },
+            None => doc! {
+                "$setOnInsert": settings_set_on_insert(&id, None),
+                "$unset": { "announcement_channel_id": "" },
+            },
+        };
+        let document = self
+            .guild_settings
+            .find_one_and_update(doc! { "_id": &id }, update)
+            .upsert(true)
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("guild announcement channel upsert returned no document")
+            })?;
+        document.into_domain()
+    }
+
+    async fn reset_guild(&self, guild_id: u64) -> Result<(), Error> {
+        let id = guild_document_id(guild_id);
+        self.guild_settings.delete_one(doc! { "_id": &id }).await?;
+        Ok(())
+    }
 }
 
 #[async_trait]
@@ -119,9 +165,9 @@ impl DeploymentSettingsRepository for MongoPersistence {
             .deployment_settings
             .find_one(doc! { "_id": DEPLOYMENT_SETTINGS_ID })
             .await?;
-        Ok(document
+        document
             .unwrap_or_else(DeploymentSettingsDocument::default_document)
-            .into_domain())
+            .into_domain()
     }
 
     async fn upsert_module_settings(
@@ -142,7 +188,7 @@ impl DeploymentSettingsRepository for MongoPersistence {
             .ok_or_else(|| {
                 anyhow::anyhow!("deployment module settings upsert returned no document")
             })?;
-        Ok(document.into_domain())
+        document.into_domain()
     }
 
     async fn upsert_command_settings(
@@ -163,6 +209,34 @@ impl DeploymentSettingsRepository for MongoPersistence {
             .ok_or_else(|| {
                 anyhow::anyhow!("deployment command settings upsert returned no document")
             })?;
-        Ok(document.into_domain())
+        document.into_domain()
+    }
+
+    async fn upsert_operational_settings(
+        &self,
+        blocked_guild_ids: Vec<u64>,
+        module_notices: BTreeMap<String, String>,
+    ) -> Result<DeploymentSettings, Error> {
+        let blocked_strings = blocked_guild_ids
+            .into_iter()
+            .map(|id| id.to_string())
+            .collect::<Vec<_>>();
+        let update = doc! {
+            "$setOnInsert": settings_set_on_insert(DEPLOYMENT_SETTINGS_ID, None),
+            "$set": {
+                "blocked_guild_ids": blocked_strings,
+                "module_notices": to_bson(&module_notices)?,
+            },
+        };
+        let document = self
+            .deployment_settings
+            .find_one_and_update(doc! { "_id": DEPLOYMENT_SETTINGS_ID }, update)
+            .upsert(true)
+            .return_document(ReturnDocument::After)
+            .await?
+            .ok_or_else(|| {
+                anyhow::anyhow!("deployment operational settings upsert returned no document")
+            })?;
+        document.into_domain()
     }
 }

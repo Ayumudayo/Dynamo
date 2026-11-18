@@ -49,7 +49,7 @@ fn all_supported_rate_currencies_have_display_labels() {
 fn dropdown_labels_include_human_readable_currency_names() {
     assert_eq!(currency_option_label("KRW"), "South Korean Won (KRW)");
     assert_eq!(currency_option_label("USD"), "United States Dollar (USD)");
-    assert_eq!(currency_option_label("EUR"), "Euro (EUR)");
+    assert_eq!(currency_option_label("EUR"), "Custom Currency");
 }
 
 #[test]

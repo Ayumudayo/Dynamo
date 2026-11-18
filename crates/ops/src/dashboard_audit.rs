@@ -23,6 +23,8 @@ impl DashboardAuditScope {
 pub enum DashboardAuditEntityType {
     Module,
     Command,
+    Guild,
+    Operations,
 }
 
 impl DashboardAuditEntityType {
@@ -30,6 +32,8 @@ impl DashboardAuditEntityType {
         match self {
             Self::Module => "module",
             Self::Command => "command",
+            Self::Guild => "guild",
+            Self::Operations => "operations",
         }
     }
 }
@@ -39,6 +43,12 @@ impl DashboardAuditEntityType {
 pub enum DashboardAuditAction {
     Toggle,
     SaveSettings,
+    Sync,
+    Reset,
+    LeaveGuild,
+    BlockGuild,
+    UnblockGuild,
+    SendAnnouncement,
 }
 
 impl DashboardAuditAction {
@@ -46,6 +56,12 @@ impl DashboardAuditAction {
         match self {
             Self::Toggle => "toggle",
             Self::SaveSettings => "save_settings",
+            Self::Sync => "sync",
+            Self::Reset => "reset",
+            Self::LeaveGuild => "leave_guild",
+            Self::BlockGuild => "block_guild",
+            Self::UnblockGuild => "unblock_guild",
+            Self::SendAnnouncement => "send_announcement",
         }
     }
 }
@@ -66,7 +82,7 @@ pub struct DashboardAuditLogEntry {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Eq, PartialEq)]
 pub struct DashboardAuditLogQuery {
-    pub scope: DashboardAuditScope,
+    pub scope: Option<DashboardAuditScope>,
     pub guild_id: Option<u64>,
     pub entity_type: Option<DashboardAuditEntityType>,
     pub action: Option<DashboardAuditAction>,
@@ -75,9 +91,20 @@ pub struct DashboardAuditLogQuery {
 }
 
 impl DashboardAuditLogQuery {
+    pub fn all() -> Self {
+        Self {
+            scope: None,
+            guild_id: None,
+            entity_type: None,
+            action: None,
+            page: 1,
+            page_size: 20,
+        }
+    }
+
     pub fn deployment() -> Self {
         Self {
-            scope: DashboardAuditScope::Deployment,
+            scope: Some(DashboardAuditScope::Deployment),
             guild_id: None,
             entity_type: None,
             action: None,
@@ -88,7 +115,7 @@ impl DashboardAuditLogQuery {
 
     pub fn guild(guild_id: u64) -> Self {
         Self {
-            scope: DashboardAuditScope::Guild,
+            scope: Some(DashboardAuditScope::Guild),
             guild_id: Some(guild_id),
             entity_type: None,
             action: None,

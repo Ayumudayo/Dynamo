@@ -15,7 +15,6 @@ dynamo-runtime-api = { path = "../../runtime-api" }
 poise.workspace = true
 regex.workspace = true
 reqwest.workspace = true
-rss.workspace = true
 scraper.workspace = true
 serde.workspace = true
 serde_json.workspace = true

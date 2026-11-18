@@ -16,7 +16,7 @@ pub(crate) fn parse_ticket_details(channel: &GuildChannel) -> Option<(u64, Strin
 
 pub(crate) fn parse_ticket_topic(topic: &str) -> Option<(u64, String)> {
     let normalized = topic.replace("tіcket|", "ticket|");
-    let mut split = normalized.split('|');
+    let mut split = normalized.splitn(3, '|');
     let prefix = split.next()?;
     if prefix != "ticket" {
         return None;
@@ -24,6 +24,21 @@ pub(crate) fn parse_ticket_topic(topic: &str) -> Option<(u64, String)> {
     let user_id = split.next()?.parse().ok()?;
     let category_name = split.next().unwrap_or("Default").to_string();
     Some((user_id, category_name))
+}
+
+pub(crate) fn next_ticket_number(channels: &[GuildChannel]) -> u64 {
+    channels
+        .iter()
+        .filter_map(|channel| {
+            channel
+                .name
+                .strip_prefix("ticket-")
+                .or_else(|| channel.name.strip_prefix("tіcket-"))
+                .and_then(|suffix| suffix.parse::<u64>().ok())
+        })
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
 }
 
 pub(crate) async fn ticket_channels(
@@ -59,4 +74,21 @@ pub(crate) async fn current_guild_channel(
         Channel::Guild(channel) => Some(channel),
         _ => None,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::parse_ticket_topic;
+
+    #[test]
+    fn parse_ticket_topic_preserves_pipes_in_category_and_normalizes_cyrillic_prefix() {
+        assert_eq!(
+            parse_ticket_topic("ticket|42|Billing | VIP"),
+            Some((42, "Billing | VIP".to_string()))
+        );
+        assert_eq!(
+            parse_ticket_topic("tіcket|42|Support"),
+            Some((42, "Support".to_string()))
+        );
+    }
 }

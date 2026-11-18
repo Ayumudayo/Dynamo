@@ -1,8 +1,9 @@
 use crate::{
     cache::GameInfoCacheStore,
-    constants::{ERROR_EMBED_COLOR, GAMEINFO_THUMBNAIL_URL, SUCCESS_EMBED_COLOR},
+    constants::{ERROR_EMBED_COLOR, SUCCESS_EMBED_COLOR},
     lodestone::{
-        fetch_lodestone_html, lodestone_client, parse_article_title_and_body, parse_detail_links,
+        LodestoneLink, fetch_lodestone_html, lodestone_client, parse_article_title_and_body,
+        parse_detail_links,
     },
     translate::{translate_api_key, translate_optional_text},
 };
@@ -11,7 +12,9 @@ use chrono_tz::Asia::Tokyo;
 use dynamo_runtime_api::Error;
 use poise::serenity_prelude::{CreateEmbed, CreateEmbedFooter, Timestamp};
 use regex::Regex;
+use reqwest::{Client, StatusCode};
 use serde::{Deserialize, Serialize};
+use std::cmp::Reverse;
 use std::collections::HashSet;
 use std::sync::{
     Arc, OnceLock,
@@ -20,10 +23,14 @@ use std::sync::{
 use tokio::sync::{Mutex, RwLock};
 
 const MAINTENANCE_LIST_URL: &str = "https://jp.finalfantasyxiv.com/lodestone/news/category/2";
+const NOTICE_LINKS: &str = r#"a[href*="/lodestone/news/detail/"]"#;
+const MAINTENANCE_MODE_NOTICE_LINKS: &str = r#"body.error .ldst__error #toptabchanger_newsarea a.ic__maintenance--list[href*="/lodestone/news/detail/"]"#;
 const MAX_MAINTENANCE_CANDIDATES: usize = 6;
+const MAX_COMPLETED_NOTICES: usize = 256;
 const EXPIRED_MAINTENANCE_CACHE_GRACE_SECONDS: i64 = 24 * 60 * 60;
 static MAINTENANCE_INFO: OnceLock<Arc<RwLock<Option<MaintInfo>>>> = OnceLock::new();
 static POLLER_STARTED: AtomicBool = AtomicBool::new(false);
+static INITIAL_POLL_COMPLETE: AtomicBool = AtomicBool::new(false);
 static COMPLETED_NOTICES: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
 
 fn shared_info() -> Arc<RwLock<Option<MaintInfo>>> {
@@ -94,7 +101,21 @@ pub(crate) enum MaintenanceNoticeKind {
 }
 
 pub(crate) async fn fetch_maintenance_info() -> Result<Option<MaintInfo>, Error> {
-    Ok(shared_info().read().await.clone())
+    if shared_info().read().await.is_none()
+        && POLLER_STARTED.load(Ordering::SeqCst)
+        && !INITIAL_POLL_COMPLETE.load(Ordering::Acquire)
+    {
+        for _ in 0..15 {
+            tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+            if INITIAL_POLL_COMPLETE.load(Ordering::Acquire) || shared_info().read().await.is_some()
+            {
+                break;
+            }
+        }
+    }
+    let now = Utc::now().timestamp();
+    let current = shared_info().read().await.clone();
+    Ok(current.filter(|info| is_cache_usable(info, now)))
 }
 
 pub fn spawn_maintenance_poll_loop() {
@@ -104,7 +125,10 @@ pub fn spawn_maintenance_poll_loop() {
     let state = shared_info();
     tokio::spawn(async move {
         if let Ok(cached) = GameInfoCacheStore::new().load_maintinfo().await {
-            *state.write().await = cached.map(mark_stale);
+            let now = Utc::now().timestamp();
+            *state.write().await = cached
+                .filter(|info| is_cache_usable(info, now))
+                .map(mark_stale);
         }
         let mut consecutive_failures = 0u32;
         loop {
@@ -118,11 +142,18 @@ pub fn spawn_maintenance_poll_loop() {
                     if consecutive_failures == 1 {
                         tracing::warn!(%error, "maintenance polling failed; retrying with bounded backoff");
                     }
-                    if let Some(info) = state.write().await.as_mut() {
-                        info.stale = true;
+                    let now = Utc::now().timestamp();
+                    let mut guard = state.write().await;
+                    if let Some(info) = guard.as_mut() {
+                        if is_cache_usable(info, now) {
+                            info.stale = true;
+                        } else {
+                            *guard = None;
+                        }
                     }
                 }
             }
+            INITIAL_POLL_COMPLETE.store(true, Ordering::Release);
             let now = Utc::now().timestamp();
             let info = state.read().await.clone();
             let interval = if consecutive_failures > 0 {
@@ -144,11 +175,10 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
     let now = Utc::now().timestamp();
     let client = lodestone_client()?;
     let (mut cached, mut cancellations) = cache_store.load_maintenance_state().await?;
+    cached = cached.filter(|info| is_cache_usable(info, now));
     let wants_translation = translate_api_key().is_some();
 
-    let list_html = fetch_lodestone_html(&client, MAINTENANCE_LIST_URL).await?;
-
-    let candidates = parse_maintenance_candidates(&list_html);
+    let candidates = fetch_maintenance_candidates(&client, MAINTENANCE_LIST_URL).await?;
     for candidate in candidates.into_iter().take(MAX_MAINTENANCE_CANDIDATES) {
         if cancellations.iter().any(|entry| {
             entry.notice_url == candidate.url
@@ -157,7 +187,7 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
             continue;
         }
         if !should_recheck_notice_detail(&candidate.url, cached.as_ref(), now) {
-            // The listing is newest first. Preserve this cached notice rather
+            // Candidates are newest first. Preserve this cached notice rather
             // than replacing it with an older original notice below it.
             break;
         }
@@ -202,11 +232,14 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
             continue;
         }
         if should_skip_historical_notice(&next, cached.as_ref(), now) {
-            COMPLETED_NOTICES
+            let mut completed = COMPLETED_NOTICES
                 .get_or_init(|| Mutex::new(HashSet::new()))
                 .lock()
-                .await
-                .insert(candidate.url);
+                .await;
+            if completed.len() >= MAX_COMPLETED_NOTICES {
+                completed.clear();
+            }
+            completed.insert(candidate.url);
             continue;
         }
         if let Some((_, body)) = parse_article_title_and_body(&detail_html) {
@@ -247,7 +280,9 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
         return Ok(Some(next));
     }
 
-    Ok(cached.map(mark_stale))
+    Ok(cached
+        .filter(|info| is_cache_usable(info, now))
+        .map(mark_stale))
 }
 
 pub(crate) fn should_skip_historical_notice(
@@ -326,11 +361,34 @@ fn mark_stale(mut info: MaintInfo) -> MaintInfo {
     info
 }
 
-fn parse_maintenance_candidates(html: &str) -> Vec<crate::lodestone::LodestoneLink> {
-    parse_detail_links(html, r#"a[href*="/lodestone/news/detail/"]"#)
+async fn fetch_maintenance_candidates(
+    client: &Client,
+    url: &str,
+) -> Result<Vec<LodestoneLink>, Error> {
+    let response = client.get(url).send().await?;
+    if response.status() == StatusCode::SERVICE_UNAVAILABLE {
+        // The Lodestone maintenance page returns 503 with its news tabs intact.
+        let error = response.error_for_status_ref().expect_err("503 response");
+        let candidates =
+            parse_maintenance_candidates(&response.text().await?, MAINTENANCE_MODE_NOTICE_LINKS);
+        if candidates.is_empty() {
+            return Err(error.into());
+        }
+        return Ok(candidates);
+    }
+    let html = response.error_for_status()?.text().await?;
+    Ok(parse_maintenance_candidates(&html, NOTICE_LINKS))
+}
+
+fn parse_maintenance_candidates(html: &str, selector: &str) -> Vec<LodestoneLink> {
+    let mut candidates: Vec<_> = parse_detail_links(html, selector)
         .into_iter()
         .filter(|link| is_japan_maintenance_title(&link.title))
-        .collect()
+        .collect();
+    // Special notices can appear before newer items, including their follow-ups.
+    // Stable sorting preserves the listing order when timestamps are absent.
+    candidates.sort_by_key(|link| Reverse(link.published_at));
+    candidates
 }
 
 fn parse_maintenance_detail(url: &str, html: &str) -> Result<Option<MaintInfo>, Error> {
@@ -480,7 +538,6 @@ pub(crate) fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
         .title(&info.title_kr)
         .url(&info.url)
         .color(SUCCESS_EMBED_COLOR)
-        .thumbnail(GAMEINFO_THUMBNAIL_URL)
         .timestamp(Timestamp::now())
         .field("시작 시각", format!("<t:{}:F>", info.start_stamp), false)
         .field(
@@ -531,7 +588,6 @@ pub(crate) fn create_maintenance_error_embed() -> CreateEmbed {
         .description("현재 점검 공지가 없거나 API 업데이트가 되지 않았습니다.")
         .url("https://jp.finalfantasyxiv.com/lodestone")
         .color(ERROR_EMBED_COLOR)
-        .thumbnail(GAMEINFO_THUMBNAIL_URL)
         .footer(CreateEmbedFooter::new("From Lodestone News"))
 }
 
@@ -723,8 +779,84 @@ pub(crate) fn format_maintenance_title(
 }
 
 #[cfg(test)]
-mod cancellation_tests {
+mod tests {
     use super::*;
+    use std::io::{BufRead, BufReader, Write};
+    use std::net::TcpListener;
+
+    async fn fetch_test_listing(status: &str, html: &str) -> Result<Vec<LodestoneLink>, Error> {
+        let listener = TcpListener::bind("127.0.0.1:0")?;
+        let url = format!(
+            "http://{}/lodestone/news/category/2",
+            listener.local_addr()?
+        );
+        let response = format!(
+            "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{html}",
+            html.len()
+        );
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            for line in BufReader::new(&mut stream).lines() {
+                if line.unwrap().is_empty() {
+                    break;
+                }
+            }
+            stream.write_all(response.as_bytes()).unwrap();
+        });
+        let client = Client::builder().no_proxy().build()?;
+        let candidates = fetch_maintenance_candidates(&client, &url).await;
+        server.join().unwrap();
+        candidates
+    }
+
+    #[tokio::test]
+    async fn selects_newer_follow_up_before_pinned_original_in_maintenance_mode()
+    -> Result<(), Error> {
+        let html = r#"
+            <body class="error">
+              <div class="ldst__error"><div id="toptabchanger_newsarea">
+                <h2>特別なお知らせ</h2>
+                <a class="ic__maintenance--list" href="/lodestone/news/detail/original">
+                  全ワールド メンテナンス作業のお知らせ
+                  <time><script>ldst_strftime(1793948400, 'YMD');</script></time>
+                </a>
+                <h2>最新ニュース</h2>
+                <a class="ic__maintenance--list" href="/lodestone/news/detail/companion">
+                  コンパニオンアプリ メンテナンス作業 終了時間変更のお知らせ
+                  <time><script>ldst_strftime(1794301200, 'YMD');</script></time>
+                </a>
+                <a class="ic__maintenance--list" href="/lodestone/news/detail/follow-up">
+                  [続報] 全ワールド メンテナンス作業 終了時間変更のお知らせ
+                  <time><script>ldst_strftime(1794300900, 'YMD');</script></time>
+                </a>
+                <a class="ic__maintenance--list" href="/lodestone/news/detail/original">
+                  全ワールド メンテナンス作業のお知らせ
+                  <time><script>ldst_strftime(1793948400, 'YMD');</script></time>
+                </a>
+              </div></div>
+            </body>"#;
+        let candidates = fetch_test_listing("503 Service Unavailable", html).await?;
+        assert_eq!(candidates.len(), 2);
+        assert!(candidates[0].url.ends_with("/follow-up"));
+        assert!(candidates[1].url.ends_with("/original"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn rejects_503_without_the_lodestone_maintenance_listing() {
+        let html = r#"<body class="error">
+            <a class="ic__maintenance--list" href="/lodestone/news/detail/original">
+                全ワールド メンテナンス作業のお知らせ
+            </a>
+        </body>"#;
+        let error = fetch_test_listing("503 Service Unavailable", html)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            error.downcast_ref::<reqwest::Error>().unwrap().status(),
+            Some(StatusCode::SERVICE_UNAVAILABLE)
+        );
+    }
 
     #[tokio::test]
     async fn cancellation_invalidates_snapshot_before_later_poll_errors() {

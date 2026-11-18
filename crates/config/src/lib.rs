@@ -6,7 +6,6 @@ pub type Error = anyhow::Error;
 pub struct AppConfig {
     pub discord: DiscordConfig,
     pub commands: CommandSyncConfig,
-    pub optional_modules: OptionalModulesConfig,
 }
 
 impl AppConfig {
@@ -48,7 +47,6 @@ impl AppConfig {
             commands: CommandSyncConfig {
                 sync_interval_seconds: parse_u64_env("DISCORD_COMMAND_SYNC_INTERVAL_SECONDS", 15)?,
             },
-            optional_modules: OptionalModulesConfig::from_env()?,
         })
     }
 }
@@ -63,15 +61,6 @@ pub struct DiscordConfig {
 #[derive(Debug, Clone)]
 pub struct CommandSyncConfig {
     pub sync_interval_seconds: u64,
-}
-
-#[derive(Debug, Clone, Default)]
-pub struct OptionalModulesConfig;
-
-impl OptionalModulesConfig {
-    pub fn from_env() -> Result<Self, Error> {
-        Ok(Self)
-    }
 }
 
 fn parse_bool_value(key: &str, value: &str) -> Result<bool, Error> {

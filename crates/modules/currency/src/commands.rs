@@ -1,10 +1,9 @@
-use dynamo_access::module_access_for_context;
+use dynamo_domain_currency::ExchangeRateSourceKind;
 use dynamo_runtime_api::{Context, Error};
 use futures_util::future::join_all;
 use poise::serenity_prelude::{CreateEmbed, CreateEmbedFooter, Timestamp};
 
 use super::{
-    MODULE_ID,
     currency::{
         TOSS_EXCHANGE_SUPPORT_ERROR, is_toss_maintenance_error, resolve_explicit_exchange_pair,
         resolve_rate_base_currency, sanitize_rate_targets,
@@ -13,32 +12,51 @@ use super::{
     settings::{load_exchange_defaults, load_rate_targets},
 };
 
-const CURRENCY_THUMBNAIL_URL: &str = "https://cdn.discordapp.com/attachments/1138398345065414657/1138816034049105940/gil.png?ex=65c37c14&is=65b10714&hm=725d32835f239f48cf0a3485491431c7d02a1750b53c9086210d765b89e798f8&";
+const MAX_EXCHANGE_AMOUNT: f64 = 1e15;
 const BOT_EMBED_COLOR: u32 = 0x068ADD;
 pub(super) const TOSS_EXCHANGE_PROVIDER_FOOTER: &str = "Toss Invest";
 const TOSS_MAINTENANCE_MESSAGE: &str = "Toss Invest is under maintenance. Please try again later.";
+
+#[derive(Debug, Clone, Copy, poise::ChoiceParameter)]
+pub(super) enum CurrencyChoice {
+    #[name = "USD"]
+    Usd,
+    #[name = "KRW"]
+    Krw,
+}
+
+impl CurrencyChoice {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Usd => "USD",
+            Self::Krw => "KRW",
+        }
+    }
+}
+
+fn validate_amount(amount: f64) -> Result<(), &'static str> {
+    if !amount.is_finite() || amount <= 0.0 || amount > MAX_EXCHANGE_AMOUNT {
+        return Err("Amount must be a finite positive number up to 1,000,000,000,000,000.");
+    }
+    Ok(())
+}
 
 /// Convert one currency amount into another currency.
 #[poise::command(slash_command, category = "Currency")]
 pub(super) async fn exchange(
     ctx: Context<'_>,
-    #[description = "KRW or USD. Default: USD"] from: Option<String>,
-    #[description = "KRW or USD. Default: KRW"] to: Option<String>,
+    #[description = "KRW or USD. Default: USD"] from: Option<CurrencyChoice>,
+    #[description = "KRW or USD. Default: KRW"] to: Option<CurrencyChoice>,
     #[description = "The amount of currency. / Default : 1.0"] amount: Option<f64>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
 
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
-        .await?
-        .denial_reason
-    {
-        ctx.say(reason).await?;
-        return Ok(());
-    }
-
     let defaults = load_exchange_defaults(ctx).await?;
-    let (from, to) = match resolve_explicit_exchange_pair(from.as_deref(), to.as_deref(), &defaults)
-    {
+    let (from, to) = match resolve_explicit_exchange_pair(
+        from.map(CurrencyChoice::as_str),
+        to.map(CurrencyChoice::as_str),
+        &defaults,
+    ) {
         Ok(pair) => pair,
         Err(message) => {
             ctx.say(message).await?;
@@ -46,6 +64,10 @@ pub(super) async fn exchange(
         }
     };
     let amount = amount.unwrap_or(defaults.default_amount);
+    if let Err(message) = validate_amount(amount) {
+        ctx.say(message).await?;
+        return Ok(());
+    }
     let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
         ctx.say("The exchange-rate service is not available in this deployment.")
             .await?;
@@ -66,11 +88,21 @@ pub(super) async fn exchange(
         }
     };
     let converted = quote.rate * amount;
+    let footer_text = if quote.source_kind == ExchangeRateSourceKind::Cache {
+        format!(
+            "{TOSS_EXCHANGE_PROVIDER_FOOTER} • {} (cached)",
+            quote.source_timestamp_text
+        )
+    } else {
+        format!(
+            "{TOSS_EXCHANGE_PROVIDER_FOOTER} • {}",
+            quote.source_timestamp_text
+        )
+    };
     let embed = CreateEmbed::new()
         .title(format!("Exchange rate from {from} to {to}"))
-        .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new(TOSS_EXCHANGE_PROVIDER_FOOTER))
+        .footer(CreateEmbedFooter::new(footer_text))
         .timestamp(Timestamp::now())
         .field("From", format!("{} {from}", format_decimal(amount)), false)
         .field("To", format!("{} {to}", format_decimal(converted)), false);
@@ -83,21 +115,13 @@ pub(super) async fn exchange(
 #[poise::command(slash_command, category = "Currency")]
 pub(super) async fn rate(
     ctx: Context<'_>,
-    #[description = "KRW or USD. Default: USD"] from: Option<String>,
+    #[description = "KRW or USD. Default: USD"] from: Option<CurrencyChoice>,
     #[description = "The amount of currency (default: 1.0)"] amount: Option<f64>,
 ) -> Result<(), Error> {
     ctx.defer().await?;
 
-    if let Some(reason) = module_access_for_context(ctx, MODULE_ID)
-        .await?
-        .denial_reason
-    {
-        ctx.say(reason).await?;
-        return Ok(());
-    }
-
     let defaults = load_exchange_defaults(ctx).await?;
-    let from = match resolve_rate_base_currency(from.as_deref(), &defaults) {
+    let from = match resolve_rate_base_currency(from.map(CurrencyChoice::as_str), &defaults) {
         Ok(from) => from,
         Err(message) => {
             ctx.say(message).await?;
@@ -105,6 +129,10 @@ pub(super) async fn rate(
         }
     };
     let amount = amount.unwrap_or(defaults.default_amount);
+    if let Err(message) = validate_amount(amount) {
+        ctx.say(message).await?;
+        return Ok(());
+    }
     let rate_targets = sanitize_rate_targets(&from, load_rate_targets(ctx).await?);
     let Some(service) = ctx.data().services.exchange_rates.as_ref() else {
         ctx.say("The exchange-rate service is not available in this deployment.")
@@ -135,14 +163,27 @@ pub(super) async fn rate(
         ctx.say(message).await?;
         return Ok(());
     }
+    let mut footer_text = TOSS_EXCHANGE_PROVIDER_FOOTER.to_string();
+    if let Some(first_ok) = responses.iter().find_map(|(_, res)| res.as_ref().ok()) {
+        footer_text = if first_ok.source_kind == ExchangeRateSourceKind::Cache {
+            format!(
+                "{TOSS_EXCHANGE_PROVIDER_FOOTER} • {} (cached)",
+                first_ok.source_timestamp_text
+            )
+        } else {
+            format!(
+                "{TOSS_EXCHANGE_PROVIDER_FOOTER} • {}",
+                first_ok.source_timestamp_text
+            )
+        };
+    }
     let mut embed = CreateEmbed::new()
         .title(format!(
             "Exchange rate from {} {from}",
             format_decimal(amount)
         ))
-        .thumbnail(CURRENCY_THUMBNAIL_URL)
         .color(BOT_EMBED_COLOR)
-        .footer(CreateEmbedFooter::new(TOSS_EXCHANGE_PROVIDER_FOOTER))
+        .footer(CreateEmbedFooter::new(footer_text))
         .timestamp(Timestamp::now());
 
     for (currency, rate) in responses {

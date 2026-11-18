@@ -58,6 +58,7 @@ pub(super) fn build_fixture_state(
             .collect(),
         access_token: String::new(),
         expires_at: fixture.session_expires_at()?,
+        csrf_token: "perf-csrf-token".to_string(),
     };
     let sessions = HashMap::from([(runtime.cookie_value.clone(), session)]);
     let http = reqwest::Client::builder()
@@ -89,7 +90,7 @@ pub(super) fn build_fixture_state(
             bot_token: String::new(),
             client_secret: String::new(),
             invite_permissions: 0,
-            admin_user_ids: vec![user_id],
+            owner_totp_secret: None,
             register_globally: false,
             command_sync_interval_seconds: 15,
         },
@@ -106,7 +107,10 @@ pub(super) fn build_fixture_state(
         persistence,
         sessions: Arc::new(RwLock::new(sessions)),
         oauth_states: Arc::new(RwLock::new(HashMap::new())),
+        owner_security: Default::default(),
         perf_runtime: Some(runtime),
+        #[cfg(feature = "local-preview")]
+        local_preview: None,
     }))
 }
 
@@ -120,6 +124,7 @@ pub(super) fn build_perf_router(state: Arc<DashboardState>, runtime: Arc<PerfRun
         )
         .route("/__perf/shutdown", post(shutdown_harness))
         .with_state(state)
+        .layer(middleware::from_fn(super::super::assets::security_headers))
         .layer(middleware::from_fn(super::super::log_request))
         .layer(middleware::from_fn_with_state(
             runtime,
