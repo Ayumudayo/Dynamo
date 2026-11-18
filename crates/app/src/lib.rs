@@ -278,44 +278,39 @@ async fn send_interaction_error_fallback(ctx: &Context, interaction: &Interactio
     } else {
         "An internal error occurred while processing this interaction."
     };
-    match interaction {
-        Interaction::Component(component) => {
-            if component
-                .create_response(
-                    ctx,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content(text)
-                            .ephemeral(true),
-                    ),
-                )
-                .await
-                .is_err()
-            {
-                let _ = component
-                    .edit_response(ctx, EditInteractionResponse::new().content(text))
-                    .await;
-            }
+    if let Interaction::Component(component) = interaction {
+        if component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(text)
+                        .ephemeral(true),
+                ),
+            )
+            .await
+            .is_err()
+        {
+            let _ = component
+                .edit_response(ctx, EditInteractionResponse::new().content(text))
+                .await;
         }
-        Interaction::Modal(modal) => {
-            if modal
-                .create_response(
-                    ctx,
-                    CreateInteractionResponse::Message(
-                        CreateInteractionResponseMessage::new()
-                            .content(text)
-                            .ephemeral(true),
-                    ),
-                )
-                .await
-                .is_err()
-            {
-                let _ = modal
-                    .edit_response(ctx, EditInteractionResponse::new().content(text))
-                    .await;
-            }
-        }
-        _ => {}
+    } else if let Interaction::Modal(modal) = interaction
+        && modal
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(text)
+                        .ephemeral(true),
+                ),
+            )
+            .await
+            .is_err()
+    {
+        let _ = modal
+            .edit_response(ctx, EditInteractionResponse::new().content(text))
+            .await;
     }
 }
 

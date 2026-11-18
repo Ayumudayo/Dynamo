@@ -870,7 +870,6 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
- "dynamo-access",
  "dynamo-domain-currency",
  "dynamo-module-kit",
  "dynamo-runtime-api",
@@ -888,7 +887,6 @@ dependencies = [
  "anyhow",
  "chrono",
  "chrono-tz",
- "dynamo-access",
  "dynamo-module-kit",
  "dynamo-runtime-api",
  "poise",
