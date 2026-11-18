@@ -8,12 +8,18 @@ default-run = "dynamo-dashboard"
 
 [features]
 default = []
-perf-harness = ["dep:async-trait", "dep:dynamo-repositories", "dep:sha2", "tokio/time"]
+perf-harness = ["dep:async-trait", "dep:dynamo-repositories", "tokio/time"]
+local-preview = ["dep:async-trait", "dep:dynamo-repositories"]
 
 [[bin]]
 name = "dynamo-dashboard-perf-harness"
 path = "src/perf_harness_main.rs"
 required-features = ["perf-harness"]
+
+[[bin]]
+name = "dynamo-dashboard-preview"
+path = "src/local_preview_main.rs"
+required-features = ["local-preview"]
 
 [dependencies]
 anyhow.workspace = true
@@ -21,6 +27,7 @@ async-trait = { workspace = true, optional = true }
 axum.workspace = true
 axum-extra.workspace = true
 chrono.workspace = true
+data-encoding.workspace = true
 dynamo-app = { path = "../app" }
 dynamo-enablement = { path = "../enablement" }
 dynamo-module-kit = { path = "../module-kit" }
@@ -32,11 +39,15 @@ dynamo-repositories = { path = "../repositories", optional = true }
 dynamo-settings = { path = "../settings" }
 dotenvy.workspace = true
 futures-util.workspace = true
+hmac.workspace = true
+maud.workspace = true
 rand.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2 = { workspace = true, optional = true }
+sha1.workspace = true
+sha2.workspace = true
+subtle.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 url.workspace = true

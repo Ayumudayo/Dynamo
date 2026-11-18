@@ -1,4 +1,4 @@
-use mongodb::bson::doc;
+use mongodb::{IndexModel, bson::doc};
 
 use crate::{Error, MongoPersistence, config::DEPLOYMENT_SETTINGS_ID};
 
@@ -36,6 +36,8 @@ impl MongoPersistence {
             }
         }
 
+        self.ensure_indexes().await?;
+
         let deployment_settings_result = self
             .deployment_settings
             .update_one(
@@ -59,6 +61,54 @@ impl MongoPersistence {
             final_collections,
             deployment_settings_seeded: deployment_settings_result.upserted_id.is_some(),
         })
+    }
+
+    async fn ensure_indexes(&self) -> Result<(), Error> {
+        fn index(keys: mongodb::bson::Document) -> IndexModel {
+            IndexModel::builder().keys(keys).build()
+        }
+
+        self.suggestions
+            .create_index(index(doc! { "guild_id": 1, "message_id": 1 }))
+            .await?;
+
+        self.giveaways
+            .create_indexes([
+                index(doc! { "guild_id": 1, "message_id": 1 }),
+                index(doc! { "status": 1, "ends_at": 1 }),
+                index(doc! { "message_sync_pending": 1 }),
+                index(doc! { "announcement_pending": 1 }),
+                index(doc! { "guild_id": 1, "created_at": -1 }),
+            ])
+            .await?;
+
+        self.invite_members
+            .create_index(index(doc! { "guild_id": 1, "member_id": 1 }))
+            .await?;
+
+        self.member_stats
+            .create_indexes([
+                index(doc! { "guild_id": 1, "member_id": 1 }),
+                index(doc! { "guild_id": 1, "level": -1, "xp": -1 }),
+                index(doc! { "guild_id": 1, "messages": -1 }),
+                index(doc! { "guild_id": 1, "voice.time_seconds": -1 }),
+            ])
+            .await?;
+
+        self.warning_logs
+            .create_index(index(
+                doc! { "guild_id": 1, "member_id": 1, "created_at": -1 },
+            ))
+            .await?;
+
+        self.dashboard_audit_logs
+            .create_indexes([
+                index(doc! { "timestamp": -1, "_id": -1 }),
+                index(doc! { "scope": 1, "guild_id": 1, "timestamp": -1, "_id": -1 }),
+            ])
+            .await?;
+
+        Ok(())
     }
 
     pub async fn ensure_initialized(&self) -> Result<(), Error> {

@@ -1,11 +1,12 @@
 use std::time::Duration;
 
 use reqwest::header::{AUTHORIZATION, CONTENT_TYPE};
+use serde::Deserialize;
 use url::Url;
 
 use crate::state::{
     DASHBOARD_CONNECT_TIMEOUT, DASHBOARD_REQUEST_TIMEOUT, DISCORD_API_BASE,
-    DiscordApplicationResponse, SESSION_TTL_HOURS,
+    DiscordApplicationResponse, SESSION_TTL_HOURS, deserialize_u64_from_discord_id,
 };
 use crate::{
     DashboardConfig, DashboardGuild, DashboardSession, DashboardState, DashboardUser,
@@ -97,7 +98,71 @@ pub(crate) fn build_oauth_session(
         guilds,
         access_token: token.access_token,
         expires_at: chrono::Utc::now() + chrono::Duration::hours(SESSION_TTL_HOURS),
+        csrf_token: crate::auth::random_token(32),
     })
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub(crate) struct BotGuildSummary {
+    #[serde(deserialize_with = "deserialize_u64_from_discord_id")]
+    pub(crate) id: u64,
+    pub(crate) name: String,
+    #[allow(dead_code)]
+    pub(crate) icon: Option<String>,
+    #[allow(dead_code)]
+    #[serde(default)]
+    pub(crate) owner: bool,
+}
+
+pub(crate) async fn fetch_bot_guilds(
+    state: &DashboardState,
+) -> anyhow::Result<Vec<BotGuildSummary>> {
+    #[cfg(feature = "perf-harness")]
+    if state.perf_runtime.is_some() {
+        return Ok(Vec::new());
+    }
+
+    #[cfg(feature = "local-preview")]
+    if let Some(preview) = state.local_preview.as_ref() {
+        return Ok(preview.bot_guilds().await);
+    }
+
+    let request = state
+        .http
+        .get(format!(
+            "{}/users/@me/guilds?limit=200",
+            state.discord_api_base
+        ))
+        .header(AUTHORIZATION, format!("Bot {}", state.config.bot_token));
+    let response = send_dashboard_http(state, request)
+        .await?
+        .error_for_status()?;
+    Ok(response.json::<Vec<BotGuildSummary>>().await?)
+}
+
+pub(crate) async fn leave_bot_guild(state: &DashboardState, guild_id: u64) -> anyhow::Result<()> {
+    #[cfg(feature = "perf-harness")]
+    if state.perf_runtime.is_some() {
+        anyhow::bail!("perf harness cannot leave guilds");
+    }
+
+    #[cfg(feature = "local-preview")]
+    if let Some(preview) = state.local_preview.as_ref() {
+        preview.leave_guild(guild_id).await?;
+        return Ok(());
+    }
+
+    let request = state
+        .http
+        .delete(format!(
+            "{}/users/@me/guilds/{guild_id}",
+            state.discord_api_base
+        ))
+        .header(AUTHORIZATION, format!("Bot {}", state.config.bot_token));
+    send_dashboard_http(state, request)
+        .await?
+        .error_for_status()?;
+    Ok(())
 }
 
 /// Sends a dashboard-owned request unless the performance harness explicitly
@@ -106,13 +171,18 @@ pub(crate) async fn send_dashboard_http(
     state: &DashboardState,
     request: reqwest::RequestBuilder,
 ) -> anyhow::Result<reqwest::Response> {
-    #[cfg(not(feature = "perf-harness"))]
+    #[cfg(not(any(feature = "perf-harness", feature = "local-preview")))]
     let _ = state;
 
     #[cfg(feature = "perf-harness")]
     if let Some(runtime) = state.perf_runtime.as_ref() {
         runtime.deny_outbound();
         anyhow::bail!("external HTTP is disabled by the dashboard performance harness");
+    }
+
+    #[cfg(feature = "local-preview")]
+    if state.local_preview.is_some() {
+        anyhow::bail!("external HTTP is disabled in dashboard local preview mode");
     }
 
     execute_dashboard_http(request).await

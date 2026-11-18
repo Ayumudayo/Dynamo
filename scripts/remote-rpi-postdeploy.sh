@@ -51,6 +51,8 @@ if [[ "$env_was_absent" == "true" ]]; then
 fi
 
 cd "$APP_DIR"
+command -v node >/dev/null || { echo 'Node.js is required to verify the deployment bundle.' >&2; exit 1; }
+node "$APP_DIR/scripts/lib/rpi-artifact.cjs" verify "$APP_DIR"
 
 if [[ "$BOOTSTRAP_MODE" == "force" ]]; then
   ./scripts/prod-bootstrap.sh
@@ -140,3 +142,4 @@ fi
 if ! pm2 save >/dev/null 2>&1; then
   echo "Warning: pm2 save failed. Processes were restarted, but the PM2 process list was not persisted." >&2
 fi
+node "$APP_DIR/scripts/lib/rpi-artifact.cjs" running "$APP_DIR"

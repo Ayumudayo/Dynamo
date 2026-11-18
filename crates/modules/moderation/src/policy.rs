@@ -11,7 +11,6 @@ pub struct ModerationTargetFacts {
     pub bot_permissions: Permissions,
     pub bot_top_role: i64,
     pub target_id: UserId,
-    pub target_is_bot: bool,
     pub target_top_role: i64,
     pub guild_owner_id: UserId,
 }
@@ -34,7 +33,7 @@ impl fmt::Display for ModerationTargetDenial {
             Self::ActorPermission => "You do not have the required Discord permission.",
             Self::BotPermission => "The bot does not have the required Discord permission.",
             Self::SelfTarget => "You cannot moderate yourself.",
-            Self::BotTarget => "Bots are protected moderation targets.",
+            Self::BotTarget => "I cannot moderate myself.",
             Self::GuildOwnerTarget => "The server owner is a protected moderation target.",
             Self::ActorHierarchy => "You do not have permission to moderate this member.",
             Self::BotHierarchy => "The bot cannot moderate this member due to role hierarchy.",
@@ -58,7 +57,7 @@ pub fn authorize_moderation_target(
     if facts.target_id == facts.actor_id {
         return Err(ModerationTargetDenial::SelfTarget);
     }
-    if facts.target_is_bot {
+    if facts.target_id == facts.bot_id {
         return Err(ModerationTargetDenial::BotTarget);
     }
     if facts.target_id == facts.guild_owner_id {
@@ -88,7 +87,6 @@ mod tests {
             bot_permissions: Permissions::KICK_MEMBERS,
             bot_top_role: 30,
             target_id: UserId::new(3),
-            target_is_bot: false,
             target_top_role: 10,
             guild_owner_id: UserId::new(4),
         }
@@ -116,7 +114,7 @@ mod tests {
         assert_denied(self_target, ModerationTargetDenial::SelfTarget);
 
         let mut bot_target = fixture();
-        bot_target.target_is_bot = true;
+        bot_target.target_id = bot_target.bot_id;
         assert_denied(bot_target, ModerationTargetDenial::BotTarget);
 
         let mut guild_owner = fixture();
@@ -153,13 +151,13 @@ mod tests {
         assert_denied(bot_before_self, ModerationTargetDenial::BotPermission);
 
         let mut self_before_bot = fixture();
+        self_before_bot.bot_id = self_before_bot.actor_id;
         self_before_bot.target_id = self_before_bot.actor_id;
-        self_before_bot.target_is_bot = true;
         assert_denied(self_before_bot, ModerationTargetDenial::SelfTarget);
 
         let mut bot_before_owner = fixture();
-        bot_before_owner.target_id = bot_before_owner.guild_owner_id;
-        bot_before_owner.target_is_bot = true;
+        bot_before_owner.bot_id = bot_before_owner.guild_owner_id;
+        bot_before_owner.target_id = bot_before_owner.bot_id;
         assert_denied(bot_before_owner, ModerationTargetDenial::BotTarget);
 
         let mut owner_before_actor_hierarchy = fixture();
@@ -195,6 +193,23 @@ mod tests {
         assert_eq!(
             authorize_moderation_target(&facts, Permissions::KICK_MEMBERS),
             Ok(())
+        );
+    }
+
+    #[test]
+    fn other_bots_with_lower_role_can_be_moderated_while_self_bot_is_denied() {
+        let mut other_bot = fixture();
+        other_bot.target_id = UserId::new(999);
+        assert_eq!(
+            authorize_moderation_target(&other_bot, Permissions::KICK_MEMBERS),
+            Ok(())
+        );
+
+        let mut self_bot = fixture();
+        self_bot.target_id = self_bot.bot_id;
+        assert_eq!(
+            authorize_moderation_target(&self_bot, Permissions::KICK_MEMBERS),
+            Err(ModerationTargetDenial::BotTarget)
         );
     }
 }

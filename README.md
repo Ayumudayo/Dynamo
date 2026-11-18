@@ -73,7 +73,7 @@ Common optional variables:
 - `DASHBOARD_BASE_URL` default: `http://127.0.0.1:3000`
 - `DISCORD_CLIENT_SECRET` or `BOT_SECRET` required for dashboard OAuth login
 - `GOOGLE_TRANSLATE_API_KEY` optional: enables Korean translation for Lodestone `maint` and `pll` notice text
-- `DASHBOARD_ADMIN_USER_IDS` optional comma-separated override for deployment-wide dashboard admins
+- `DASHBOARD_OWNER_TOTP_SECRET` Base32 RFC 6238 TOTP secret required for the Discord application owner to unlock the `/deployment` App Owner Console and authorize destructive/broadcast actions
 - `DISCORD_COMMAND_SYNC_INTERVAL_SECONDS` default: `15`
 - `RUST_LOG` optional tracing filter; defaults to `info`
 
@@ -300,16 +300,23 @@ Node tooling at the repository root is now limited to Playwright smoke only. The
 
 The companion dashboard exposes:
 
-- Discord OAuth login with a Dyno-style server selector for guilds you can manage
-- selector pages that show only global navigation until you enter a deployment or guild context
+- Discord OAuth login with a server selector for guilds you can manage, plus a server switcher in the sidebar
 - deployment-level module install/enable toggles
-- guild-level module enablement and structured settings forms
+- guild-level module enablement and structured settings forms with channel/role pickers, color, URL, list, and JSON editors, client-side validation, and a live embed preview for greeting messages
 - deployment-level and guild-level command toggles for individual leaf slash commands
-- deployment-level and guild-level manual command sync buttons with sync status panels
-- tabbed `Overview`, `Modules`, `Commands`, and `Logs` views for guild and deployment pages
-- dashboard audit logs for dashboard-originated module and command changes
+- deployment-level and guild-level manual command sync buttons with sync status panels that refresh after every change
+- tabbed `Overview`, `Modules`, `Commands`, and `Logs` views for guild and deployment pages; the overview summarizes sync state, blocked items, active ratios, and recent changes
+- an activation chain (installed → deployment → server) with an `Active` / `Off` / `Blocked` badge and the blocking reason on every module and command card
+- dashboard audit logs for dashboard-originated module and command changes, shown in the viewer's time zone
 - effective module state rendering shared with the runtime guard layer
 - explicit, human-written command descriptions in the dashboard command catalog
+- English and Korean UI. The language follows the browser's `Accept-Language` header and can be switched from the sidebar (stored in the `dynamo_lang` cookie). Module, settings, and command text supplied by modules is translated through `crates/dashboard/src/i18n/catalog_ko.rs`; a unit test fails when a registered module adds text without a Korean entry.
+
+Front-end notes:
+
+- Pages are server-rendered with [`maud`](https://maud.lambda.xyz) templates (escaped by default). Styles and scripts live in `crates/dashboard/assets/` and are served from content-addressed URLs with immutable caching.
+- Responses carry a strict Content-Security-Policy: no inline event handlers or styles; the only inline script is a one-line boot script allowed by hash.
+- Settings dialogs are loaded on demand from `/guild/<guild_id>/settings/<module|command>/<id>` (or `/deployment/settings/...`).
 
 Command sync behavior:
 
@@ -325,12 +332,22 @@ Open:
 - [http://127.0.0.1:3000/deployment](http://127.0.0.1:3000/deployment)
 - `http://127.0.0.1:3000/guild/<guild_id>`
 
+Local preview (offline demo without `.env`, Discord OAuth, or MongoDB):
+
+```powershell
+npm run dashboard:preview
+# or directly:
+cargo run -p dynamo-dashboard --features local-preview --bin dynamo-dashboard-preview
+```
+
+Set `DASHBOARD_PREVIEW_PORT` to override the default port `3000`. All changes in preview mode live in memory; `/login` signs in immediately with sample guilds, channel/role pickers, audit logs, and simulated command sync.
+
 OAuth notes:
 
 - Add the dashboard callback URL `{DASHBOARD_BASE_URL}/auth/discord/callback` to your Discord application OAuth settings.
 - The dashboard signs users in with `identify` and `guilds` scopes.
 - Guild pages are available only for servers where the signed-in user has `Manage Server` or `Administrator`.
-- The deployment page is restricted to the bot application owner or `DASHBOARD_ADMIN_USER_IDS`.
+- The `/deployment` App Owner Console is restricted exclusively to the Discord application owner and requires RFC 6238 TOTP authenticator elevation (`DASHBOARD_OWNER_TOTP_SECRET`) with live Discord identity verification.
 
 Playwright smoke:
 

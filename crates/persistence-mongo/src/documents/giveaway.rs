@@ -6,6 +6,12 @@ use crate::{Error, documents::parse_snowflake};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct GiveawayDocument {
+    #[serde(default)]
+    pub(crate) revision: i64,
+    #[serde(default)]
+    message_sync_pending: bool,
+    #[serde(default)]
+    announcement_pending: bool,
     pub(crate) guild_id: String,
     channel_id: String,
     pub(crate) message_id: String,
@@ -31,6 +37,9 @@ pub(crate) struct GiveawayDocument {
 impl GiveawayDocument {
     pub(crate) fn from_domain(value: GiveawayRecord) -> Self {
         Self {
+            revision: value.revision,
+            message_sync_pending: value.message_sync_pending,
+            announcement_pending: value.announcement_pending,
             guild_id: value.guild_id.to_string(),
             channel_id: value.channel_id.to_string(),
             message_id: value.message_id.to_string(),
@@ -62,6 +71,9 @@ impl GiveawayDocument {
 
     pub(crate) fn into_domain(self) -> Result<GiveawayRecord, Error> {
         Ok(GiveawayRecord {
+            revision: self.revision,
+            message_sync_pending: self.message_sync_pending,
+            announcement_pending: self.announcement_pending,
             guild_id: parse_snowflake(&self.guild_id, "giveaway guild id")?,
             channel_id: parse_snowflake(&self.channel_id, "giveaway channel id")?,
             message_id: parse_snowflake(&self.message_id, "giveaway message id")?,

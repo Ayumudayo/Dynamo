@@ -1,15 +1,46 @@
 use crate::{
     channels::current_guild_channel,
-    constants::{TICKET_CATEGORY_SELECT_ID, TICKET_CLOSE_BUTTON_ID, TICKET_CREATE_BUTTON_ID},
+    constants::{
+        MODULE_ID, TICKET_CATEGORY_SELECT_ID, TICKET_CLOSE_BUTTON_ID, TICKET_CREATE_BUTTON_ID,
+    },
     settings::load_settings,
-    workflow::{close_ticket_channel, create_ticket_channel},
+    workflow::{can_manage_or_close_ticket, close_ticket_channel, create_ticket_channel},
 };
+use dynamo_access::module_access_for_app;
 use dynamo_runtime_api::{AppState, Error};
 use poise::serenity_prelude::{
     ComponentInteraction, CreateActionRow, CreateInteractionResponse,
     CreateInteractionResponseMessage, CreateSelectMenu, CreateSelectMenuKind,
     CreateSelectMenuOption, EditInteractionResponse, Interaction,
 };
+
+async fn ensure_ticket_module_access(
+    ctx: &poise::serenity_prelude::Context,
+    component: &ComponentInteraction,
+    data: &AppState,
+) -> Result<bool, Error> {
+    if let Some(reason) = module_access_for_app(
+        data,
+        MODULE_ID,
+        component.guild_id.map(|guild_id| guild_id.get()),
+    )
+    .await?
+    .denial_reason
+    {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(reason)
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(false);
+    }
+    Ok(true)
+}
 
 pub async fn handle(
     ctx: &poise::serenity_prelude::Context,
@@ -20,17 +51,23 @@ pub async fn handle(
         Interaction::Component(component)
             if component.data.custom_id == TICKET_CREATE_BUTTON_ID =>
         {
-            handle_ticket_open(ctx, component, data).await?;
+            if ensure_ticket_module_access(ctx, component, data).await? {
+                handle_ticket_open(ctx, component, data).await?;
+            }
             Ok(true)
         }
         Interaction::Component(component) if component.data.custom_id == TICKET_CLOSE_BUTTON_ID => {
-            handle_ticket_close(ctx, component, data).await?;
+            if ensure_ticket_module_access(ctx, component, data).await? {
+                handle_ticket_close(ctx, component, data).await?;
+            }
             Ok(true)
         }
         Interaction::Component(component)
             if component.data.custom_id == TICKET_CATEGORY_SELECT_ID =>
         {
-            handle_ticket_category_select(ctx, component, data).await?;
+            if ensure_ticket_module_access(ctx, component, data).await? {
+                handle_ticket_category_select(ctx, component, data).await?;
+            }
             Ok(true)
         }
         _ => Ok(false),
@@ -47,6 +84,7 @@ async fn handle_ticket_open(
         let options = settings
             .categories
             .iter()
+            .take(25)
             .map(|category| CreateSelectMenuOption::new(&category.name, &category.name))
             .collect::<Vec<_>>();
 
@@ -142,7 +180,27 @@ async fn handle_ticket_close(
     }
 
     let settings = load_settings(data, Some(channel.guild_id.get())).await?;
-    let result = close_ticket_channel(ctx, &channel, &component.user.name, &settings, None).await?;
+    if !can_manage_or_close_ticket(
+        ctx,
+        channel.guild_id,
+        component.user.id,
+        component.member.as_ref(),
+        &channel,
+        &settings,
+        true,
+    ) {
+        component
+            .edit_response(
+                ctx,
+                EditInteractionResponse::new()
+                    .content("You do not have permission to close this ticket."),
+            )
+            .await?;
+        return Ok(());
+    }
+    let result = close_ticket_channel(ctx, &channel, &component.user.name, &settings, None)
+        .await
+        .unwrap_or_else(|error| error.to_string());
     component
         .edit_response(ctx, EditInteractionResponse::new().content(result))
         .await?;

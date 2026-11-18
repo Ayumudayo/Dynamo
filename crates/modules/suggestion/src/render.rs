@@ -73,7 +73,11 @@ pub(crate) fn create_reviewed_embed(
         .timestamp(poise::serenity_prelude::Timestamp::now());
 
     if let Some(reason) = reason {
-        embed = embed.field("Reason", format!("```{reason}```"), false);
+        let mut sanitized = reason.replace("```", "'''");
+        if sanitized.chars().count() > 950 {
+            sanitized = sanitized.chars().take(947).collect::<String>() + "...";
+        }
+        embed = embed.field("Reason", format!("```{sanitized}```"), false);
     }
 
     embed
@@ -98,7 +102,7 @@ fn reaction_count(message: &Message, emoji: &str) -> u64 {
         .reactions
         .iter()
         .find(|reaction| matches!(&reaction.reaction_type, ReactionType::Unicode(value) if value == emoji))
-        .map(|reaction| reaction.count.saturating_sub(1))
+        .map(|reaction| reaction.count.saturating_sub(u64::from(reaction.me)))
         .unwrap_or(0)
 }
 

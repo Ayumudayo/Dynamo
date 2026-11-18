@@ -95,9 +95,9 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                 SettingsField {
                     key: "etf_tickers",
                     label: "ETF tickers",
-                    help_text: Some("Array of ETF tickers used by /etf."),
+                    help_text: Some("ETF tickers used by /etf, one per line."),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::TextList,
                 },
                 SettingsField {
                     key: "refresh_interval_seconds",
@@ -131,11 +131,7 @@ pub(crate) async fn load_settings(ctx: Context<'_>) -> Result<StockSettings, Err
         return Ok(StockSettings::default());
     };
 
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
+    let guild_settings = ctx.data().guild_settings_cached(guild_id.get()).await?;
 
     let settings = guild_settings
         .modules
@@ -155,16 +151,8 @@ pub(crate) async fn load_effective_etf_tickers_for_settings(
         return Ok(normalize_symbols(settings.etf_tickers.clone()));
     };
 
-    let deployment = ctx
-        .data()
-        .persistence
-        .deployment_settings_or_default()
-        .await?;
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
+    let deployment = ctx.data().deployment_settings_cached().await?;
+    let guild_settings = ctx.data().guild_settings_cached(guild_id.get()).await?;
 
     let guild_override = guild_settings
         .commands

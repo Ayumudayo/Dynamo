@@ -17,6 +17,8 @@ use super::{
     types::{BaselineCloseTarget, StockMetadata},
 };
 
+const MAX_STOCK_CACHE_ENTRIES: usize = 2048;
+
 #[derive(Clone, Default)]
 pub(super) struct StockMetadataCache {
     state: Arc<Mutex<StockMetadataCacheState>>,
@@ -107,6 +109,11 @@ impl StockMetadataCache {
                 Ok(fetched) => {
                     let metadata = fetched.get(&symbol).cloned();
                     if let Some(metadata) = metadata.as_ref() {
+                        if state.entries.len() >= MAX_STOCK_CACHE_ENTRIES
+                            && !state.entries.contains_key(&symbol)
+                        {
+                            state.entries.pop_first();
+                        }
                         state.entries.insert(symbol.clone(), metadata.clone());
                     }
                     Ok(metadata)
@@ -194,6 +201,9 @@ impl BaselineCloseCache {
     ) {
         let mut state = self.state.lock().await;
         if let Ok(Some(close)) = result.as_ref() {
+            if state.closes.len() >= MAX_STOCK_CACHE_ENTRIES && !state.closes.contains_key(&key) {
+                state.closes.pop_first();
+            }
             state.closes.insert(key.clone(), *close);
         }
 

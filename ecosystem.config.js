@@ -21,7 +21,7 @@ module.exports = {
       env: {
         RUST_LOG:
           process.env.RUST_LOG ||
-          "dynamo_dashboard=info,dynamo_app=info,dynamo_core=info",
+          "warn,dynamo_dashboard=info,dynamo_app=info",
       },
     },
     {
@@ -39,7 +39,7 @@ module.exports = {
       env: {
         RUST_LOG:
           process.env.RUST_LOG ||
-          "dynamo_bot=info,dynamo_app=info,dynamo_core=info,poise=info",
+          "warn,dynamo_bot=info,dynamo_app=info,dynamo_module_gameinfo=info,poise=info",
       },
     },
   ],

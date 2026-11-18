@@ -417,7 +417,8 @@ async fn fixture_modes_enforce_distinct_read_allowlists_and_live_evidence() {
             .expect("guild counters"),
     )
     .await;
-    assert_eq!(guild_counters["repository_reads"], 2);
+    // Overview: deployment + guild settings, command-sync state, recent audit log.
+    assert_eq!(guild_counters["repository_reads"], 4);
     assert_eq!(guild_counters["repository_mutations"], 0);
     assert_eq!(guild_counters["provider_guild_lookups"], 1);
 
@@ -519,12 +520,30 @@ async fn instance_has_exact_node_abi_and_allowed_pages_are_read_only() {
         .expect("bounded guild page");
     let guild_html = String::from_utf8(guild_html.to_vec()).expect("UTF-8 guild page");
     assert!(!guild_html.contains("cdn.discordapp.com"));
-    assert!(
-            guild_html.contains(
-                "Installed: On | Deployment: On | Local guild: Off | Effective: Off | Blocked by local guild setting"
-            )
-        );
-    assert!(guild_html.contains("value=\"PERF-STOCK-CANARY\""));
+    let stock_card = guild_html
+        .split("data-testid=\"module-card-stock\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</article>").next())
+        .expect("stock module card");
+    assert!(stock_card.contains("data-state=\"off\""));
+    assert!(stock_card.contains("data-fragment-url=\""));
+    // Dialogs are fetched on demand; the canary lives in the fragment.
+    assert!(!guild_html.contains("value=\"PERF-STOCK-CANARY\""));
+    let fragment = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{}/settings/module/stock", runtime.guild_path()),
+            Some((SESSION_COOKIE_NAME, &runtime.cookie_value)),
+        ))
+        .await
+        .expect("stock settings fragment");
+    assert_eq!(fragment.status(), StatusCode::OK);
+    let fragment_html = to_bytes(fragment.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("bounded fragment");
+    let fragment_html = String::from_utf8(fragment_html.to_vec()).expect("UTF-8 fragment");
+    assert!(fragment_html.contains("value=\"PERF-STOCK-CANARY\""));
 
     let commands = app
         .clone()
@@ -541,10 +560,28 @@ async fn instance_has_exact_node_abi_and_allowed_pages_are_read_only() {
         .expect("bounded guild commands page");
     let commands_html =
         String::from_utf8(commands_html.to_vec()).expect("UTF-8 guild commands page");
-    assert!(commands_html.contains("value=\"GUILD-ETF-CANARY\""));
-    assert!(commands_html.contains(
-            "Parent module: Off | Installed: On | Deployment: Off | Local guild: On | Effective: Off | Blocked by parent module"
-        ));
+    let etf_card = commands_html
+        .split("data-testid=\"command-card-etf\"")
+        .nth(1)
+        .and_then(|rest| rest.split("</article>").next())
+        .expect("etf command card");
+    assert!(etf_card.contains("data-state=\"blocked\""));
+    assert!(etf_card.contains("Blocked: parent module is inactive"));
+    let fragment = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            &format!("{}/settings/command/etf", runtime.guild_path()),
+            Some((SESSION_COOKIE_NAME, &runtime.cookie_value)),
+        ))
+        .await
+        .expect("etf settings fragment");
+    assert_eq!(fragment.status(), StatusCode::OK);
+    let fragment_html = to_bytes(fragment.into_body(), 2 * 1024 * 1024)
+        .await
+        .expect("bounded fragment");
+    let fragment_html = String::from_utf8(fragment_html.to_vec()).expect("UTF-8 fragment");
+    assert!(fragment_html.contains("value=\"GUILD-ETF-CANARY\""));
 
     for query in [
         "tab=overview",
@@ -602,9 +639,11 @@ async fn instance_has_exact_node_abi_and_allowed_pages_are_read_only() {
     assert_eq!(counters["schema_version"], SCHEMA_VERSION);
     assert_eq!(counters["denied_requests"], 0);
     assert_eq!(counters["server_write_attempts"], 0);
-    // The six guild-page loads perform two setting reads each, and the log tab
-    // performs one audit-log read.
-    assert_eq!(counters["repository_reads"], 13);
+    // The five settings-tab loads perform two setting reads each, the two
+    // commands tabs and the overview read command-sync state, the overview and
+    // the log tab each perform one audit-log read, and the two settings dialog
+    // fragments perform two setting reads each.
+    assert_eq!(counters["repository_reads"], 19);
     assert_eq!(counters["repository_mutations"], 0);
     // Selector checks 100 guild cards; the six guild-page loads each check the
     // selected guild once after guild-detail presence batching.

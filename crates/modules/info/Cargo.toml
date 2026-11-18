@@ -6,6 +6,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+dynamo-enablement = { path = "../../enablement" }
 dynamo-module-kit = { path = "../../module-kit" }
 dynamo-runtime-api = { path = "../../runtime-api" }
 poise.workspace = true

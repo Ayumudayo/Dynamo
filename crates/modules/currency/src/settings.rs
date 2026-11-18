@@ -57,14 +57,7 @@ pub(super) fn command_settings_schema(command_id: &str) -> SettingsSchema {
                 description: Some(
                     "Only KRW and USD are supported. Blank or matching values fall back to the opposite currency for the selected base.",
                 ),
-                fields: vec![
-                    rate_target_field("target_1", "Result currency 1"),
-                    rate_target_field("target_2", "Result currency 2"),
-                    rate_target_field("target_3", "Result currency 3"),
-                    rate_target_field("target_4", "Result currency 4"),
-                    rate_target_field("target_5", "Result currency 5"),
-                    rate_target_field("target_6", "Result currency 6"),
-                ],
+                fields: vec![rate_target_field("target_1", "Result currency 1")],
             }],
         },
         _ => SettingsSchema::empty(),
@@ -120,16 +113,8 @@ pub(super) async fn load_exchange_defaults(
         return Ok(ResolvedExchangeDefaults::default());
     };
 
-    let deployment = ctx
-        .data()
-        .persistence
-        .deployment_settings_or_default()
-        .await?;
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
+    let deployment = ctx.data().deployment_settings_cached().await?;
+    let guild_settings = ctx.data().guild_settings_cached(guild_id.get()).await?;
 
     let deployment_defaults = deployment
         .commands
@@ -165,16 +150,8 @@ pub(super) async fn load_rate_targets(ctx: Context<'_>) -> Result<Vec<String>, E
         return Ok(default_rate_targets());
     };
 
-    let deployment = ctx
-        .data()
-        .persistence
-        .deployment_settings_or_default()
-        .await?;
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
+    let deployment = ctx.data().deployment_settings_cached().await?;
+    let guild_settings = ctx.data().guild_settings_cached(guild_id.get()).await?;
 
     if let Some(targets) = guild_settings
         .commands

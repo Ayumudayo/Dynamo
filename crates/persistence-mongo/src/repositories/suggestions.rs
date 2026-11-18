@@ -29,19 +29,31 @@ impl SuggestionsRepository for MongoPersistence {
         document.map(SuggestionDocument::into_domain).transpose()
     }
 
-    async fn save(&self, record: SuggestionRecord) -> Result<SuggestionRecord, Error> {
+    async fn replace_if_unchanged(
+        &self,
+        expected: &SuggestionRecord,
+        record: SuggestionRecord,
+    ) -> Result<Option<SuggestionRecord>, Error> {
         let document = SuggestionDocument::from_domain(record);
-        self.suggestions
+        let result = self.suggestions
             .replace_one(
                 doc! {
-                    "guild_id": &document.guild_id,
-                    "message_id": &document.message_id,
+                    "guild_id": expected.guild_id.to_string(),
+                    "message_id": expected.message_id.to_string(),
+                    "status": mongodb::bson::to_bson(&expected.status)?,
+                    "updated_at": mongodb::bson::DateTime::from_millis(expected.updated_at.timestamp_millis()),
+                    "$expr": { "$eq": [
+                        { "$size": { "$ifNull": ["$status_updates", []] } },
+                        expected.status_updates.len() as i64,
+                    ] },
                 },
                 document.clone(),
             )
-            .upsert(true)
             .await?;
 
-        document.into_domain()
+        if result.matched_count == 0 {
+            return Ok(None);
+        }
+        document.into_domain().map(Some)
     }
 }

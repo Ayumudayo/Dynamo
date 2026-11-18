@@ -6,7 +6,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use tokio::sync::RwLock;
 
 pub(crate) const SESSION_COOKIE_NAME: &str = "dynamo_dashboard_session";
-pub(crate) const SESSION_TTL_HOURS: i64 = 24 * 14;
+pub(crate) const SESSION_TTL_HOURS: i64 = 24;
 pub(crate) const OAUTH_STATE_TTL_MINUTES: i64 = 15;
 pub(crate) const DISCORD_API_BASE: &str = "https://discord.com/api/v10";
 const DEFAULT_INVITE_PERMISSIONS: u64 = 2_146_958_847;
@@ -21,12 +21,16 @@ pub(crate) struct DashboardConfig {
     pub(crate) bot_token: String,
     pub(crate) client_secret: String,
     pub(crate) invite_permissions: u64,
-    pub(crate) admin_user_ids: Vec<u64>,
+    pub(crate) owner_totp_secret: Option<Vec<u8>>,
     pub(crate) register_globally: bool,
     pub(crate) command_sync_interval_seconds: u64,
 }
 
 impl DashboardConfig {
+    pub(crate) fn cookies_are_secure(&self) -> bool {
+        self.public_base_url.starts_with("https://")
+    }
+
     pub(crate) fn from_env() -> anyhow::Result<Self> {
         let host = env::var("DASHBOARD_HOST")
             .unwrap_or_else(|_| "127.0.0.1".to_string())
@@ -66,7 +70,12 @@ impl DashboardConfig {
             })?
             .unwrap_or(DEFAULT_INVITE_PERMISSIONS);
 
-        let admin_user_ids = parse_u64_list_env("DASHBOARD_ADMIN_USER_IDS")?;
+        let owner_totp_secret = env::var("DASHBOARD_OWNER_TOTP_SECRET")
+            .ok()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty())
+            .map(|value| crate::owner_auth::parse_totp_secret(&value))
+            .transpose()?;
         let dev_guild_id = env::var("DISCORD_DEV_GUILD_ID")
             .or_else(|_| env::var("GUILD_ID"))
             .ok()
@@ -94,7 +103,7 @@ impl DashboardConfig {
             bot_token,
             client_secret,
             invite_permissions,
-            admin_user_ids,
+            owner_totp_secret,
             register_globally,
             command_sync_interval_seconds,
         })
@@ -112,8 +121,11 @@ pub(crate) struct DashboardState {
     pub(crate) persistence: Persistence,
     pub(crate) sessions: Arc<RwLock<HashMap<String, DashboardSession>>>,
     pub(crate) oauth_states: Arc<RwLock<HashMap<String, PendingOauthState>>>,
+    pub(crate) owner_security: Arc<RwLock<crate::owner_auth::OwnerSecurityState>>,
     #[cfg(feature = "perf-harness")]
     pub(crate) perf_runtime: Option<Arc<crate::DashboardPerfRuntime>>,
+    #[cfg(feature = "local-preview")]
+    pub(crate) local_preview: Option<Arc<crate::DashboardLocalPreview>>,
 }
 
 #[derive(Debug, Clone)]
@@ -130,6 +142,7 @@ pub(crate) struct DashboardSession {
     pub(crate) guilds: Vec<DashboardGuild>,
     pub(crate) access_token: String,
     pub(crate) expires_at: chrono::DateTime<chrono::Utc>,
+    pub(crate) csrf_token: String,
 }
 
 #[derive(Debug, Clone)]
@@ -161,7 +174,9 @@ pub(crate) struct DashboardPageQuery {
     pub(crate) tab: Option<String>,
     pub(crate) log_entity: Option<String>,
     pub(crate) log_action: Option<String>,
+    pub(crate) log_scope: Option<String>,
     pub(crate) log_page: Option<u64>,
+    pub(crate) auth_notice: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -208,22 +223,6 @@ pub(crate) struct DiscordOAuthUser {
     pub(crate) avatar: Option<String>,
 }
 
-fn parse_u64_list_env(key: &str) -> Result<Vec<u64>, anyhow::Error> {
-    let Some(raw) = env::var(key).ok() else {
-        return Ok(Vec::new());
-    };
-
-    raw.split(',')
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .map(|value| {
-            value
-                .parse::<u64>()
-                .map_err(|error| anyhow::anyhow!("{key} must contain valid u64 values: {error}"))
-        })
-        .collect()
-}
-
 fn parse_bool_value(key: &str, value: &str) -> Result<bool, anyhow::Error> {
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
@@ -243,7 +242,7 @@ fn parse_u64_env(key: &str, default: u64) -> Result<u64, anyhow::Error> {
     }
 }
 
-fn deserialize_u64_from_discord_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
+pub(crate) fn deserialize_u64_from_discord_id<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
 {

@@ -3,10 +3,10 @@ use dynamo_module_kit::{SettingsField, SettingsFieldKind, SettingsSchema, Settin
 use dynamo_runtime_api::{Context, Error};
 use serde::{Deserialize, Serialize};
 
-const DEFAULT_WT_LINK: &str = "http://warthunder.com/en/registration?r=userinvite_18945695";
+const DEFAULT_WT_LINK: &str = "https://warthunder.com/en/registration?r=userinvite_18945695";
 const DEFAULT_WOT_LINK: &str =
     "https://worldoftanks.asia/referral/9ed8df012d204670b04c1cc1c88d98d5";
-const DEFAULT_THUMBNAIL_URL: &str = "https://media.discordapp.net/attachments/1138398345065414657/1329005700730585118/png-clipart-war-thunder-playstation-4-aircraft-airplane-macchi-c-202-thunder-game-video-game-removebg-preview.png?ex=6788c482&is=67877302&hm=31b9ed755040306ea8d1c9db258ffaa590df7e3bfa6139d875c62915d46c1b73&=&format=webp&quality=lossless";
+const DEFAULT_THUMBNAIL_URL: &str = "";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -47,21 +47,21 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                     label: "War Thunder link",
                     help_text: Some("Referral URL for the War Thunder button."),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::Url,
                 },
                 SettingsField {
                     key: "wot_link",
                     label: "World of Tanks link",
                     help_text: Some("Referral URL for the World of Tanks button."),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::Url,
                 },
                 SettingsField {
                     key: "thumbnail_url",
                     label: "Thumbnail URL",
                     help_text: Some("Thumbnail image shown in the /wtinv embed."),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::Url,
                 },
             ],
         }],
@@ -73,16 +73,16 @@ pub(crate) async fn load_settings(ctx: Context<'_>) -> Result<GameInfoSettings, 
         return Ok(GameInfoSettings::default());
     };
 
-    let guild_settings = ctx
-        .data()
-        .persistence
-        .guild_settings_or_default(guild_id.get())
-        .await?;
+    let guild_settings = ctx.data().guild_settings_cached(guild_id.get()).await?;
 
     let settings = guild_settings
         .modules
         .get(MODULE_ID)
-        .map(|module| serde_json::from_value::<GameInfoSettings>(module.configuration.clone()))
+        .map(|module| {
+            dynamo_runtime_api::decode_module_configuration::<GameInfoSettings>(
+                &module.configuration,
+            )
+        })
         .transpose()?
         .unwrap_or_default();
 

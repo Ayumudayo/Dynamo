@@ -27,11 +27,14 @@ impl PerfRepositories {
         Self {
             runtime,
             deployment: DeploymentSettings {
+                blocked_guild_ids: Vec::new(),
+                module_notices: Default::default(),
                 modules: fixture.settings.deployment.modules.clone(),
                 commands: fixture.settings.deployment.commands.clone(),
             },
             guild: GuildSettings {
                 guild_id: fixture.guild_id(),
+                announcement_channel_id: None,
                 modules: fixture.settings.guild.modules.clone(),
                 commands: fixture.settings.guild.commands.clone(),
             },
@@ -66,6 +69,14 @@ impl DeploymentSettingsRepository for PerfRepositories {
     ) -> anyhow::Result<DeploymentSettings> {
         self.deny_mutation()
     }
+
+    async fn upsert_operational_settings(
+        &self,
+        _blocked_guild_ids: Vec<u64>,
+        _module_notices: std::collections::BTreeMap<String, String>,
+    ) -> anyhow::Result<DeploymentSettings> {
+        self.deny_mutation()
+    }
 }
 
 #[async_trait::async_trait]
@@ -77,6 +88,11 @@ impl GuildSettingsRepository for PerfRepositories {
             "performance fixture repository only contains the target guild"
         );
         Ok(Some(self.guild.clone()))
+    }
+
+    async fn list_all(&self) -> anyhow::Result<Vec<GuildSettings>> {
+        self.runtime.increment_repository_reads();
+        Ok(vec![self.guild.clone()])
     }
 
     async fn upsert_module_settings(
@@ -94,6 +110,18 @@ impl GuildSettingsRepository for PerfRepositories {
         _command_id: &str,
         _settings: GuildCommandSettings,
     ) -> anyhow::Result<GuildSettings> {
+        self.deny_mutation()
+    }
+
+    async fn upsert_announcement_channel(
+        &self,
+        _guild_id: u64,
+        _channel_id: Option<u64>,
+    ) -> anyhow::Result<GuildSettings> {
+        self.deny_mutation()
+    }
+
+    async fn reset_guild(&self, _guild_id: u64) -> anyhow::Result<()> {
         self.deny_mutation()
     }
 }

@@ -1,13 +1,15 @@
+use dynamo_access::module_access_for_app;
 use dynamo_runtime_api::{AppState, Error};
 use poise::serenity_prelude::{
     ActionRowComponent, ComponentInteraction, CreateActionRow, CreateInputText,
-    CreateInteractionResponse, CreateModal, InputTextStyle, Interaction, ModalInteraction,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateModal, InputTextStyle,
+    Interaction, ModalInteraction,
 };
 
 use crate::{
     constants::{
-        APPROVE_BUTTON_ID, APPROVE_MODAL_ID, DELETE_BUTTON_ID, DELETE_MODAL_ID, REASON_INPUT_ID,
-        REJECT_BUTTON_ID, REJECT_MODAL_ID,
+        APPROVE_BUTTON_ID, APPROVE_MODAL_ID, DELETE_BUTTON_ID, DELETE_MODAL_ID, MODULE_ID,
+        REASON_INPUT_ID, REJECT_BUTTON_ID, REJECT_MODAL_ID,
     },
     settings::load_settings,
     workflow::{delete_suggestion, has_moderation_permissions, transition_suggestion},
@@ -20,7 +22,7 @@ pub async fn handle(
 ) -> Result<bool, Error> {
     match interaction {
         Interaction::Component(component) if is_suggestion_button(&component.data.custom_id) => {
-            handle_button_interaction(ctx, component).await?;
+            handle_button_interaction(ctx, component, data).await?;
             Ok(true)
         }
         Interaction::Modal(modal) if is_suggestion_modal(&modal.data.custom_id) => {
@@ -48,7 +50,67 @@ fn is_suggestion_modal(custom_id: &str) -> bool {
 async fn handle_button_interaction(
     ctx: &poise::serenity_prelude::Context,
     component: &ComponentInteraction,
+    data: &AppState,
 ) -> Result<(), Error> {
+    let Some(guild_id) = component.guild_id else {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content("This action can only be used in a guild.")
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(());
+    };
+    let Some(member) = component.member.as_ref() else {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content("This action can only be used in a guild.")
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(());
+    };
+
+    if let Some(reason) = module_access_for_app(data, MODULE_ID, Some(guild_id.get()))
+        .await?
+        .denial_reason
+    {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content(reason)
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
+
+    let settings = load_settings(data, Some(guild_id.get())).await?;
+    if !has_moderation_permissions(ctx, guild_id, member, &settings) {
+        component
+            .create_response(
+                ctx,
+                CreateInteractionResponse::Message(
+                    CreateInteractionResponseMessage::new()
+                        .content("You don't have permission to moderate suggestions.")
+                        .ephemeral(true),
+                ),
+            )
+            .await?;
+        return Ok(());
+    }
+
     let (modal_id, title) = match component.data.custom_id.as_str() {
         APPROVE_BUTTON_ID => (APPROVE_MODAL_ID, "Approve Suggestion"),
         REJECT_BUTTON_ID => (REJECT_MODAL_ID, "Reject Suggestion"),
@@ -63,6 +125,7 @@ async fn handle_button_interaction(
                 CreateActionRow::InputText(
                     CreateInputText::new(InputTextStyle::Paragraph, "Reason", REASON_INPUT_ID)
                         .placeholder("Optional reason")
+                        .max_length(900)
                         .required(false),
                 ),
             ])),
@@ -101,6 +164,19 @@ async fn handle_modal_interaction(
         return Ok(());
     };
 
+    if let Some(reason) = module_access_for_app(data, MODULE_ID, Some(guild_id.get()))
+        .await?
+        .denial_reason
+    {
+        modal
+            .edit_response(
+                ctx,
+                poise::serenity_prelude::EditInteractionResponse::new().content(reason),
+            )
+            .await?;
+        return Ok(());
+    }
+
     let Some(source_message) = modal.message.as_deref() else {
         modal
             .edit_response(
@@ -113,7 +189,7 @@ async fn handle_modal_interaction(
     };
 
     let settings = load_settings(data, Some(guild_id.get())).await?;
-    if !has_moderation_permissions(member, &settings) {
+    if !has_moderation_permissions(ctx, guild_id, member, &settings) {
         modal
             .edit_response(
                 ctx,

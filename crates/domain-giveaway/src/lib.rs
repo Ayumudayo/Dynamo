@@ -13,6 +13,9 @@ pub enum GiveawayStatus {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
 pub struct GiveawayRecord {
+    pub revision: i64,
+    pub message_sync_pending: bool,
+    pub announcement_pending: bool,
     pub guild_id: u64,
     pub channel_id: u64,
     pub message_id: u64,
@@ -35,6 +38,9 @@ impl Default for GiveawayRecord {
     fn default() -> Self {
         let now = Utc::now();
         Self {
+            revision: 0,
+            message_sync_pending: false,
+            announcement_pending: false,
             guild_id: 0,
             channel_id: 0,
             message_id: 0,

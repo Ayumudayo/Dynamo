@@ -55,7 +55,6 @@ pub(super) fn build_bot_preconnect_report(
             "sync_interval_seconds",
             config.commands.sync_interval_seconds.to_string(),
         )
-        .detail("optional_module_flags", "none".to_string())
         .detail("aggregated_intents", format_gateway_intents(intents)),
     );
     report.add_phase(

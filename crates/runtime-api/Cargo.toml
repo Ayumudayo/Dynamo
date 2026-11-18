@@ -10,4 +10,6 @@ anyhow.workspace = true
 dynamo-module-kit = { path = "../module-kit" }
 dynamo-persistence-api = { path = "../persistence-api" }
 dynamo-services-api = { path = "../services-api" }
+dynamo-settings = { path = "../settings" }
 poise.workspace = true
+tokio.workspace = true

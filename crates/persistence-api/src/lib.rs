@@ -80,6 +80,53 @@ impl Persistence {
         }
     }
 
+    pub async fn list_all_guild_settings(&self) -> Result<Vec<GuildSettings>, Error> {
+        match &self.guild_settings {
+            Some(repo) => repo.list_all().await,
+            None => Ok(Vec::new()),
+        }
+    }
+
+    pub async fn upsert_guild_announcement_channel(
+        &self,
+        guild_id: u64,
+        channel_id: Option<u64>,
+    ) -> Result<GuildSettings, Error> {
+        match &self.guild_settings {
+            Some(repo) => repo.upsert_announcement_channel(guild_id, channel_id).await,
+            None => Ok(GuildSettings {
+                guild_id,
+                announcement_channel_id: channel_id,
+                ..GuildSettings::default()
+            }),
+        }
+    }
+
+    pub async fn reset_guild_settings(&self, guild_id: u64) -> Result<(), Error> {
+        match &self.guild_settings {
+            Some(repo) => repo.reset_guild(guild_id).await,
+            None => Ok(()),
+        }
+    }
+
+    pub async fn upsert_deployment_operational_settings(
+        &self,
+        blocked_guild_ids: Vec<u64>,
+        module_notices: std::collections::BTreeMap<String, String>,
+    ) -> Result<DeploymentSettings, Error> {
+        match &self.deployment_settings {
+            Some(repo) => {
+                repo.upsert_operational_settings(blocked_guild_ids, module_notices)
+                    .await
+            }
+            None => Ok(DeploymentSettings {
+                blocked_guild_ids,
+                module_notices,
+                ..DeploymentSettings::default()
+            }),
+        }
+    }
+
     pub async fn load_provider_state(
         &self,
         provider_id: &str,
@@ -245,6 +292,24 @@ mod tests {
             _command_id: &str,
             _settings: GuildCommandSettings,
         ) -> anyhow::Result<GuildSettings> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("unexpected fake repository write")
+        }
+
+        async fn list_all(&self) -> anyhow::Result<Vec<GuildSettings>> {
+            Ok(Vec::new())
+        }
+
+        async fn upsert_announcement_channel(
+            &self,
+            _guild_id: u64,
+            _channel_id: Option<u64>,
+        ) -> anyhow::Result<GuildSettings> {
+            self.writes.fetch_add(1, Ordering::SeqCst);
+            anyhow::bail!("unexpected fake repository write")
+        }
+
+        async fn reset_guild(&self, _guild_id: u64) -> anyhow::Result<()> {
             self.writes.fetch_add(1, Ordering::SeqCst);
             anyhow::bail!("unexpected fake repository write")
         }

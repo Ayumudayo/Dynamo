@@ -100,10 +100,17 @@ impl TossInvestClient {
                 .await?;
             let response = execute(request).await?;
             if response.status() == StatusCode::TOO_MANY_REQUESTS {
-                self.shared_state
+                let delay = self
+                    .shared_state
                     .rate_limiter
                     .observe_too_many_requests(group, response.headers(), attempt)
                     .await;
+                if attempt == 0
+                    && method == Method::GET
+                    && delay <= std::time::Duration::from_secs(2)
+                {
+                    continue;
+                }
                 return Ok(response);
             }
             if self

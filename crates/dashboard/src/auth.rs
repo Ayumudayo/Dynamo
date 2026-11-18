@@ -1,5 +1,5 @@
 use axum::http::StatusCode;
-use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
+use axum_extra::extract::cookie::{Cookie, CookieJar};
 use rand::{Rng, distributions::Alphanumeric};
 use tracing::warn;
 
@@ -45,7 +45,12 @@ pub(crate) fn is_oauth_state_expired(pending: &PendingOauthState) -> bool {
 
 pub(crate) fn sanitize_redirect_target(target: Option<&str>) -> String {
     let candidate = target.unwrap_or("/selector").trim();
-    if candidate.starts_with('/') && !candidate.starts_with("//") {
+    // Browsers treat `\` like `/`, so `/\host` would leave the site.
+    if candidate.starts_with('/')
+        && !candidate.starts_with("//")
+        && !candidate.contains('\\')
+        && !candidate.chars().any(char::is_control)
+    {
         candidate.to_string()
     } else {
         "/selector".to_string()
@@ -60,11 +65,15 @@ pub(crate) fn random_token(length: usize) -> String {
         .collect()
 }
 
-pub(crate) fn session_cookie(session_id: &str) -> Cookie<'static> {
-    let mut cookie = Cookie::new(SESSION_COOKIE_NAME, session_id.to_string());
-    cookie.set_http_only(true);
-    cookie.set_same_site(SameSite::Lax);
-    cookie.set_path("/");
+pub(crate) fn session_cookie(session_id: &str, secure: bool) -> Cookie<'static> {
+    let max_age = crate::state::SESSION_TTL_HOURS * 3600;
+    let secure_attr = if secure { "; Secure" } else { "" };
+    let mut cookie = Cookie::parse(format!(
+        "{SESSION_COOKIE_NAME}=placeholder; Path=/; Max-Age={max_age}; HttpOnly; SameSite=Lax{secure_attr}"
+    ))
+    .expect("valid session cookie template")
+    .into_owned();
+    cookie.set_value(session_id.to_string());
     cookie
 }
 
@@ -129,6 +138,11 @@ pub(crate) async fn refresh_session_guilds(
 ) -> Result<Option<DashboardSession>, RefreshSessionGuildsError> {
     #[cfg(feature = "perf-harness")]
     if state.perf_runtime.is_some() {
+        return Ok(state.sessions.read().await.get(session_id).cloned());
+    }
+
+    #[cfg(feature = "local-preview")]
+    if state.local_preview.is_some() {
         return Ok(state.sessions.read().await.get(session_id).cloned());
     }
 

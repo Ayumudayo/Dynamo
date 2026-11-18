@@ -63,6 +63,12 @@ function Assert-RpiSecurityBundle {
   if ($stagedHash -cne $sourceHash) {
     throw "Staged helper SHA-256 mismatch (expected $sourceHash, found $stagedHash)."
   }
+  $artifactHelper = Join-Path $resolvedStage 'scripts\lib\rpi-artifact.cjs'
+  Assert-RegularNonLinkFile -Path $artifactHelper -Description 'deployment verification helper'
+  $expectedArtifactHash = (Get-FileHash -LiteralPath (Join-Path $RepoRoot 'scripts\lib\rpi-artifact.cjs') -Algorithm SHA256).Hash
+  if ((Get-FileHash -LiteralPath $artifactHelper -Algorithm SHA256).Hash -ne $expectedArtifactHash) {
+    throw 'Deployment verification helper SHA-256 mismatch.'
+  }
 
   if (-not $RunningOnWindows) {
     $mode = [IO.File]::GetUnixFileMode($stagedHelper)
@@ -109,6 +115,7 @@ function New-RpiSecurityBundleFixture {
   $null = $scriptsDir, $libDir
 
   Copy-Item -LiteralPath $SourceHelper -Destination (Join-Path $Path "scripts\lib\secure-env.sh")
+  Copy-Item -LiteralPath (Join-Path $RepoRoot 'scripts\lib\rpi-artifact.cjs') -Destination (Join-Path $Path 'scripts\lib\rpi-artifact.cjs')
   foreach ($name in @("prod-bootstrap.sh", "prod-dashboard.sh", "prod-bot.sh", "remote-rpi-postdeploy.sh")) {
     Copy-Item -LiteralPath (Join-Path $RepoRoot "scripts\$name") -Destination (Join-Path $Path "scripts\$name")
   }

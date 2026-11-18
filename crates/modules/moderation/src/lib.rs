@@ -1,4 +1,3 @@
-mod access;
 mod member_actions;
 mod modlog;
 mod module;

@@ -78,6 +78,14 @@ pub struct ModuleCatalog {
     pub entries: Vec<ModuleCatalogEntry>,
 }
 
+impl ModuleCatalog {
+    pub fn find_by_id(&self, module_id: &str) -> Option<&ModuleCatalogEntry> {
+        self.entries
+            .iter()
+            .find(|entry| entry.module.id == module_id)
+    }
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct ModuleCatalogEntry {
     pub module: ModuleDescriptor,
@@ -149,11 +157,38 @@ pub struct SettingsField {
     pub kind: SettingsFieldKind,
 }
 
+/// Describes how the dashboard renders, validates, and serializes one setting.
+///
+/// Every variant keeps the stored JSON shape stable so module parsers do not
+/// need to know which dashboard control produced a value:
+/// - `Text`, `Textarea`, `Url`, `Color`, `Channel`, and `Role` store strings.
+/// - `TextList` and `RoleList` store arrays of strings.
+/// - `InviteRanks`, `TicketCategories`, and `Json` store structured JSON values.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum SettingsFieldKind {
     Toggle,
     Text,
+    /// Multi-line text, e.g. message templates.
+    Textarea,
+    /// An absolute `http(s)` URL.
+    Url,
+    /// A `#RRGGBB` hex color.
+    Color,
+    /// A single guild text channel ID.
+    Channel,
+    /// A single guild role ID.
+    Role,
+    /// Several guild role IDs.
+    RoleList,
+    /// Several short text values, entered one per line.
+    TextList,
+    /// Structured list of invite reward tiers (`invites` + `role_id`).
+    InviteRanks,
+    /// Structured list of ticket categories (`_id`, `name`, `staff_roles`).
+    TicketCategories,
+    /// Structured JSON for advanced settings.
+    Json,
     Integer {
         #[serde(skip_serializing_if = "Option::is_none")]
         min: Option<i64>,

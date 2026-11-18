@@ -2,9 +2,12 @@ use crate::constants::{
     DEFAULT_LIMIT, DEFAULT_SETUP_DESCRIPTION, DEFAULT_SETUP_FOOTER, DEFAULT_SETUP_TITLE, MODULE_ID,
 };
 use dynamo_module_kit::{SettingsField, SettingsFieldKind, SettingsSchema, SettingsSection};
-use dynamo_runtime_api::{AppState, Context, Error};
+use dynamo_runtime_api::{
+    AppState, Context, Error, decode_module_configuration, deserialize_optional_snowflake,
+    deserialize_snowflake_vec,
+};
 use dynamo_settings::{GuildModuleSettings, GuildSettings};
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(default)]
@@ -14,9 +17,16 @@ pub(crate) struct TicketSettings {
     pub(crate) setup_footer: String,
     #[serde(
         alias = "log_channel",
+        serialize_with = "dynamo_runtime_api::serialize_optional_snowflake",
         deserialize_with = "deserialize_optional_snowflake"
     )]
     pub(crate) log_channel_id: Option<u64>,
+    #[serde(
+        default,
+        serialize_with = "dynamo_runtime_api::serialize_optional_snowflake",
+        deserialize_with = "deserialize_optional_snowflake"
+    )]
+    pub(crate) category_id: Option<u64>,
     pub(crate) limit: usize,
     pub(crate) categories: Vec<TicketCategory>,
 }
@@ -28,6 +38,7 @@ impl Default for TicketSettings {
             setup_description: DEFAULT_SETUP_DESCRIPTION.to_string(),
             setup_footer: DEFAULT_SETUP_FOOTER.to_string(),
             log_channel_id: None,
+            category_id: None,
             limit: DEFAULT_LIMIT,
             categories: Vec::new(),
         }
@@ -38,7 +49,12 @@ impl Default for TicketSettings {
 #[serde(default)]
 pub(crate) struct TicketCategory {
     pub(crate) name: String,
-    #[serde(alias = "staff_roles", deserialize_with = "deserialize_snowflake_vec")]
+    #[serde(
+        rename = "staff_roles",
+        alias = "staff_role_ids",
+        serialize_with = "dynamo_runtime_api::serialize_snowflake_vec",
+        deserialize_with = "deserialize_snowflake_vec"
+    )]
     pub(crate) staff_role_ids: Vec<u64>,
 }
 
@@ -63,7 +79,7 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                     label: "Panel description",
                     help_text: Some("Embed description used in the ticket creation panel."),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::Textarea,
                 },
                 SettingsField {
                     key: "setup_footer",
@@ -74,9 +90,18 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                 },
                 SettingsField {
                     key: "log_channel_id",
-                    label: "Log channel ID",
+                    label: "Log channel",
                     help_text: Some(
                         "Optional channel that receives ticket closed notifications and transcripts.",
+                    ),
+                    required: false,
+                    kind: SettingsFieldKind::Channel,
+                },
+                SettingsField {
+                    key: "category_id",
+                    label: "Ticket category ID",
+                    help_text: Some(
+                        "Optional Discord category ID where new ticket channels are created.",
                     ),
                     required: false,
                     kind: SettingsFieldKind::Text,
@@ -95,10 +120,10 @@ pub(crate) fn settings_schema() -> SettingsSchema {
                     key: "categories",
                     label: "Categories",
                     help_text: Some(
-                        "Array of category objects with `name` and `staff_roles`/`staff_role_ids`.",
+                        "Add ticket topics and select the staff roles notified for each topic.",
                     ),
                     required: false,
-                    kind: SettingsFieldKind::Text,
+                    kind: SettingsFieldKind::TicketCategories,
                 },
             ],
         }],
@@ -113,20 +138,14 @@ pub(crate) async fn load_settings(
         return Ok(TicketSettings::default());
     };
 
-    let guild_settings = data.persistence.guild_settings_or_default(guild_id).await?;
+    let guild_settings = data.guild_settings_cached(guild_id).await?;
     let settings = guild_settings
         .modules
         .get(MODULE_ID)
-        .map(parse_ticket_settings)
+        .map(|module| decode_module_configuration::<TicketSettings>(&module.configuration))
         .transpose()?
         .unwrap_or_default();
     Ok(settings)
-}
-
-fn parse_ticket_settings(module: &GuildModuleSettings) -> Result<TicketSettings, Error> {
-    Ok(serde_json::from_value::<TicketSettings>(
-        module.configuration.clone(),
-    )?)
 }
 
 pub(crate) async fn save_settings(
@@ -162,71 +181,34 @@ pub(crate) async fn save_settings(
         },
     )
     .await?;
+    ctx.data()
+        .invalidate_guild_settings_cache(guild_id.get())
+        .await;
 
     Ok(())
 }
 
-fn deserialize_optional_snowflake<'de, D>(deserializer: D) -> Result<Option<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    parse_optional_snowflake_value(value).map_err(serde::de::Error::custom)
-}
+#[cfg(test)]
+mod tests {
+    use super::TicketCategory;
 
-fn deserialize_snowflake_vec<'de, D>(deserializer: D) -> Result<Vec<u64>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = Option::<serde_json::Value>::deserialize(deserializer)?;
-    parse_snowflake_vec_value(value).map_err(serde::de::Error::custom)
-}
-
-fn parse_optional_snowflake_value(value: Option<serde_json::Value>) -> Result<Option<u64>, String> {
-    let Some(value) = value else {
-        return Ok(None);
-    };
-
-    match value {
-        serde_json::Value::Null => Ok(None),
-        serde_json::Value::String(value) if value.trim().is_empty() => Ok(None),
-        serde_json::Value::String(value) => value
-            .parse::<u64>()
-            .map(Some)
-            .map_err(|error| format!("invalid snowflake `{value}`: {error}")),
-        serde_json::Value::Number(value) => value
-            .as_u64()
-            .ok_or_else(|| "snowflake number must be an unsigned integer".to_string())
-            .map(Some),
-        other => Err(format!("snowflake must be a string or number, got {other}")),
-    }
-}
-
-fn parse_snowflake_vec_value(value: Option<serde_json::Value>) -> Result<Vec<u64>, String> {
-    let Some(value) = value else {
-        return Ok(Vec::new());
-    };
-
-    match value {
-        serde_json::Value::Null => Ok(Vec::new()),
-        serde_json::Value::Array(values) => values
-            .into_iter()
-            .map(|value| parse_optional_snowflake_value(Some(value)))
-            .collect::<Result<Vec<_>, _>>()
-            .map(|values| values.into_iter().flatten().collect()),
-        serde_json::Value::String(values) if values.trim().is_empty() => Ok(Vec::new()),
-        serde_json::Value::String(values) => values
-            .split(',')
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| {
-                value
-                    .parse::<u64>()
-                    .map_err(|error| format!("invalid snowflake `{value}`: {error}"))
+    #[test]
+    fn ticket_category_serializes_staff_roles_as_string_snowflakes() {
+        let category = TicketCategory {
+            name: "Billing".to_string(),
+            staff_role_ids: vec![123_456_789_012_345_678],
+        };
+        let value = serde_json::to_value(&category).expect("serialize ticket category");
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "name": "Billing",
+                "staff_roles": ["123456789012345678"]
             })
-            .collect(),
-        other => Err(format!(
-            "snowflake array must be a string or array, got {other}"
-        )),
+        );
+        let round_trip: TicketCategory =
+            serde_json::from_value(value).expect("deserialize ticket category");
+        assert_eq!(round_trip.name, "Billing");
+        assert_eq!(round_trip.staff_role_ids, vec![123_456_789_012_345_678]);
     }
 }

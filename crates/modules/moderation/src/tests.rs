@@ -21,13 +21,12 @@ impl WarningRepositorySpy {
 fn moderation_target_fixture() -> ModerationTargetFacts {
     ModerationTargetFacts {
         actor_id: UserId::new(1),
-        actor_permissions: Permissions::KICK_MEMBERS,
+        actor_permissions: Permissions::MODERATE_MEMBERS,
         actor_top_role: 20,
         bot_id: UserId::new(2),
-        bot_permissions: Permissions::KICK_MEMBERS,
+        bot_permissions: Permissions::MODERATE_MEMBERS,
         bot_top_role: 30,
         target_id: UserId::new(3),
-        target_is_bot: false,
         target_top_role: 10,
         guild_owner_id: UserId::new(4),
     }
@@ -58,7 +57,7 @@ fn warning_clear_denials_never_invoke_the_repository() {
     self_target.target_id = self_target.actor_id;
     assert_warning_clear_denied(self_target, ModerationTargetDenial::SelfTarget);
     let mut bot_target = moderation_target_fixture();
-    bot_target.target_is_bot = true;
+    bot_target.target_id = bot_target.bot_id;
     assert_warning_clear_denied(bot_target, ModerationTargetDenial::BotTarget);
     let mut guild_owner = moderation_target_fixture();
     guild_owner.target_id = guild_owner.guild_owner_id;

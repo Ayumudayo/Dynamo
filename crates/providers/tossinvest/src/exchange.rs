@@ -8,7 +8,7 @@ use dynamo_domain_currency::{
 };
 use dynamo_service_exchange::{Error, ExchangeRateService};
 use reqwest::Method;
-use tokio::sync::RwLock;
+use tokio::sync::{Mutex, RwLock};
 
 use crate::{
     TossInvestClient, TossInvestResponse, TossRateLimitGroup,
@@ -35,6 +35,8 @@ struct FetchedExchangeRate {
 pub struct TossInvestMarketDataService {
     client: TossInvestClient,
     last_refresh_at: Arc<RwLock<Option<DateTime<Utc>>>>,
+    cached_usd_krw: Arc<RwLock<Option<FetchedExchangeRate>>>,
+    fetch_lock: Arc<Mutex<()>>,
 }
 
 pub fn exchange_refresh_interval_seconds() -> u64 {
@@ -46,6 +48,8 @@ impl TossInvestMarketDataService {
         Self {
             client,
             last_refresh_at: Arc::new(RwLock::new(None)),
+            cached_usd_krw: Arc::new(RwLock::new(None)),
+            fetch_lock: Arc::new(Mutex::new(())),
         }
     }
 
@@ -70,25 +74,21 @@ impl TossInvestMarketDataService {
             return Err(anyhow!(UNSUPPORTED_PAIR_ERROR));
         }
 
-        let fetched = fetch_usd_krw(EXCHANGE_RATE_PATH.to_string()).await?;
-        let usd_krw = parse_mid_rate(&fetched.mid_rate)?;
-        let source_timestamp =
-            parse_source_timestamp(fetched.valid_from.as_deref(), fetched.fetched_at);
-        let rate = if from == USD && to == KRW {
-            usd_krw
-        } else {
-            1.0 / usd_krw
-        };
-
-        Ok(ExchangeRateQuote {
-            from,
-            to,
-            rate,
-            source_kind: ExchangeRateSourceKind::Live,
-            source_timestamp,
-            source_timestamp_text: format_timestamp(source_timestamp),
-            fetched_at_utc: fetched.fetched_at,
-        })
+        let _singleflight = self.fetch_lock.lock().await;
+        match fetch_usd_krw(EXCHANGE_RATE_PATH.to_string()).await {
+            Ok(fetched) => {
+                let quote = build_quote(from, to, &fetched, ExchangeRateSourceKind::Live)?;
+                *self.cached_usd_krw.write().await = Some(fetched.clone());
+                *self.last_refresh_at.write().await = Some(fetched.fetched_at);
+                Ok(quote)
+            }
+            Err(error) => {
+                if let Some(cached) = self.cached_usd_krw.read().await.clone() {
+                    return build_quote(from, to, &cached, ExchangeRateSourceKind::Cache);
+                }
+                Err(error)
+            }
+        }
     }
 
     async fn refresh_cache_with<F, Fut>(
@@ -99,11 +99,13 @@ impl TossInvestMarketDataService {
         F: FnMut(String) -> Fut,
         Fut: Future<Output = Result<FetchedExchangeRate, Error>>,
     {
+        let _singleflight = self.fetch_lock.lock().await;
         let fetched = fetch_usd_krw(EXCHANGE_RATE_PATH.to_string())
             .await
             .context("failed to refresh Toss Invest USD/KRW exchange rate")?;
         parse_mid_rate(&fetched.mid_rate)?;
 
+        *self.cached_usd_krw.write().await = Some(fetched.clone());
         let mut last_refresh_at = self.last_refresh_at.write().await;
         *last_refresh_at = Some(fetched.fetched_at);
 
@@ -114,6 +116,32 @@ impl TossInvestMarketDataService {
             last_refresh_at: *last_refresh_at,
         })
     }
+}
+
+fn build_quote(
+    from: String,
+    to: String,
+    fetched: &FetchedExchangeRate,
+    source_kind: ExchangeRateSourceKind,
+) -> Result<ExchangeRateQuote, Error> {
+    let usd_krw = parse_mid_rate(&fetched.mid_rate)?;
+    let source_timestamp =
+        parse_source_timestamp(fetched.valid_from.as_deref(), fetched.fetched_at);
+    let rate = if from == USD && to == KRW {
+        usd_krw
+    } else {
+        1.0 / usd_krw
+    };
+
+    Ok(ExchangeRateQuote {
+        from,
+        to,
+        rate,
+        source_kind,
+        source_timestamp,
+        source_timestamp_text: format_timestamp(source_timestamp),
+        fetched_at_utc: fetched.fetched_at,
+    })
 }
 
 #[async_trait]
@@ -137,9 +165,14 @@ impl ExchangeRateService for TossInvestMarketDataService {
     }
 
     async fn cache_status(&self) -> Result<ExchangeRateCacheStatus, Error> {
+        let cached_currency_count = if self.cached_usd_krw.read().await.is_some() {
+            SUPPORTED_PAIR_COUNT
+        } else {
+            0
+        };
         Ok(ExchangeRateCacheStatus {
             target_currency_count: SUPPORTED_PAIR_COUNT,
-            cached_currency_count: 0,
+            cached_currency_count,
             uses_persisted_cache: false,
             last_refresh_at: *self.last_refresh_at.read().await,
         })
@@ -398,5 +431,37 @@ mod tests {
     #[test]
     fn exchange_endpoint_uses_market_info_rate_limit_group() {
         assert_eq!(EXCHANGE_RATE_GROUP, TossRateLimitGroup::MarketInfo);
+    }
+
+    #[tokio::test]
+    async fn exchange_falls_back_to_cached_rate_when_upstream_errors() {
+        use dynamo_service_exchange::ExchangeRateService;
+
+        let service = test_service();
+        let fetched_at = Utc.with_ymd_and_hms(2026, 6, 18, 1, 2, 3).single().unwrap();
+        let refresh = service
+            .refresh_cache_with(move |_path| async move {
+                Ok(FetchedExchangeRate {
+                    mid_rate: "1380.0".to_string(),
+                    valid_from: None,
+                    fetched_at,
+                })
+            })
+            .await
+            .expect("initial cache refresh should succeed");
+        assert_eq!(refresh.refreshed_currency_count, 1);
+
+        let status = service.cache_status().await.expect("cache status");
+        assert_eq!(status.cached_currency_count, 2);
+
+        let quote = service
+            .fetch_pair_with("USD", "KRW", |_path| async {
+                Err(anyhow::anyhow!("upstream down"))
+            })
+            .await
+            .expect("cached quote should be returned when upstream fails");
+
+        assert_eq!(quote.rate, 1380.0);
+        assert_eq!(quote.source_kind, ExchangeRateSourceKind::Cache);
     }
 }

@@ -47,6 +47,8 @@ Require-Command rustup
 Require-Command cargo
 Require-Command zig
 Require-Command cargo-zigbuild
+Require-Command node
+Require-Command git
 
 if ((Invoke-NativeQuiet "cargo-zigbuild" @("--version")) -ne 0) {
   throw "cargo-zigbuild is not installed. Run: cargo install cargo-zigbuild"
@@ -68,7 +70,12 @@ finally {
 }
 
 if (Test-Path $StageDir) {
-  Remove-Item $StageDir -Recurse -Force
+  $resolvedStage = (Resolve-Path -LiteralPath $StageDir).Path
+  $expectedStage = [IO.Path]::GetFullPath((Join-Path $RepoRoot 'output\rpi-aarch64'))
+  if ($resolvedStage -ne $expectedStage -or ((Get-Item -LiteralPath $StageDir).Attributes -band [IO.FileAttributes]::ReparsePoint)) {
+    throw 'Refusing to delete a deployment stage outside its expected workspace directory.'
+  }
+  Remove-Item -LiteralPath $resolvedStage -Recurse -Force
 }
 New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "target\release") | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $StageDir "scripts\lib") | Out-Null
@@ -80,6 +87,7 @@ Copy-Item (Join-Path $RepoRoot "scripts\prod-dashboard.sh") (Join-Path $StageDir
 Copy-Item (Join-Path $RepoRoot "scripts\prod-bot.sh") (Join-Path $StageDir "scripts\prod-bot.sh") -Force
 Copy-Item (Join-Path $RepoRoot "scripts\remote-rpi-postdeploy.sh") (Join-Path $StageDir "scripts\remote-rpi-postdeploy.sh") -Force
 Copy-Item (Join-Path $RepoRoot "scripts\lib\secure-env.sh") (Join-Path $StageDir "scripts\lib\secure-env.sh") -Force
+Copy-Item (Join-Path $RepoRoot "scripts\lib\rpi-artifact.cjs") (Join-Path $StageDir "scripts\lib\rpi-artifact.cjs") -Force
 Copy-Item (Join-Path $ReleaseDir "dynamo-bootstrap") (Join-Path $StageDir "target\release\dynamo-bootstrap") -Force
 Copy-Item (Join-Path $ReleaseDir "dynamo-dashboard") (Join-Path $StageDir "target\release\dynamo-dashboard") -Force
 Copy-Item (Join-Path $ReleaseDir "dynamo-bot") (Join-Path $StageDir "target\release\dynamo-bot") -Force
@@ -94,5 +102,9 @@ if (-not $RunningOnWindows) {
 }
 
 & (Join-Path $RepoRoot "scripts\tests\Test-RpiSecurityBundle.ps1") -StageDir $StageDir
+& node (Join-Path $RepoRoot 'scripts\lib\rpi-artifact.cjs') create $StageDir $RepoRoot
+if ($LASTEXITCODE -ne 0) { throw 'Failed to write deployment manifest.' }
+& node (Join-Path $RepoRoot 'scripts\lib\rpi-artifact.cjs') verify $StageDir
+if ($LASTEXITCODE -ne 0) { throw 'Deployment manifest validation failed.' }
 
 Write-Host "Staged Raspberry Pi deployment bundle at $StageDir"

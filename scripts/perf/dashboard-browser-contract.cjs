@@ -325,6 +325,16 @@ function isCanonicalGuildQuery(search) {
   return true;
 }
 
+// Content-addressed dashboard stylesheet and script (named by SHA-256).
+const BROWSER_ASSET_PATH = /^\/assets\/app\/dashboard-[0-9a-f]{64}\.(?:css|js)$/;
+// Read-only settings dialog fragments, e.g. /guild/{id}/settings/module/stock.
+const GUILD_FRAGMENT_SUFFIX = /^\/settings\/(?:module|command)\/[A-Za-z0-9._%-]{1,128}$/;
+
+function isGuildFragmentPath(pathname, guildId) {
+  const prefix = `/guild/${guildId}`;
+  return pathname.startsWith(prefix) && GUILD_FRAGMENT_SUFFIX.test(pathname.slice(prefix.length));
+}
+
 function isAllowedBrowserReadUrl(rawUrl, baseUrl, guildId) {
   let target;
   try {
@@ -338,6 +348,9 @@ function isAllowedBrowserReadUrl(rawUrl, baseUrl, guildId) {
       || target.hash !== '') return false;
   if (target.pathname === '/') return target.search === '';
   if (target.pathname === `/guild/${guildId}`) return isCanonicalGuildQuery(target.search);
+  if (BROWSER_ASSET_PATH.test(target.pathname)) return target.search === '';
+  if (isGuildFragmentPath(target.pathname, guildId)) return target.search === '';
+  if (target.pathname === `/api/guild-resources/${guildId}`) return target.search === '';
   return target.search === '' && LOCKED_FONT_ROUTES.some((font) => font.path === target.pathname);
 }
 

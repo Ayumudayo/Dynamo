@@ -17,3 +17,7 @@ poise.workspace = true
 rand.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+dynamo-repositories = { path = "../../repositories" }
+async-trait.workspace = true

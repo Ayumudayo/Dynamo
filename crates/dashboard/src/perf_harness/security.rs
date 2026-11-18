@@ -55,6 +55,34 @@ pub(super) fn is_allowed_read_request(runtime: &PerfRuntime, uri: &axum::http::U
     uri.query().is_none() && is_allowed_read_path(runtime, uri.path())
 }
 
+/// Settings dialogs are read-only HTML fragments of the guild page, e.g.
+/// `/guild/{id}/settings/module/stock`.
+pub(super) fn is_allowed_guild_fragment_path(runtime: &PerfRuntime, path: &str) -> bool {
+    let Some(rest) = path
+        .strip_prefix(runtime.guild_path())
+        .and_then(|rest| rest.strip_prefix("/settings/"))
+    else {
+        return false;
+    };
+    let Some((kind, item_id)) = rest.split_once('/') else {
+        return false;
+    };
+    matches!(kind, "module" | "command")
+        && !item_id.is_empty()
+        && item_id.len() <= 128
+        && item_id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.' | b'%'))
+}
+
+pub(super) fn is_allowed_guild_resources_path(runtime: &PerfRuntime, path: &str) -> bool {
+    path.strip_prefix("/api/guild-resources/")
+        .and_then(|rest| rest.parse::<u64>().ok())
+        .is_some_and(|guild_id| {
+            guild_id == runtime.guild_id && path == format!("/api/guild-resources/{guild_id}")
+        })
+}
+
 pub(super) fn is_allowed_guild_query(query: &str) -> bool {
     let mut fields = query.split('&');
     let Some(tab_field) = fields.next() else {
@@ -98,6 +126,7 @@ fn is_canonical_log_page(value: &str) -> bool {
 
 pub(super) fn is_allowed_read_path(runtime: &PerfRuntime, path: &str) -> bool {
     matches!(path, "/healthz" | "/__perf/instance" | "/__perf/counters")
+        || crate::assets::is_browser_asset_path(path)
         || matches!(
             path,
             FIRA_SANS_LIGHT_PATH
@@ -109,9 +138,16 @@ pub(super) fn is_allowed_read_path(runtime: &PerfRuntime, path: &str) -> bool {
         )
         || match runtime.fixture_mode {
             FixtureMode::Public => path == "/",
-            FixtureMode::GuildDetail => path == runtime.guild_path(),
+            FixtureMode::GuildDetail => {
+                path == runtime.guild_path()
+                    || is_allowed_guild_fragment_path(runtime, path)
+                    || is_allowed_guild_resources_path(runtime, path)
+            }
             FixtureMode::ReadOnly => {
-                matches!(path, "/" | "/selector") || path == runtime.guild_path()
+                matches!(path, "/" | "/selector")
+                    || path == runtime.guild_path()
+                    || is_allowed_guild_fragment_path(runtime, path)
+                    || is_allowed_guild_resources_path(runtime, path)
             }
         }
 }

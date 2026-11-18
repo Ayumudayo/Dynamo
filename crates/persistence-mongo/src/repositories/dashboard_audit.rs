@@ -28,9 +28,10 @@ impl DashboardAuditLogRepository for MongoPersistence {
         let page_size = query.page_size.clamp(1, 100);
         let skip = page.saturating_sub(1).saturating_mul(page_size);
 
-        let mut filter = doc! {
-            "scope": to_bson(&query.scope)?,
-        };
+        let mut filter = doc! {};
+        if let Some(scope) = query.scope {
+            filter.insert("scope", to_bson(&scope)?);
+        }
         if let Some(guild_id) = query.guild_id {
             filter.insert("guild_id", guild_id.to_string());
         }

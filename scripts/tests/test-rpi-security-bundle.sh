@@ -35,6 +35,12 @@ validate_bundle() {
     fail "staged helper SHA-256 mismatch (expected $source_hash, found $staged_hash)"
     return 1
   }
+  [[ -f "$stage_dir/scripts/lib/rpi-artifact.cjs" && ! -L "$stage_dir/scripts/lib/rpi-artifact.cjs" ]] || {
+    fail "missing deployment verification helper"; return 1;
+  }
+  [[ "$(sha256_of "$stage_dir/scripts/lib/rpi-artifact.cjs")" == "$(sha256_of "$ROOT_DIR/scripts/lib/rpi-artifact.cjs")" ]] || {
+    fail "deployment verification helper hash mismatch"; return 1;
+  }
 
   for launcher in prod-bootstrap.sh prod-dashboard.sh prod-bot.sh; do
     launcher="$stage_dir/scripts/$launcher"
@@ -70,6 +76,7 @@ make_fixture() {
   rm -rf -- "$stage_dir"
   mkdir -p "$stage_dir/scripts/lib"
   cp "$SOURCE_HELPER" "$stage_dir/scripts/lib/secure-env.sh"
+  cp "$ROOT_DIR/scripts/lib/rpi-artifact.cjs" "$stage_dir/scripts/lib/rpi-artifact.cjs"
   cp "$ROOT_DIR/scripts/prod-bootstrap.sh" "$stage_dir/scripts/prod-bootstrap.sh"
   cp "$ROOT_DIR/scripts/prod-dashboard.sh" "$stage_dir/scripts/prod-dashboard.sh"
   cp "$ROOT_DIR/scripts/prod-bot.sh" "$stage_dir/scripts/prod-bot.sh"
@@ -146,8 +153,8 @@ exit 0
 EOF
   cat >"$fake_bin/node" <<'EOF'
 #!/usr/bin/env bash
-# The postdeploy contract only needs a successful parser for the fake empty
-# `pm2 jlist`; the production host uses its real Node binary.
+# This test isolates .env handling. Artifact and running-process verification
+# are exercised by rpi-artifact.test.cjs; production uses its real Node binary.
 cat >/dev/null
 exit 0
 EOF

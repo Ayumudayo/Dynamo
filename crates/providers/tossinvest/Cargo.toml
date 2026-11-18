@@ -11,7 +11,6 @@ async-trait.workspace = true
 chrono.workspace = true
 dynamo-domain-currency = { path = "../../domain-currency" }
 dynamo-domain-stock = { path = "../../domain-stock" }
-dynamo-repositories = { path = "../../repositories" }
 dynamo-service-exchange = { path = "../../service-exchange" }
 dynamo-service-stock = { path = "../../service-stock" }
 rand.workspace = true

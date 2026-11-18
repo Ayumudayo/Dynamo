@@ -1,4 +1,6 @@
-use mongodb::{Client, Collection, Database};
+use std::time::Duration;
+
+use mongodb::{Client, Collection, Database, options::ClientOptions};
 
 use crate::{
     Error, MongoPersistenceConfig,
@@ -25,7 +27,15 @@ pub struct MongoPersistence {
 
 impl MongoPersistence {
     pub async fn connect(config: MongoPersistenceConfig) -> Result<Self, Error> {
-        let client = Client::with_uri_str(&config.connection_string).await?;
+        let mut options = ClientOptions::parse(&config.connection_string).await?;
+        options.app_name.get_or_insert_with(|| "dynamo".to_string());
+        options
+            .connect_timeout
+            .get_or_insert(Duration::from_secs(5));
+        options
+            .server_selection_timeout
+            .get_or_insert(Duration::from_secs(5));
+        let client = Client::with_options(options)?;
         Ok(Self::from_database(client.database(&config.database_name)))
     }
 
