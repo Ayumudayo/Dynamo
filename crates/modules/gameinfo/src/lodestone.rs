@@ -4,6 +4,7 @@ use reqwest::{
     header::{ACCEPT_LANGUAGE, HeaderMap, HeaderValue, USER_AGENT},
 };
 use scraper::{ElementRef, Html, Selector};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 use std::time::Duration;
 
@@ -50,8 +51,8 @@ pub(crate) fn parse_detail_links(html: &str, selector: &str) -> Vec<LodestoneLin
     let document = Html::parse_document(html);
     let selector = Selector::parse(selector).expect("valid selector");
     let time_script_selector = Selector::parse("time script").expect("valid selector");
-    let mut links = Vec::new();
-    let mut seen = std::collections::HashSet::new();
+    let mut links: Vec<LodestoneLink> = Vec::new();
+    let mut seen: HashMap<String, usize> = HashMap::new();
 
     for node in document.select(&selector) {
         let Some(href) = node.value().attr("href") else {
@@ -60,9 +61,6 @@ pub(crate) fn parse_detail_links(html: &str, selector: &str) -> Vec<LodestoneLin
         let Some(url) = absolutize_lodestone_url(href) else {
             continue;
         };
-        if !seen.insert(url.clone()) {
-            continue;
-        }
 
         let title = normalize_text(&node.text().collect::<Vec<_>>().join(" "));
         let title = if title.is_empty() {
@@ -95,6 +93,13 @@ pub(crate) fn parse_detail_links(html: &str, selector: &str) -> Vec<LodestoneLin
             let (stamp, _) = arguments.split_once(',')?;
             stamp.trim().parse().ok()
         });
+        if let Some(&existing_index) = seen.get(&url) {
+            if links[existing_index].published_at.is_none() && published_at.is_some() {
+                links[existing_index].published_at = published_at;
+            }
+            continue;
+        }
+        seen.insert(url.clone(), links.len());
         links.push(LodestoneLink {
             title,
             url,
@@ -164,7 +169,7 @@ fn contains_schedule_shape(text: &str) -> bool {
     text.contains('年')
         && text.contains('月')
         && text.contains("より")
-        && (text.contains("まで") || text.contains("終了時刻未定") || text.contains("終了時間未定"))
+        && (text.contains("まで") || crate::maintenance::has_unknown_end_time(text))
 }
 
 pub(crate) fn extract_first_heading(html: &str) -> Option<String> {

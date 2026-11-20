@@ -49,6 +49,17 @@ impl GameInfoCacheStore {
         }
     }
 
+    #[cfg(test)]
+    pub(crate) fn with_data_path(data_path: PathBuf) -> Self {
+        let sample_path = data_path.with_file_name("gameinfo-cache.sample.json");
+        Self {
+            data_path,
+            sample_path,
+            legacy_path: None,
+            legacy_search_root: None,
+        }
+    }
+
     pub(crate) async fn load_maintinfo(&self) -> Result<Option<MaintInfo>, Error> {
         Ok(self.load_maintenance_state().await?.0)
     }
@@ -249,6 +260,7 @@ mod tests {
             start_stamp: 100,
             end_stamp: 200,
             end_time_unknown: false,
+            completed: false,
             title_kr: "점검".into(),
             scope: "전 월드".into(),
             body_fingerprint: 1,
@@ -398,6 +410,7 @@ mod tests {
             start_stamp: 100,
             end_stamp: 200,
             end_time_unknown: false,
+            completed: false,
             title_kr: "maint".into(),
             url: "maint-url".into(),
             scope: "전 월드".into(),

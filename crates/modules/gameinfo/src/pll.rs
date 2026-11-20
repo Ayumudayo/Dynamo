@@ -45,6 +45,13 @@ pub(crate) struct StreamLink {
     pub(crate) url: String,
 }
 
+#[derive(Debug)]
+pub(crate) struct ParsedPllDetail {
+    pub(crate) info: PllInfo,
+    pub(crate) summary_ja: Option<String>,
+    pub(crate) content_items_ja: Vec<String>,
+}
+
 #[derive(Debug, Default)]
 struct PllSections {
     summary_ja: Option<String>,
@@ -101,9 +108,12 @@ async fn fetch_pll_info_uncached(now: i64) -> Result<Option<PllInfo>, Error> {
 
     for page in 1..=MAX_PLL_PAGES {
         let list_url = format!("{TOPICS_LIST_URL}?page={page}");
-        let list_html = fetch_lodestone_html(&client, &list_url).await;
-        let Ok(list_html) = list_html else {
-            break;
+        let list_html = match fetch_lodestone_html(&client, &list_url).await {
+            Ok(html) => html,
+            Err(error) => {
+                tracing::warn!(%error, url = %list_url, "failed to fetch Lodestone topics list");
+                break;
+            }
         };
 
         let candidates = parse_pll_candidates(&list_html);
@@ -123,14 +133,18 @@ async fn fetch_pll_info_uncached(now: i64) -> Result<Option<PllInfo>, Error> {
                 }
             }
 
-            let detail_html = fetch_lodestone_html(&client, &candidate.url).await;
-            let Ok(detail_html) = detail_html else {
-                continue;
+            let detail_html = match fetch_lodestone_html(&client, &candidate.url).await {
+                Ok(html) => html,
+                Err(error) => {
+                    tracing::warn!(%error, url = %candidate.url, "failed to fetch Lodestone PLL detail");
+                    continue;
+                }
             };
 
-            let Some(mut next) = parse_pll_detail(&candidate.url, &detail_html)? else {
+            let Some(parsed) = parse_pll_detail(&candidate.url, &detail_html)? else {
                 continue;
             };
+            let mut next = parsed.info;
 
             if !is_valid_pll_schedule(&next) {
                 continue;
@@ -141,14 +155,11 @@ async fn fetch_pll_info_uncached(now: i64) -> Result<Option<PllInfo>, Error> {
                 continue;
             }
 
-            let sections = parse_pll_sections(&detail_html);
-            next.stream_links = sections.stream_links;
-
             if wants_translation {
                 next.translated_description =
-                    translate_optional_text(&client, sections.summary_ja.as_deref()).await;
+                    translate_optional_text(&client, parsed.summary_ja.as_deref()).await;
                 next.translated_contents =
-                    translate_text_list(&client, &sections.content_items_ja).await;
+                    translate_text_list(&client, &parsed.content_items_ja).await;
             }
 
             if !is_live {
@@ -200,14 +211,14 @@ async fn load_pll_fallback(
     Ok(None)
 }
 
-fn parse_pll_candidates(html: &str) -> Vec<crate::lodestone::LodestoneLink> {
+pub(crate) fn parse_pll_candidates(html: &str) -> Vec<crate::lodestone::LodestoneLink> {
     parse_detail_links(html, r#"a[href*="/lodestone/topics/detail/"]"#)
         .into_iter()
         .filter(|link| is_pll_title(&link.title))
         .collect()
 }
 
-fn parse_pll_detail(url: &str, html: &str) -> Result<Option<PllInfo>, Error> {
+pub(crate) fn parse_pll_detail(url: &str, html: &str) -> Result<Option<ParsedPllDetail>, Error> {
     let Some((title, body)) = parse_article_title_and_body(html) else {
         return Ok(None);
     };
@@ -218,15 +229,20 @@ fn parse_pll_detail(url: &str, html: &str) -> Result<Option<PllInfo>, Error> {
     let heading = extract_first_heading(html).unwrap_or_else(|| title.clone());
     let round_number = extract_round_number(&heading).or_else(|| extract_round_number(&title));
     let start_stamp = extract_pll_start(&body)?;
+    let sections = parse_pll_sections(html);
 
-    Ok(Some(PllInfo {
-        fixed_title: generate_pll_title(round_number.as_deref(), start_stamp),
-        url: url.to_string(),
-        start_stamp,
-        expire_time: 0,
-        translated_description: None,
-        translated_contents: Vec::new(),
-        stream_links: Vec::new(),
+    Ok(Some(ParsedPllDetail {
+        info: PllInfo {
+            fixed_title: generate_pll_title(round_number.as_deref(), start_stamp),
+            url: url.to_string(),
+            start_stamp,
+            expire_time: 0,
+            translated_description: None,
+            translated_contents: Vec::new(),
+            stream_links: sections.stream_links,
+        },
+        summary_ja: sections.summary_ja,
+        content_items_ja: sections.content_items_ja,
     }))
 }
 
@@ -431,8 +447,9 @@ fn pll_is_usable(start_stamp: Option<i64>, now: i64) -> bool {
 }
 
 pub(crate) fn extract_pll_start(body_text: &str) -> Result<Option<i64>, Error> {
-    let regex = Regex::new(r"(\d{4}年\d{1,2}月\d{1,2}日（[^）]+）)\s?(\d{1,2}:\d{2})頃?～")
-        .expect("valid regex");
+    let regex =
+        Regex::new(r"(\d{4}年\d{1,2}月\d{1,2}日[（(][^）)]+[）)])\s*(\d{1,2}:\d{2})頃?[～~]")
+            .expect("valid regex");
 
     let Some(captures) = regex.captures(body_text) else {
         return Ok(None);
@@ -440,7 +457,7 @@ pub(crate) fn extract_pll_start(body_text: &str) -> Result<Option<i64>, Error> {
 
     let date = captures
         .get(1)
-        .map(|value| value.as_str().replace(['（', '）'], " "))
+        .map(|value| value.as_str().replace(['（', '）', '(', ')'], " "))
         .unwrap_or_default();
     let cleaned_date = date.split_whitespace().next().unwrap_or_default();
     let time = captures

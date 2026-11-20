@@ -46,6 +46,8 @@ pub(crate) struct MaintInfo {
     pub(crate) end_stamp: i64,
     #[serde(default)]
     pub(crate) end_time_unknown: bool,
+    #[serde(default)]
+    pub(crate) completed: bool,
     pub(crate) title_kr: String,
     pub(crate) url: String,
     #[serde(default = "default_maintenance_scope")]
@@ -98,6 +100,8 @@ pub(crate) enum MaintenanceNoticeKind {
     Emergency,
     FollowUp,
     EmergencyFollowUp,
+    Completed,
+    EmergencyCompleted,
 }
 
 pub(crate) async fn fetch_maintenance_info() -> Result<Option<MaintInfo>, Error> {
@@ -170,15 +174,59 @@ pub fn spawn_maintenance_poll_loop() {
     });
 }
 
+struct RefreshContext<'a> {
+    cache_store: &'a GameInfoCacheStore,
+    state: &'a RwLock<Option<MaintInfo>>,
+    completed_notices: &'a Mutex<HashSet<String>>,
+    now: i64,
+    wants_translation: bool,
+}
+
 async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
     let cache_store = GameInfoCacheStore::new();
     let now = Utc::now().timestamp();
     let client = lodestone_client()?;
-    let (mut cached, mut cancellations) = cache_store.load_maintenance_state().await?;
-    cached = cached.filter(|info| is_cache_usable(info, now));
-    let wants_translation = translate_api_key().is_some();
+    let state = shared_info();
+    let completed_notices = COMPLETED_NOTICES.get_or_init(|| Mutex::new(HashSet::new()));
+    let ctx = RefreshContext {
+        cache_store: &cache_store,
+        state: &state,
+        completed_notices,
+        now,
+        wants_translation: translate_api_key().is_some(),
+    };
 
     let candidates = fetch_maintenance_candidates(&client, MAINTENANCE_LIST_URL).await?;
+    refresh_maintenance_candidates(
+        &ctx,
+        candidates,
+        |url| {
+            let client = client.clone();
+            async move { fetch_lodestone_html(&client, &url).await }
+        },
+        |summary| {
+            let client = client.clone();
+            async move { translate_optional_text(&client, summary.as_deref()).await }
+        },
+    )
+    .await
+}
+
+async fn refresh_maintenance_candidates<F, FFut, T, TFut>(
+    ctx: &RefreshContext<'_>,
+    candidates: Vec<LodestoneLink>,
+    mut fetch_detail: F,
+    mut translate: T,
+) -> Result<Option<MaintInfo>, Error>
+where
+    F: FnMut(String) -> FFut,
+    FFut: std::future::Future<Output = Result<String, Error>>,
+    T: FnMut(Option<String>) -> TFut,
+    TFut: std::future::Future<Output = Option<String>>,
+{
+    let (mut cached, mut cancellations) = ctx.cache_store.load_maintenance_state().await?;
+    cached = cached.filter(|info| is_cache_usable(info, ctx.now));
+
     for candidate in candidates.into_iter().take(MAX_MAINTENANCE_CANDIDATES) {
         if cancellations.iter().any(|entry| {
             entry.notice_url == candidate.url
@@ -186,20 +234,15 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
         }) {
             continue;
         }
-        if !should_recheck_notice_detail(&candidate.url, cached.as_ref(), now) {
+        if !should_recheck_notice_detail(&candidate.url, cached.as_ref(), ctx.now) {
             // Candidates are newest first. Preserve this cached notice rather
             // than replacing it with an older original notice below it.
             break;
         }
-        if COMPLETED_NOTICES
-            .get_or_init(|| Mutex::new(HashSet::new()))
-            .lock()
-            .await
-            .contains(&candidate.url)
-        {
+        if ctx.completed_notices.lock().await.contains(&candidate.url) {
             continue;
         }
-        let detail_html = fetch_lodestone_html(&client, &candidate.url).await?;
+        let detail_html = fetch_detail(candidate.url.clone()).await?;
 
         // A cancellation notice supersedes any older scheduled notice. Do not
         // fall back to a still-cached window after observing the cancellation.
@@ -211,10 +254,10 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
                 cancellation_from_notice(&candidate.url, &title, &body, cached.as_ref())?;
             // Persist both the tombstone and removal atomically before marking
             // anything processed. A failed write must retry the cancellation.
-            cache_store
+            ctx.cache_store
                 .save_maintenance_cancellation(&cancellation)
                 .await?;
-            clear_cancelled_snapshot(&shared_info(), &cancellation).await;
+            clear_cancelled_snapshot(ctx.state, &cancellation).await;
             if cached
                 .as_ref()
                 .is_some_and(|info| cancellation.matches(info))
@@ -231,11 +274,8 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
         if cancellations.iter().any(|entry| entry.matches(&next)) {
             continue;
         }
-        if should_skip_historical_notice(&next, cached.as_ref(), now) {
-            let mut completed = COMPLETED_NOTICES
-                .get_or_init(|| Mutex::new(HashSet::new()))
-                .lock()
-                .await;
+        if should_skip_historical_notice(&next, cached.as_ref(), ctx.now) {
+            let mut completed = ctx.completed_notices.lock().await;
             if completed.len() >= MAX_COMPLETED_NOTICES {
                 completed.clear();
             }
@@ -246,7 +286,7 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
             next.body_fingerprint = fingerprint(&body);
         }
 
-        if wants_translation {
+        if ctx.wants_translation {
             let translation_unchanged = cached.as_ref().is_some_and(|info| {
                 info.id == next.id
                     && info.start_stamp == next.start_stamp
@@ -260,8 +300,7 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
                     .and_then(|info| info.translated_description.clone());
             } else {
                 let summary_ja = extract_maintenance_summary_ja(&detail_html);
-                next.translated_description =
-                    translate_optional_text(&client, summary_ja.as_deref()).await;
+                next.translated_description = translate(summary_ja).await;
             }
         }
 
@@ -270,18 +309,20 @@ async fn refresh_maintenance_info() -> Result<Option<MaintInfo>, Error> {
                 || info.start_stamp != next.start_stamp
                 || info.end_stamp != next.end_stamp
                 || info.end_time_unknown != next.end_time_unknown
+                || info.completed != next.completed
+                || info.title_kr != next.title_kr
                 || info.body_fingerprint != next.body_fingerprint
                 || info.scope != next.scope
                 || info.translated_description != next.translated_description
         });
         if changed {
-            cache_store.save_maintinfo(&next).await?;
+            ctx.cache_store.save_maintinfo(&next).await?;
         }
         return Ok(Some(next));
     }
 
     Ok(cached
-        .filter(|info| is_cache_usable(info, now))
+        .filter(|info| is_cache_usable(info, ctx.now))
         .map(mark_stale))
 }
 
@@ -401,7 +442,7 @@ fn parse_maintenance_detail(url: &str, html: &str) -> Result<Option<MaintInfo>, 
 
     let (start_stamp, end_stamp, end_time_unknown) = match parse_maintenance_schedule(&body)? {
         Some((start, end)) => (start, end, false),
-        None if body.contains("終了時刻未定") || body.contains("終了時間未定") => {
+        None if has_unknown_end_time(&body) => {
             let Some(start) = parse_maintenance_start_stamp(&body)? else {
                 return Ok(None);
             };
@@ -409,6 +450,7 @@ fn parse_maintenance_detail(url: &str, html: &str) -> Result<Option<MaintInfo>, 
         }
         None => return Ok(None),
     };
+    let completed = is_completed_maintenance_notice(&title, &body);
     let scope = maintenance_scope(&title, &body);
     let display_title = format_maintenance_title(
         start_stamp,
@@ -430,6 +472,7 @@ fn parse_maintenance_detail(url: &str, html: &str) -> Result<Option<MaintInfo>, 
         start_stamp,
         end_stamp,
         end_time_unknown,
+        completed,
         title_kr: display_title,
         url: url.to_string(),
         scope: scope.to_string(),
@@ -437,6 +480,30 @@ fn parse_maintenance_detail(url: &str, html: &str) -> Result<Option<MaintInfo>, 
         translated_description: None,
         stale: false,
     }))
+}
+
+pub(crate) fn has_unknown_end_time(body: &str) -> bool {
+    static UNKNOWN_END_REGEX: OnceLock<Regex> = OnceLock::new();
+    UNKNOWN_END_REGEX
+        .get_or_init(|| Regex::new(r"終了(?:予定)?時[刻間](?:は)?未定").expect("valid regex"))
+        .is_match(body)
+}
+
+fn is_completed_maintenance_notice(title: &str, body: &str) -> bool {
+    static BODY_COMPLETED_REGEX: OnceLock<Regex> = OnceLock::new();
+
+    if title.contains("終了のお知らせ") {
+        return true;
+    }
+
+    BODY_COMPLETED_REGEX
+        .get_or_init(|| {
+            Regex::new(
+                r"メンテナンス作業(?:を|は[^。]*|について[^。]*|につきまして[^。]*)終了(?:いた)?しました",
+            )
+            .expect("valid maintenance completion regex")
+        })
+        .is_match(body)
 }
 
 fn is_global_maintenance_title(input: &str) -> bool {
@@ -462,10 +529,38 @@ pub(crate) fn maintenance_scope(title: &str, body: &str) -> &'static str {
 }
 
 fn is_cancelled_maintenance_notice(title: &str, body: &str) -> bool {
-    title.contains("中止")
+    static FOLLOW_UP_CANCEL_REGEX: OnceLock<Regex> = OnceLock::new();
+    static FOLLOW_UP_POSTPONE_REGEX: OnceLock<Regex> = OnceLock::new();
+
+    if title.contains("中止")
         || body.contains("メンテナンス作業を中止")
         || body.contains("メンテナンス作業は中止")
         || body.contains("実施を中止")
+    {
+        return true;
+    }
+
+    let follow_up_cancel = FOLLOW_UP_CANCEL_REGEX.get_or_init(|| {
+        Regex::new(
+            r"メンテナンス作業(?:について|につきまして)[、,\s]*(?:実施を)?中止(?:とさせていただきます|いたします|します|となりました|になりました)",
+        )
+        .expect("valid follow-up cancellation regex")
+    });
+    if follow_up_cancel.is_match(body) {
+        return true;
+    }
+
+    if !has_labeled_schedule(body) {
+        let follow_up_postpone = FOLLOW_UP_POSTPONE_REGEX.get_or_init(|| {
+            Regex::new(
+                r"メンテナンス作業(?:について|につきまして)[、,\s]*(?:実施を)?延期(?:の連絡を受けました|とさせていただきます|いたします|します|となりました|になりました)",
+            )
+            .expect("valid follow-up postponement regex")
+        });
+        return title.contains("延期") || follow_up_postpone.is_match(body);
+    }
+
+    false
 }
 
 fn cancellation_mentions_start_date(info: &MaintInfo, body: &str) -> bool {
@@ -550,7 +645,7 @@ pub(crate) fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
             false,
         )
         .field("대상 범위", &info.scope, true);
-    if !info.end_time_unknown && info.end_stamp > now {
+    if !info.completed && !info.end_time_unknown && info.end_stamp > now {
         embed = embed.field(
             "종료까지 남은 시간",
             format!("<t:{}:R>", info.end_stamp),
@@ -564,10 +659,17 @@ pub(crate) fn build_maintenance_embed(info: &MaintInfo) -> CreateEmbed {
         embed = embed.description(description);
     }
 
-    if info.stale {
+    if info.completed {
+        let footer = if info.stale {
+            "캐시된 점검 정보 · 점검 종료 공지 확인됨"
+        } else {
+            "점검 종료 공지 확인됨"
+        };
+        embed = embed.footer(CreateEmbedFooter::new(footer));
+    } else if info.stale {
         let footer = if info.end_time_unknown {
             "캐시된 점검 정보 · 종료 시각 미정 · Lodestone에서 갱신 여부를 확인하지 못함"
-        } else if info.end_stamp > Utc::now().timestamp() {
+        } else if info.end_stamp > now {
             "캐시된 점검 정보 · Lodestone에서 갱신 여부를 확인하지 못함"
         } else {
             "캐시된 정보 · 예정 종료 시각 경과 · 점검 종료 여부 미확인"
@@ -591,13 +693,51 @@ pub(crate) fn create_maintenance_error_embed() -> CreateEmbed {
         .footer(CreateEmbedFooter::new("From Lodestone News"))
 }
 
-pub(crate) fn parse_maintenance_schedule(body_text: &str) -> Result<Option<(i64, i64)>, Error> {
-    let regex = Regex::new(
-        r"(?:日\s*時[:：]\s*)?(?P<sy>\d{4})年(?P<sm>\d{1,2})月(?P<sd>\d{1,2})日(?:\([^)]*\)|（[^）]*）)\s*(?P<sh>\d{1,2}):(?P<smin>\d{2})より\s*(?:(?P<ey>\d{4})年)?(?:(?P<em>\d{1,2})月)?(?:(?P<ed>\d{1,2})日(?:\([^)]*\)|（[^）]*）)?)?\s*(?P<eh>\d{1,2}):(?P<emin>\d{2})頃?まで",
-    )
-    .expect("valid regex");
+fn schedule_regexes() -> &'static [Regex; 3] {
+    static REGEXES: OnceLock<[Regex; 3]> = OnceLock::new();
+    REGEXES.get_or_init(|| {
+        const CORE: &str = r"(?P<sy>\d{4})年(?P<sm>\d{1,2})月(?P<sd>\d{1,2})日(?:\([^)]*\)|（[^）]*）)\s*(?P<sh>\d{1,2}):(?P<smin>\d{2})頃?より\s*(?:(?P<ey>\d{4})年)?(?:(?P<em>\d{1,2})月)?(?:(?P<ed>\d{1,2})日(?:\([^)]*\)|（[^）]*）)?)?\s*(?P<eh>\d{1,2}):(?P<emin>\d{2})頃?まで";
+        [
+            Regex::new(&format!(r"日\s*時[:：]\s*{CORE}")).expect("valid schedule regex"),
+            Regex::new(&format!(r"変更後[:：]\s*{CORE}")).expect("valid schedule regex"),
+            Regex::new(CORE).expect("valid schedule regex"),
+        ]
+    })
+}
 
-    let Some(captures) = regex.captures(body_text) else {
+fn start_stamp_regexes() -> &'static [Regex; 3] {
+    static REGEXES: OnceLock<[Regex; 3]> = OnceLock::new();
+    REGEXES.get_or_init(|| {
+        const CORE: &str = r"(?P<y>\d{4})年(?P<m>\d{1,2})月(?P<d>\d{1,2})日(?:\([^)]*\)|（[^）]*）)\s*(?P<h>\d{1,2}):(?P<min>\d{2})頃?より";
+        [
+            Regex::new(&format!(r"日\s*時[:：]\s*{CORE}")).expect("valid start-time regex"),
+            Regex::new(&format!(r"変更後[:：]\s*{CORE}")).expect("valid start-time regex"),
+            Regex::new(CORE).expect("valid start-time regex"),
+        ]
+    })
+}
+
+fn capture_prioritized<'a>(
+    regexes: &'static [Regex; 3],
+    text: &'a str,
+) -> Option<regex::Captures<'a>> {
+    regexes.iter().find_map(|regex| regex.captures(text))
+}
+
+fn has_labeled_schedule(body: &str) -> bool {
+    let [by_datetime, by_after, _] = schedule_regexes();
+    if by_datetime.is_match(body) || by_after.is_match(body) {
+        return true;
+    }
+    if has_unknown_end_time(body) {
+        let [start_by_datetime, start_by_after, _] = start_stamp_regexes();
+        return start_by_datetime.is_match(body) || start_by_after.is_match(body);
+    }
+    false
+}
+
+pub(crate) fn parse_maintenance_schedule(body_text: &str) -> Result<Option<(i64, i64)>, Error> {
+    let Some(captures) = capture_prioritized(schedule_regexes(), body_text) else {
         return Ok(None);
     };
 
@@ -655,9 +795,7 @@ pub(crate) fn parse_maintenance_schedule(body_text: &str) -> Result<Option<(i64,
 }
 
 pub(crate) fn parse_maintenance_start_stamp(body_text: &str) -> Result<Option<i64>, Error> {
-    let regex = Regex::new(r"(?P<y>\d{4})年(?P<m>\d{1,2})月(?P<d>\d{1,2})日(?:\([^)]*\)|（[^）]*）)\s*(?P<h>\d{1,2}):(?P<min>\d{2})より")
-        .expect("valid start-time regex");
-    let Some(c) = regex.captures(body_text) else {
+    let Some(c) = capture_prioritized(start_stamp_regexes(), body_text) else {
         return Ok(None);
     };
     let get = |name: &str| -> Result<u32, Error> {
@@ -726,9 +864,21 @@ fn capture_optional_u32(captures: &regex::Captures<'_>, name: &str) -> Result<Op
 }
 
 pub(crate) fn classify_maintenance_notice(title: &str) -> MaintenanceNoticeKind {
-    let is_follow_up =
-        title.contains("続報") || title.contains("終了時間変更") || title.contains("延長");
+    let is_completed = title.contains("終了のお知らせ");
+    let is_follow_up = title.contains("続報")
+        || title.contains("時間変更")
+        || title.contains("日時変更")
+        || title.contains("日程変更")
+        || title.contains("延長");
     let is_emergency = title.contains("緊急");
+
+    if is_completed {
+        return if is_emergency {
+            MaintenanceNoticeKind::EmergencyCompleted
+        } else {
+            MaintenanceNoticeKind::Completed
+        };
+    }
 
     match (is_follow_up, is_emergency) {
         (true, true) => MaintenanceNoticeKind::EmergencyFollowUp,
@@ -773,6 +923,8 @@ pub(crate) fn format_maintenance_title(
         MaintenanceNoticeKind::Emergency => "전 월드 긴급 유지보수 작업",
         MaintenanceNoticeKind::FollowUp => "전 월드 유지보수 작업 종료 시간 변경",
         MaintenanceNoticeKind::EmergencyFollowUp => "전 월드 긴급 유지보수 작업 종료 시간 변경",
+        MaintenanceNoticeKind::Completed => "전 월드 유지보수 작업 종료",
+        MaintenanceNoticeKind::EmergencyCompleted => "전 월드 긴급 유지보수 작업 종료",
     };
 
     format!("{prefix} ({range})")
@@ -927,5 +1079,421 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    fn temp_cache_store(label: &str) -> (std::path::PathBuf, GameInfoCacheStore) {
+        let dir =
+            std::env::temp_dir().join(format!("dynamo-maint-e2e-{label}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let store = GameInfoCacheStore::with_data_path(dir.join("gameinfo-cache.json"));
+        (dir, store)
+    }
+
+    fn tokyo_ts(year: i32, month: u32, day: u32, hour: u32, min: u32) -> i64 {
+        Tokyo
+            .with_ymd_and_hms(year, month, day, hour, min, 0)
+            .unwrap()
+            .timestamp()
+    }
+
+    async fn poll_fixture_listing(
+        store: &GameInfoCacheStore,
+        state: &RwLock<Option<MaintInfo>>,
+        completed_notices: &Mutex<HashSet<String>>,
+        now: i64,
+        listing_html: &str,
+        pages: &std::collections::HashMap<String, String>,
+    ) -> Result<Option<MaintInfo>, Error> {
+        let candidates = parse_maintenance_candidates(listing_html, NOTICE_LINKS);
+        let ctx = RefreshContext {
+            cache_store: store,
+            state,
+            completed_notices,
+            now,
+            wants_translation: true,
+        };
+        refresh_maintenance_candidates(
+            &ctx,
+            candidates,
+            |url| {
+                let html = pages.get(&url).cloned();
+                async move { html.ok_or_else(|| anyhow::anyhow!("missing fixture: {url}")) }
+            },
+            |summary| async move { summary.map(|text| format!("KO:{text}")) },
+        )
+        .await
+    }
+
+    #[tokio::test]
+    async fn original_notice_is_replaced_by_follow_up_end_time_change_and_retranslated()
+    -> Result<(), Error> {
+        let (dir, store) = temp_cache_store("followup-replace");
+        let state = RwLock::new(None);
+        let completed_notices = Mutex::new(HashSet::new());
+
+        let orig_path = "/lodestone/news/detail/c37f3c23df3ff03c7852805f20e227090d35b1b9";
+        let orig_url = format!("https://jp.finalfantasyxiv.com{orig_path}");
+        let followup_path = "/lodestone/news/detail/9720cb22d18c17264e41da5cfe3aa68b1de96640";
+        let followup_url = format!("https://jp.finalfantasyxiv.com{followup_path}");
+
+        let mut pages = std::collections::HashMap::new();
+        pages.insert(
+            orig_url.clone(),
+            r#"<article class="news__detail">
+                <header class="news__header"><h1><span class="news__header__tag">[メンテナンス]</span>全ワールド メンテナンス作業のお知らせ(11/9-10)</h1></header>
+                <div class="news__detail__wrapper">下記日時におきまして、パッチ7.58公開に伴う全ワールドのメンテナンス作業を実施いたします。<br>
+                　　　　　　　　　　　　　記<br>
+                日　時：2026年11月9日(月) 19:00より<br>
+                　　　　2026年11月10日(火) 19:00頃まで<br>
+                対　象：ファイナルファンタジーXIVをご利用のお客様</div>
+            </article>"#
+                .to_string(),
+        );
+        pages.insert(
+            followup_url.clone(),
+            r#"<article class="news__detail">
+                <header class="news__header"><h1><span class="news__header__tag">[続報]</span>全ワールド メンテナンス作業 終了時間変更のお知らせ(11/9-10)</h1></header>
+                <div class="news__detail__wrapper">現在実施しております全ワールドのメンテナンス作業について、終了時刻を2026年11月10日(火) 18:15頃までに変更させていただきます。<br>
+                　　　　　　　　　　　　　記<br>
+                日　時：2026年11月9日(月) 19:00より<br>
+                　　　　2026年11月10日(火) 18:15頃まで<br>
+                対　象：ファイナルファンタジーXIVをご利用のお客様</div>
+            </article>"#
+                .to_string(),
+        );
+
+        let now = tokyo_ts(2026, 11, 10, 17, 30);
+        let listing_v1 = format!(
+            r#"<ul><li class="news__list"><a href="{orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(11/9-10)<time><script>ldst_strftime(1793948400, 'YMD');</script></time></a></li></ul>"#
+        );
+        let first =
+            poll_fixture_listing(&store, &state, &completed_notices, now, &listing_v1, &pages)
+                .await?
+                .expect("original notice loaded");
+        assert_eq!(first.url, orig_url);
+        assert_eq!(first.start_stamp, tokyo_ts(2026, 11, 9, 19, 0));
+        assert_eq!(first.end_stamp, tokyo_ts(2026, 11, 10, 19, 0));
+        assert_eq!(first.title_kr, "전 월드 유지보수 작업 (11/9-10)");
+        assert_eq!(
+            first.translated_description.as_deref(),
+            Some("KO:パッチ7.58公開に伴う全ワールドのメンテナンス作業を実施いたします。")
+        );
+        assert_eq!(store.load_maintinfo().await?.unwrap().url, orig_url);
+
+        let listing_v2 = format!(
+            r#"<ul>
+                <li class="news__list"><a href="{followup_path}">[続報]全ワールド メンテナンス作業 終了時間変更のお知らせ(11/9-10)<time><script>ldst_strftime(1794300900, 'YMD');</script></time></a></li>
+                <li class="news__list"><a href="{orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(11/9-10)<time><script>ldst_strftime(1793948400, 'YMD');</script></time></a></li>
+            </ul>"#
+        );
+        let second =
+            poll_fixture_listing(&store, &state, &completed_notices, now, &listing_v2, &pages)
+                .await?
+                .expect("follow-up notice loaded");
+        assert_eq!(second.url, followup_url);
+        assert_eq!(second.start_stamp, tokyo_ts(2026, 11, 9, 19, 0));
+        assert_eq!(second.end_stamp, tokyo_ts(2026, 11, 10, 18, 15));
+        assert_eq!(
+            second.title_kr,
+            "전 월드 유지보수 작업 종료 시간 변경 (11/9-10)"
+        );
+        assert_eq!(
+            second.translated_description.as_deref(),
+            Some(
+                "KO:現在実施しております全ワールドのメンテナンス作業について、終了時刻を2026年11月10日(火) 18:15頃までに変更させていただきます。"
+            )
+        );
+        let cached = store.load_maintinfo().await?.unwrap();
+        assert_eq!(cached.url, followup_url);
+        assert_eq!(cached.end_stamp, tokyo_ts(2026, 11, 10, 18, 15));
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn follow_up_extension_replaces_expired_original_and_transitions_through_unknown_end_to_completion()
+    -> Result<(), Error> {
+        let (dir, store) = temp_cache_store("ext-to-complete");
+        let state = RwLock::new(None);
+        let completed_notices = Mutex::new(HashSet::new());
+
+        let orig_path = "/lodestone/news/detail/ext-orig";
+        let ext_path = "/lodestone/news/detail/ext-unknown";
+        let done_path = "/lodestone/news/detail/ext-done";
+        let orig_url = format!("https://jp.finalfantasyxiv.com{orig_path}");
+        let ext_url = format!("https://jp.finalfantasyxiv.com{ext_path}");
+        let done_url = format!("https://jp.finalfantasyxiv.com{done_path}");
+
+        let mut pages = std::collections::HashMap::new();
+        pages.insert(
+            orig_url.clone(),
+            "<article><h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/21)</h1><div class='news__detail__wrapper'>記 日　時：2026年10月21日(水) 15:00より19:00頃まで</div></article>".to_string(),
+        );
+        pages.insert(
+            ext_url.clone(),
+            "<article><h1>[続報]全ワールド メンテナンス作業 延長のお知らせ(10/21)</h1><div class='news__detail__wrapper'>現在実施しておりますメンテナンス作業を延長いたします。<br>記<br>日　時：2026年10月21日(水) 15:00より<br>※終了予定時刻は未定です。</div></article>".to_string(),
+        );
+        pages.insert(
+            done_url.clone(),
+            "<article><h1>[続報]全ワールド メンテナンス作業 終了のお知らせ(10/21)</h1><div class='news__detail__wrapper'>下記日時にメンテナンス作業を終了いたしました。<br>記<br>日　時：2026年10月21日(水) 15:00頃より20:05頃まで</div></article>".to_string(),
+        );
+
+        let listing_1 = format!(
+            r#"<ul><li><a href="{orig_path}">全ワールド メンテナンス作業のお知らせ(10/21)<time><script>ldst_strftime(100, 'YMD');</script></time></a></li></ul>"#
+        );
+        let first = poll_fixture_listing(
+            &store,
+            &state,
+            &completed_notices,
+            tokyo_ts(2026, 10, 21, 14, 0),
+            &listing_1,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        assert_eq!(first.url, orig_url);
+        assert!(!first.end_time_unknown);
+        assert!(!first.completed);
+
+        let listing_2 = format!(
+            r#"<ul>
+                <li><a href="{ext_path}">[続報]全ワールド メンテナンス作業 延長のお知らせ(10/21)<time><script>ldst_strftime(200, 'YMD');</script></time></a></li>
+                <li><a href="{orig_path}">全ワールド メンテナンス作業のお知らせ(10/21)<time><script>ldst_strftime(100, 'YMD');</script></time></a></li>
+            </ul>"#
+        );
+        let second = poll_fixture_listing(
+            &store,
+            &state,
+            &completed_notices,
+            tokyo_ts(2026, 10, 21, 19, 5),
+            &listing_2,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        assert_eq!(second.url, ext_url);
+        assert!(second.end_time_unknown);
+        assert!(!second.completed);
+
+        let listing_3 = format!(
+            r#"<ul>
+                <li><a href="{done_path}">[続報]全ワールド メンテナンス作業 終了のお知らせ(10/21)<time><script>ldst_strftime(300, 'YMD');</script></time></a></li>
+                <li><a href="{ext_path}">[続報]全ワールド メンテナンス作業 延長のお知らせ(10/21)<time><script>ldst_strftime(200, 'YMD');</script></time></a></li>
+                <li><a href="{orig_path}">全ワールド メンテナンス作業のお知らせ(10/21)<time><script>ldst_strftime(100, 'YMD');</script></time></a></li>
+            </ul>"#
+        );
+        let third = poll_fixture_listing(
+            &store,
+            &state,
+            &completed_notices,
+            tokyo_ts(2026, 10, 21, 20, 10),
+            &listing_3,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        assert_eq!(third.url, done_url);
+        assert!(!third.end_time_unknown);
+        assert_eq!(third.end_stamp, tokyo_ts(2026, 10, 21, 20, 5));
+        assert!(third.completed);
+        assert_eq!(third.title_kr, "전 월드 유지보수 작업 종료 (10/21)");
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn in_place_update_before_planned_end_refreshes_schedule_and_translation()
+    -> Result<(), Error> {
+        let (dir, store) = temp_cache_store("in-place-update");
+        let state = RwLock::new(None);
+        let completed_notices = Mutex::new(HashSet::new());
+
+        let orig_path = "/lodestone/news/detail/in-place-orig";
+        let orig_url = format!("https://jp.finalfantasyxiv.com{orig_path}");
+        let listing = format!(
+            r#"<ul><li><a href="{orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/20)<time><script>ldst_strftime(100, 'YMD');</script></time></a></li></ul>"#
+        );
+
+        let mut pages = std::collections::HashMap::new();
+        pages.insert(
+            orig_url.clone(),
+            "<article><h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/20)</h1><div class='news__detail__wrapper'>下記日時におきまして、パッチ7.56作業を実施いたします。 記 日　時：2026年10月20日(火) 15:00より19:00頃まで</div></article>".to_string(),
+        );
+        let first = poll_fixture_listing(
+            &store,
+            &state,
+            &completed_notices,
+            tokyo_ts(2026, 10, 20, 18, 0),
+            &listing,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        assert_eq!(first.end_stamp, tokyo_ts(2026, 10, 20, 19, 0));
+
+        pages.insert(
+            orig_url.clone(),
+            "<article><h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/20)</h1><div class='news__detail__wrapper'>下記日時におきまして、パッチ7.56および臨時調整を実施いたします。 記 日　時：2026年10月20日(火) 15:00より20:00頃まで</div></article>".to_string(),
+        );
+        let second = poll_fixture_listing(
+            &store,
+            &state,
+            &completed_notices,
+            tokyo_ts(2026, 10, 20, 18, 30),
+            &listing,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        assert_eq!(second.end_stamp, tokyo_ts(2026, 10, 20, 20, 0));
+        assert_ne!(second.body_fingerprint, first.body_fingerprint);
+        assert_eq!(
+            second.translated_description.as_deref(),
+            Some("KO:パッチ7.56および臨時調整を実施いたします。")
+        );
+        let cached = store.load_maintinfo().await?.unwrap();
+        assert_eq!(cached.end_stamp, tokyo_ts(2026, 10, 20, 20, 0));
+        assert_eq!(cached.body_fingerprint, second.body_fingerprint);
+
+        let _ = std::fs::remove_dir_all(&dir);
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn follow_up_cancellation_and_postponement_clear_original_without_resurrection()
+    -> Result<(), Error> {
+        // Part A: Follow-up cancellation without "中止" in title.
+        let (dir_cancel, store_cancel) = temp_cache_store("followup-cancel");
+        let state_cancel = RwLock::new(None);
+        let completed_cancel = Mutex::new(HashSet::new());
+        let orig_path = "/lodestone/news/detail/cancel-orig";
+        let cancel_path = "/lodestone/news/detail/cancel-followup";
+        let orig_url = format!("https://jp.finalfantasyxiv.com{orig_path}");
+        let cancel_url = format!("https://jp.finalfantasyxiv.com{cancel_path}");
+        let mut pages = std::collections::HashMap::new();
+        pages.insert(
+            orig_url.clone(),
+            "<article><h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(3/13)</h1><div class='news__detail__wrapper'>記 日　時：2026年3月13日(金) 16:00より17:00頃まで</div></article>".to_string(),
+        );
+        pages.insert(
+            cancel_url.clone(),
+            "<article><h1>[続報]全ワールド メンテナンス作業のお知らせ(3/13)：続報</h1><div class='news__detail__wrapper'>2026年3月13日(金) 16:00より17:00頃まで実施とお知らせしておりました、全ワールドのメンテナンス作業につきまして、中止とさせていただきます。</div></article>".to_string(),
+        );
+        let orig_listing = format!(
+            r#"<ul><li><a href="{orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(3/13)<time><script>ldst_strftime(1000, 'YMD');</script></time></a></li></ul>"#
+        );
+        let orig = poll_fixture_listing(
+            &store_cancel,
+            &state_cancel,
+            &completed_cancel,
+            tokyo_ts(2026, 3, 13, 15, 0),
+            &orig_listing,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        *state_cancel.write().await = Some(orig);
+
+        let cancel_listing = format!(
+            r#"<ul>
+                <li><a href="{cancel_path}">[続報]全ワールド メンテナンス作業のお知らせ(3/13)：続報<time><script>ldst_strftime(2000, 'YMD');</script></time></a></li>
+                <li><a href="{orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(3/13)<time><script>ldst_strftime(1000, 'YMD');</script></time></a></li>
+            </ul>"#
+        );
+        let after_cancel = poll_fixture_listing(
+            &store_cancel,
+            &state_cancel,
+            &completed_cancel,
+            tokyo_ts(2026, 3, 13, 15, 30),
+            &cancel_listing,
+            &pages,
+        )
+        .await?;
+        assert!(after_cancel.is_none());
+        assert!(state_cancel.read().await.is_none());
+        assert!(store_cancel.load_maintinfo().await?.is_none());
+        let _ = std::fs::remove_dir_all(&dir_cancel);
+
+        // Part B: Follow-up postponement without a rescheduled date.
+        let (dir_postpone, store_postpone) = temp_cache_store("followup-postpone");
+        let state_postpone = RwLock::new(None);
+        let completed_postpone = Mutex::new(HashSet::new());
+        let p_orig_path = "/lodestone/news/detail/postpone-orig";
+        let p_follow_path = "/lodestone/news/detail/postpone-followup";
+        let p_orig_url = format!("https://jp.finalfantasyxiv.com{p_orig_path}");
+        let p_follow_url = format!("https://jp.finalfantasyxiv.com{p_follow_path}");
+        pages.insert(
+            p_orig_url.clone(),
+            "<article><h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/26-27)</h1><div class='news__detail__wrapper'>記 日　時：2026年10月26日(月) 22:30より2026年10月27日(火) 5:00まで</div></article>".to_string(),
+        );
+        pages.insert(
+            p_follow_url.clone(),
+            "<article><h1>[続報]全ワールド メンテナンス作業のお知らせ(10/26-27)：続報</h1><div class='news__detail__wrapper'>2026年10月26日(月) 22:30より2026年10月27日(火) 5:00まで実施とお知らせしておりました、全ワールドのメンテナンス作業につきまして、延期の連絡を受けましたのでお知らせいたします。 新たな作業日程につきましては、あらためてお知らせいたします。</div></article>".to_string(),
+        );
+        let p_orig_listing = format!(
+            r#"<ul><li><a href="{p_orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/26-27)<time><script>ldst_strftime(1000, 'YMD');</script></time></a></li></ul>"#
+        );
+        let p_orig = poll_fixture_listing(
+            &store_postpone,
+            &state_postpone,
+            &completed_postpone,
+            tokyo_ts(2026, 10, 26, 20, 0),
+            &p_orig_listing,
+            &pages,
+        )
+        .await?
+        .unwrap();
+        *state_postpone.write().await = Some(p_orig);
+
+        let p_follow_listing = format!(
+            r#"<ul>
+                <li><a href="{p_follow_path}">[続報]全ワールド メンテナンス作業のお知らせ(10/26-27)：続報<time><script>ldst_strftime(2000, 'YMD');</script></time></a></li>
+                <li><a href="{p_orig_path}">[メンテナンス]全ワールド メンテナンス作業のお知らせ(10/26-27)<time><script>ldst_strftime(1000, 'YMD');</script></time></a></li>
+            </ul>"#
+        );
+        let after_postpone = poll_fixture_listing(
+            &store_postpone,
+            &state_postpone,
+            &completed_postpone,
+            tokyo_ts(2026, 10, 26, 21, 0),
+            &p_follow_listing,
+            &pages,
+        )
+        .await?;
+        assert!(after_postpone.is_none());
+        assert!(state_postpone.read().await.is_none());
+        assert!(store_postpone.load_maintinfo().await?.is_none());
+        let _ = std::fs::remove_dir_all(&dir_postpone);
+
+        Ok(())
+    }
+
+    #[test]
+    fn in_place_completion_footnote_sets_completed_without_false_positive_on_campaign_end() {
+        let completed_html = r#"<article>
+            <h1>[メンテナンス]日本データセンター クロスワールド機能 緊急メンテナンス作業のお知らせ(10/15)</h1>
+            <div class="news__detail__wrapper">
+                記 日　時：2026年10月15日(木) 11:00より11:15頃まで<br>
+                ※2026年10月15日(木) 11:11追記 本メンテナンス作業は2026年10月15日(木) 11:02頃に終了いたしました。
+            </div>
+        </article>"#;
+        let completed_info = parse_maintenance_detail("in-place-done", completed_html)
+            .unwrap()
+            .unwrap();
+        assert!(completed_info.completed);
+
+        let unrelated_html = r#"<article>
+            <h1>[メンテナンス]全ワールド メンテナンス作業のお知らせ(11/9-10)</h1>
+            <div class="news__detail__wrapper">
+                ※期間限定キャンペーンの応募受付は終了いたしました。<br>
+                記 日　時：2026年11月9日(月) 19:00より 2026年11月10日(火) 19:00頃まで
+            </div>
+        </article>"#;
+        let upcoming_info = parse_maintenance_detail("unrelated-footnote", unrelated_html)
+            .unwrap()
+            .unwrap();
+        assert!(!upcoming_info.completed);
     }
 }
